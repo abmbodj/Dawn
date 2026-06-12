@@ -236,6 +236,7 @@ export function buildRequestMessages(args: {
   workingSet: WorkingSetItem[]
   summaries: FileSummary[]
   budget: ContextBudget
+  answerGuidance?: string
   isAnthropic?: boolean
 }): {
   system: SystemModelMessage
@@ -313,6 +314,14 @@ export function buildRequestMessages(args: {
         },
       ]
     : []
+  const answerGuidanceMessages: ModelMessage[] = args.answerGuidance
+    ? [
+        {
+          role: "user",
+          content: `Answer guidance for this turn:\n${args.answerGuidance}`,
+        },
+      ]
+    : []
 
   // Strip reasoning parts from assistant messages before sending to non-Anthropic
   // providers — e.g. Groq's OpenAI-compatible API rejects 'reasoning_content' in
@@ -321,8 +330,8 @@ export function buildRequestMessages(args: {
   const historyInit = kept.slice(0, -1)
   const historyLatest = kept[kept.length - 1]
   const requestMessages: ModelMessage[] = historyLatest
-    ? [...historyInit, ...contextMessages, historyLatest]
-    : [...contextMessages]
+    ? [...historyInit, ...contextMessages, ...answerGuidanceMessages, historyLatest]
+    : [...contextMessages, ...answerGuidanceMessages]
 
   const systemMessage: SystemModelMessage = {
     role: "system",

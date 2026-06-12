@@ -64,7 +64,7 @@ type Action =
   | { type: "agent"; event: AgentEvent }
   | { type: "reset"; items: Item[] }
 
-function reduceItems(items: Item[], action: Action): Item[] {
+export function reduceItems(items: Item[], action: Action): Item[] {
   switch (action.type) {
     case "push":
       return [...items, action.item]
@@ -73,6 +73,12 @@ function reduceItems(items: Item[], action: Action): Item[] {
     case "agent": {
       const ev = action.event
       switch (ev.type) {
+        case "attempt-reset": {
+          for (let i = items.length - 1; i >= 0; i--) {
+            if (items[i]?.kind === "user") return items.slice(0, i + 1)
+          }
+          return items
+        }
         case "text-delta": {
           const last = items[items.length - 1]
           if (last?.kind === "assistant") {
@@ -118,6 +124,8 @@ function reduceItems(items: Item[], action: Action): Item[] {
               ? { ...it, done: true, summary: ev.summary, isError: ev.isError }
               : it,
           )
+        case "status":
+          return [...items, { kind: "info", text: ev.message }]
         case "error":
           return [...items, { kind: "error", text: ev.message }]
         case "turn-end": {
@@ -201,7 +209,7 @@ function useSpinner(active: boolean): string {
 
 // ---------- subviews ----------
 
-function ItemView({
+export function ItemView({
   item,
   spinnerFrame,
   isLastRunningTool,
@@ -235,13 +243,13 @@ function ItemView({
       const mark = !item.done ? (isLastRunningTool ? spinnerFrame : "⚒") : item.isError ? "✗" : "✓"
       if (item.done && item.isError && item.summary) {
         return (
-          <text>
+          <box style={{ flexDirection: "column" }}>
             <text>
               <span fg={color}>{`${mark} ${item.name}`}</span>
               <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
             </text>
             <text fg={theme.toolErr}>{`  ${firstLines(item.summary, 3)}`}</text>
-          </text>
+          </box>
         )
       }
       return (

@@ -234,7 +234,8 @@ export function savingsBoxRows(args: {
   ]
 }
 
-export function statusFooterParts(args: {
+export function // todo: implement plan mode toggle with tab
+statusFooterParts(args: {
   busy: boolean
   catalog: Catalog
   modelRef: string

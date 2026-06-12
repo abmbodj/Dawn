@@ -268,6 +268,73 @@ describe("context budget", () => {
     }
   })
 
+  test("answer guidance sits immediately before latest user message", () => {
+    const built = buildRequestMessages({
+      system: "sys",
+      messages: [
+        { role: "user", content: "prev" },
+        { role: "assistant", content: "answer" },
+        { role: "user", content: "current question" },
+      ],
+      summaries: [],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 2000 },
+      answerGuidance: "First sentence: answer directly.",
+    })
+
+    const msgs = built.messages
+    const guidanceIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("Answer guidance for this turn"),
+    )
+    const latestIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("current question"),
+    )
+
+    expect(guidanceIdx).not.toBe(-1)
+    expect(latestIdx).toBe(guidanceIdx + 1)
+    expect(
+      msgs.filter(
+        (m) => typeof m.content === "string" && m.content.includes("Answer guidance for this turn"),
+      ),
+    ).toHaveLength(1)
+  })
+
+  test("answer guidance does not replace the compact repo context message", () => {
+    const built = buildRequestMessages({
+      system: "sys",
+      messages: [
+        { role: "user", content: "prev" },
+        { role: "assistant", content: "answer" },
+        { role: "user", content: "current question" },
+      ],
+      summaries: [
+        {
+          path: "foo.ts",
+          hash: "abc",
+          summary: "does foo things",
+          symbols: ["foo"],
+          dependencies: [],
+          lastSummarizedAt: 0,
+          tokenEstimate: 10,
+        },
+      ],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 2000 },
+      answerGuidance: "First sentence: answer directly.",
+    })
+
+    expect(
+      built.messages.some(
+        (m) => typeof m.content === "string" && m.content.includes("compact repository context"),
+      ),
+    ).toBe(true)
+    expect(
+      built.messages.some(
+        (m) => typeof m.content === "string" && m.content.includes("Answer guidance for this turn"),
+      ),
+    ).toBe(true)
+  })
+
   test("Anthropic: system carries providerOptions, last message carries cache breakpoint", () => {
     const built = buildRequestMessages({
       system: "sys",

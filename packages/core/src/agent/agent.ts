@@ -22,6 +22,7 @@ import type { SessionStore } from "../session/store"
 import { createTools, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
+import { buildAnswerStyleGuidance } from "./answer-style"
 import { makeRepairToolCall } from "./repair"
 import { isRetryableToolFailure } from "./retry"
 import { buildSystemPrompt } from "./system"
@@ -155,12 +156,14 @@ export class DawnAgent {
     const latest = this.messages[this.messages.length - 1]
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
+    const answerGuidance = buildAnswerStyleGuidance(query)
     const built = buildRequestMessages({
       system: this.system,
       messages: this.messages,
       workingSet: this.workingSet.all(),
       summaries,
       budget: contextBudget(this.contextMode, this.tokenBudget),
+      answerGuidance,
       isAnthropic,
     })
     this.latestContextPlan = built.plan
@@ -237,12 +240,10 @@ export class DawnAgent {
         })
 
         let retryableFailure: unknown
-        let emittedText = false
 
         for await (const part of result.fullStream) {
           switch (part.type) {
             case "text-delta":
-              emittedText = true
               bus.emit({ type: "text-delta", text: part.text })
               break
             case "text-end":
@@ -303,7 +304,7 @@ export class DawnAgent {
               break
             }
             case "error": {
-              if (attempt === 0 && !emittedText && isRetryableToolFailure(part.error)) {
+              if (isRetryableToolFailure(part.error)) {
                 retryableFailure = part.error
               } else {
                 bus.emit({
@@ -319,8 +320,18 @@ export class DawnAgent {
         }
 
         if (retryableFailure !== undefined) {
-          bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
-          continue
+          bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+          if (attempt === 0) {
+            bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
+            continue
+          }
+          bus.emit({
+            type: "error",
+            message: retryableFailure instanceof Error ? retryableFailure.message : String(retryableFailure),
+          })
+          this.workingSet.decrementLeases()
+          bus.emit({ type: "turn-end" })
+          return
         }
 
         const response = await result.response

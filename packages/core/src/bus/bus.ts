@@ -10,6 +10,7 @@ export interface StepUsage {
 
 export type AgentEvent =
   | { type: "turn-start" }
+  | { type: "attempt-reset"; reason: "retryable-tool-failure" }
   | { type: "text-delta"; text: string }
   | { type: "text-end" }
   | { type: "reasoning-delta"; text: string }
