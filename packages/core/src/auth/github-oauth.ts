@@ -1,6 +1,22 @@
-// client_id is intentionally public — device flow has no client_secret.
-// Register a GitHub OAuth App at github.com/settings/applications and replace this value.
-export const GITHUB_CLIENT_ID = "REPLACE_WITH_REGISTERED_CLIENT_ID"
+import type { DawnConfig } from "../config/config"
+
+export const GITHUB_CLIENT_ID_ENV = "DAWN_GITHUB_CLIENT_ID"
+// Public OAuth App client id for Dawn's GitHub device flow. Fill this after registering the app.
+export const BUILT_IN_GITHUB_CLIENT_ID = ""
+
+export function resolveGithubClientId(
+  config?: Pick<DawnConfig, "githubOAuthClientId">,
+  builtInClientId = BUILT_IN_GITHUB_CLIENT_ID,
+): string | undefined {
+  const fromEnv = process.env[GITHUB_CLIENT_ID_ENV]?.trim()
+  if (fromEnv) return fromEnv
+
+  const fromConfig = config?.githubOAuthClientId?.trim()
+  if (fromConfig) return fromConfig
+
+  const fromBuiltIn = builtInClientId.trim()
+  return fromBuiltIn || undefined
+}
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code"
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"

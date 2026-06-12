@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "../src/auth/auth"
+import { resolveGithubClientId } from "../src/auth/github-oauth"
 import { hasConfiguredModel, loadConfig, saveConfig } from "../src/config/config"
 import type { Catalog } from "../src/provider/catalog"
 
@@ -24,6 +25,7 @@ afterEach(() => {
   delete process.env.DAWN_DATA_DIR
   delete process.env.DAWN_CONFIG_DIR
   delete process.env.DAWN_CACHE_DIR
+  delete process.env.DAWN_GITHUB_CLIENT_ID
   delete process.env.DAWN_TEST_KEY
   fs.rmSync(tmp, { recursive: true, force: true })
 })
@@ -39,7 +41,8 @@ describe("auth store", () => {
 
   test("auth file is written with 0600 permissions", () => {
     setApiKey("openai", "sk-x")
-    const mode = fs.statSync(path.join(process.env.DAWN_DATA_DIR!, "auth.json")).mode & 0o777
+    const dataDir = process.env.DAWN_DATA_DIR ?? ""
+    const mode = fs.statSync(path.join(dataDir, "auth.json")).mode & 0o777
     expect(mode).toBe(0o600)
   })
 
@@ -61,9 +64,10 @@ describe("loadConfig", () => {
   })
 
   test("project dawn.json overrides global config", () => {
-    fs.mkdirSync(process.env.DAWN_CONFIG_DIR!, { recursive: true })
+    const configDir = process.env.DAWN_CONFIG_DIR ?? ""
+    fs.mkdirSync(configDir, { recursive: true })
     fs.writeFileSync(
-      path.join(process.env.DAWN_CONFIG_DIR!, "config.json"),
+      path.join(configDir, "config.json"),
       JSON.stringify({ model: "anthropic/claude-opus-4-8", providers: { ollama: { baseURL: "http://a" } } }),
     )
     fs.writeFileSync(
@@ -80,6 +84,30 @@ describe("loadConfig", () => {
   test("rejects invalid config shape", () => {
     fs.writeFileSync(path.join(tmp, "dawn.json"), JSON.stringify({ permissions: { bash: "yolo" } }))
     expect(() => loadConfig(tmp)).toThrow()
+  })
+})
+
+describe("GitHub OAuth client id", () => {
+  test("uses DAWN_GITHUB_CLIENT_ID when set", () => {
+    process.env.DAWN_GITHUB_CLIENT_ID = "env-client"
+
+    expect(resolveGithubClientId({ githubOAuthClientId: "config-client" }, "built-in-client")).toBe(
+      "env-client",
+    )
+  })
+
+  test("falls back to config githubOAuthClientId", () => {
+    expect(resolveGithubClientId({ githubOAuthClientId: "config-client" }, "built-in-client")).toBe(
+      "config-client",
+    )
+  })
+
+  test("falls back to the built-in client id", () => {
+    expect(resolveGithubClientId({}, "built-in-client")).toBe("built-in-client")
+  })
+
+  test("returns undefined when no client id is configured", () => {
+    expect(resolveGithubClientId({})).toBeUndefined()
   })
 })
 

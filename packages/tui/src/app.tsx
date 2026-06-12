@@ -762,7 +762,7 @@ export function App(props: AppProps) {
   })
 
   if (needsSetup) {
-    return <Setup onDone={handleSetupDone} catalog={catalog} animate={props.animate} />
+    return <Setup onDone={handleSetupDone} catalog={catalog} config={config} animate={props.animate} />
   }
 
   return (
@@ -819,6 +819,7 @@ export function App(props: AppProps) {
         >
           <ProviderConnect
             key={connectEpoch}
+            config={config}
             provider={connect.provider}
             providers={SETUP_PROVIDERS.filter(
               (p) => !connectedProviders(catalog, config).some((c) => c.id === p.id),

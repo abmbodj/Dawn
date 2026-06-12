@@ -10,13 +10,14 @@ import {
   type DawnConfig,
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
-  GITHUB_CLIENT_ID,
   listAuthProviders,
   loadCatalog,
   loadConfig,
+  openExternalUrl,
   PermissionGate,
   pollForToken,
   removeApiKey,
+  resolveGithubClientId,
   SessionStore,
   setApiKey,
   startDeviceFlow,
@@ -176,7 +177,7 @@ async function promptHidden(label: string): Promise<string> {
   })
 }
 
-async function authCommand(args: string[]): Promise<void> {
+async function authCommand(args: string[], cwd: string): Promise<void> {
   const [sub, provider] = args
   switch (sub) {
     case "login": {
@@ -185,17 +186,27 @@ async function authCommand(args: string[]): Promise<void> {
         process.exit(1)
       }
       if (provider === "github-copilot") {
-        if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID === "REPLACE_WITH_REGISTERED_CLIENT_ID") {
-          console.error(
-            "OAuth app not configured — replace GITHUB_CLIENT_ID in packages/core/src/auth/github-oauth.ts",
-          )
-          process.exit(1)
+        const config = loadConfig(cwd)
+        const clientId = resolveGithubClientId(config)
+        if (!clientId) {
+          console.error("GitHub OAuth client id not configured; falling back to GitHub Copilot token paste.")
+          const key = await promptHidden("GitHub Copilot token (input hidden): ")
+          if (!key.trim()) {
+            console.error("no token entered, nothing saved")
+            process.exit(1)
+          }
+          setApiKey("github-copilot", key.trim())
+          console.log("saved token for github-copilot")
+          return
         }
-        const flow = await startDeviceFlow(GITHUB_CLIENT_ID)
+        const flow = await startDeviceFlow(clientId)
+        const opened = await openExternalUrl(flow.verificationUri)
+        if (opened) console.log("Opened GitHub device authorization in your browser.")
+        else console.log("Could not open your browser automatically.")
         console.log(`Open: ${flow.verificationUri}`)
         console.log(`Code: ${flow.userCode}`)
         console.log("Waiting for authorization…")
-        const token = await pollForToken(GITHUB_CLIENT_ID, flow.deviceCode, flow.interval)
+        const token = await pollForToken(clientId, flow.deviceCode, flow.interval)
         setApiKey("github-copilot", token)
         console.log("GitHub Copilot connected.")
         return
@@ -350,9 +361,11 @@ async function main(): Promise<void> {
   }
   const [command, ...rest] = argv
   switch (command) {
-    case "auth":
-      await authCommand(rest)
+    case "auth": {
+      const flags = parseFlags(rest)
+      await authCommand(flags.positional, flags.cwd)
       return
+    }
     case "models": {
       const flags = parseFlags(rest)
       await modelsCommand(flags.positional[0], flags.cwd)

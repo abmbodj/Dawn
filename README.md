@@ -137,7 +137,10 @@ Perplexity, Together AI, Fireworks AI, Cerebras, OpenRouter, and Ollama when a l
 detected.
 
 Provider credentials can come from Dawn's auth store or from each provider's environment variables, such as
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, or `GROQ_API_KEY`.
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, or `GITHUB_COPILOT_TOKEN`.
+For GitHub Copilot, `dawn auth login github-copilot` uses GitHub device authorization, opens the
+default browser when possible, and falls back to storing a pasted Copilot token if no OAuth client id
+is available.
 
 The model catalog is loaded from cache, refreshed from `models.dev` when reachable, and falls back to an
 embedded catalog so the agent can still boot offline.
@@ -158,6 +161,7 @@ The project `dawn.json` overrides global settings for that working directory. Ex
 ```json
 {
   "model": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+  "githubOAuthClientId": "your-github-oauth-app-client-id",
   "providers": {
     "local-router": {
       "name": "Local Router",
@@ -176,6 +180,8 @@ The project `dawn.json` overrides global settings for that working directory. Ex
 Supported config fields:
 
 - `model`: default model reference in `provider/model` format.
+- `githubOAuthClientId`: GitHub OAuth App client id for Copilot device authorization. Overrides
+  Dawn's built-in client id when set.
 - `providers`: extra OpenAI-compatible providers by provider ID.
 - `providers.<id>.name`: optional display name.
 - `providers.<id>.baseURL`: OpenAI-compatible API base URL.
@@ -189,6 +195,7 @@ DAWN_HOME        Override the home directory Dawn uses for config/data/cache def
 DAWN_CONFIG_DIR  Override the config directory.
 DAWN_DATA_DIR    Override the data/auth directory.
 DAWN_CACHE_DIR   Override the cache directory.
+DAWN_GITHUB_CLIENT_ID  GitHub OAuth App client id for Copilot device authorization.
 DAWN_NO_ANIM     Disable TUI logo animation when set.
 ```
 

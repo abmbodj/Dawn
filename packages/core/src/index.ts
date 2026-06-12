@@ -3,9 +3,11 @@ export { type AgentOptions, DawnAgent } from "./agent/agent"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
 export {
+  BUILT_IN_GITHUB_CLIENT_ID,
   type DeviceFlowStart,
-  GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_ID_ENV,
   pollForToken,
+  resolveGithubClientId,
   startDeviceFlow,
 } from "./auth/github-oauth"
 export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage } from "./bus/bus"
@@ -53,6 +55,7 @@ export {
   type PermissionHandler,
   type PermissionRequest,
 } from "./permission/permission"
+export { type ExternalOpenCommand, externalOpenCommand, openExternalUrl } from "./platform/open-external"
 export {
   type Catalog,
   FALLBACK_CATALOG,

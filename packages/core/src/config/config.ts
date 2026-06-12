@@ -17,6 +17,8 @@ const CustomProviderSchema = z.object({
 export const DawnConfigSchema = z.object({
   /** Default model as "provider/model", e.g. "anthropic/claude-opus-4-8" */
   model: z.string().optional(),
+  /** GitHub OAuth App client id for Copilot device authorization. */
+  githubOAuthClientId: z.string().optional(),
   /** Extra OpenAI-compatible providers (local models, routers, …) */
   providers: z.record(z.string(), CustomProviderSchema).optional(),
   /** Per-tool permission overrides: allow | ask | deny */

@@ -1,4 +1,4 @@
-import { type Catalog, formatBytes, localModelFit, saveConfig } from "@dawn/core"
+import { type Catalog, type DawnConfig, formatBytes, localModelFit, saveConfig } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
@@ -14,10 +14,11 @@ interface LocalOption {
 export interface SetupProps {
   onDone: (modelRef: string) => void
   catalog: Catalog
+  config: DawnConfig
   animate?: boolean
 }
 
-export function Setup({ onDone, catalog, animate }: SetupProps) {
+export function Setup({ onDone, catalog, config, animate }: SetupProps) {
   const [localPick, setLocalPick] = useState<LocalOption | null>(null)
 
   const localModels: LocalOption[] = Object.values(catalog.ollama?.models ?? {}).map((m) => ({
@@ -110,6 +111,7 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
               {"Welcome! Connect a provider to get started."}
             </text>
             <ProviderConnect
+              config={config}
               extraOptions={localOptions}
               onExtraSelect={handleExtraSelect}
               onConnected={handleConnected}

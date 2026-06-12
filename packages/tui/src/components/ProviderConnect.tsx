@@ -1,4 +1,12 @@
-import { type DeviceFlowStart, GITHUB_CLIENT_ID, pollForToken, setApiKey, startDeviceFlow } from "@dawn/core"
+import {
+  type DawnConfig,
+  type DeviceFlowStart,
+  openExternalUrl,
+  pollForToken,
+  resolveGithubClientId,
+  setApiKey,
+  startDeviceFlow,
+} from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
 import { theme } from "../theme"
@@ -70,6 +78,10 @@ export interface ProviderConnectProps {
   providers?: ProviderOption[]
   /** Extra entries appended to the pick list (Setup uses this for local Ollama models). */
   extraOptions?: { name: string; value: string; description: string }[]
+  config?: DawnConfig
+  openUrl?: (url: string) => Promise<boolean>
+  startDeviceFlowFn?: typeof startDeviceFlow
+  pollForTokenFn?: typeof pollForToken
   onExtraSelect?: (value: string) => void
   /** API key saved / OAuth completed. setApiKey already called — NO saveConfig here. */
   onConnected: (provider: ProviderOption) => void
@@ -80,13 +92,18 @@ export function ProviderConnect({
   provider: fixedProvider,
   providers = SETUP_PROVIDERS,
   extraOptions = [],
+  config,
+  openUrl = openExternalUrl,
+  startDeviceFlowFn = startDeviceFlow,
+  pollForTokenFn = pollForToken,
   onExtraSelect,
   onConnected,
   onCancel,
 }: ProviderConnectProps) {
+  const githubClientId = resolveGithubClientId(config)
   const [phase, setPhase] = useState<"pick" | "key" | "oauth">(() => {
     if (!fixedProvider) return "pick"
-    return fixedProvider.id === "github-copilot" ? "oauth" : "key"
+    return fixedProvider.id === "github-copilot" && githubClientId ? "oauth" : "key"
   })
   const [selected, setSelected] = useState<ProviderOption>(
     fixedProvider ?? providers[0] ?? SETUP_PROVIDERS[0],
@@ -94,32 +111,38 @@ export function ProviderConnect({
   const [error, setError] = useState<string | null>(null)
   const [oauthData, setOauthData] = useState<DeviceFlowStart | null>(null)
   const [oauthError, setOauthError] = useState<string | null>(null)
+  const [browserOpenStatus, setBrowserOpenStatus] = useState<"opened" | "manual" | null>(null)
   const oauthAbortRef = useRef<AbortController | null>(null)
 
   // When a fixed provider is given, start its flow on mount.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only effect; component is keyed externally
   useEffect(() => {
     if (!fixedProvider) return
-    if (fixedProvider.id === "github-copilot") {
+    if (fixedProvider.id === "github-copilot" && githubClientId) {
       startGithubOAuth(fixedProvider)
     }
     // key phase: no auto-start needed, user pastes
   }, [])
 
   const startGithubOAuth = (prov: ProviderOption) => {
-    if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID === "REPLACE_WITH_REGISTERED_CLIENT_ID") {
-      setOauthError("OAuth app not configured — replace GITHUB_CLIENT_ID in github-oauth.ts")
+    if (!githubClientId) {
+      setPhase("key")
       return
     }
     setOauthData(null)
     setOauthError(null)
+    setBrowserOpenStatus(null)
     const abort = new AbortController()
     oauthAbortRef.current = abort
     ;(async () => {
       try {
-        const flow = await startDeviceFlow(GITHUB_CLIENT_ID)
+        const flow = await startDeviceFlowFn(githubClientId)
         setOauthData(flow)
-        const token = await pollForToken(GITHUB_CLIENT_ID, flow.deviceCode, flow.interval, abort.signal)
+        const opened = await openUrl(flow.verificationUri)
+        if (!abort.signal.aborted) {
+          setBrowserOpenStatus(opened ? "opened" : "manual")
+        }
+        const token = await pollForTokenFn(githubClientId, flow.deviceCode, flow.interval, abort.signal)
         setApiKey("github-copilot", token)
         onConnected(prov)
       } catch (err: unknown) {
@@ -137,6 +160,7 @@ export function ProviderConnect({
         oauthAbortRef.current = null
         setOauthData(null)
         setOauthError(null)
+        setBrowserOpenStatus(null)
       }
       if (phase === "key" || phase === "oauth") {
         if (fixedProvider) {
@@ -164,8 +188,12 @@ export function ProviderConnect({
     setError(null)
 
     if (value === "github-copilot") {
-      setPhase("oauth")
-      startGithubOAuth(prov)
+      if (githubClientId) {
+        setPhase("oauth")
+        startGithubOAuth(prov)
+      } else {
+        setPhase("key")
+      }
       return
     }
     setPhase("key")
@@ -238,6 +266,13 @@ export function ProviderConnect({
               <text fg={theme.accent} style={{ marginBottom: 1 }}>
                 {"   github.com/login/device"}
               </text>
+              {browserOpenStatus ? (
+                <text fg={theme.dim} style={{ marginBottom: 1 }}>
+                  {browserOpenStatus === "opened"
+                    ? "Browser opened automatically. Use the code below if prompted."
+                    : "Open the URL manually if your browser did not launch."}
+                </text>
+              ) : null}
               <text fg={theme.dim}>{"2. Enter this code:"}</text>
               <text fg={theme.text} style={{ marginBottom: 1 }}>
                 {`   ${oauthData.userCode}`}
@@ -259,14 +294,24 @@ export function ProviderConnect({
   }
 
   // phase === "key"
+  const githubTokenFallback = selected.id === "github-copilot" && !githubClientId
   return (
     <box style={{ flexDirection: "column" }}>
-      <text fg={theme.text} style={{ marginBottom: 1 }}>
-        {`Get your free ${selected.id} key → `}
-        <a href={`https://${selected.url}`} fg={theme.accent}>
-          {selected.url}
-        </a>
-      </text>
+      {githubTokenFallback ? (
+        <>
+          <text fg={theme.text}>{"GitHub OAuth client id is not configured."}</text>
+          <text fg={theme.dim} style={{ marginBottom: 1 }}>
+            {"Paste an existing GitHub Copilot token, or set DAWN_GITHUB_CLIENT_ID to enable device login."}
+          </text>
+        </>
+      ) : (
+        <text fg={theme.text} style={{ marginBottom: 1 }}>
+          {`Get your free ${selected.id} key → `}
+          <a href={`https://${selected.url}`} fg={theme.accent}>
+            {selected.url}
+          </a>
+        </text>
+      )}
       <box
         style={{ border: true, borderColor: theme.accent, height: 3, marginBottom: 1 }}
         title={`${selected.envVar} — paste and press Enter`}
