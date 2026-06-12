@@ -11,10 +11,11 @@ import type {
   UsageTotals,
 } from "@dawn/core"
 import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit } from "@dawn/core"
-import { useKeyboard } from "@opentui/react"
+import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
 import { Setup } from "./components/Setup"
+import { statusFooterParts } from "./status"
 import { theme } from "./theme"
 
 // ---------- transcript state ----------
@@ -215,6 +216,7 @@ export interface AppProps {
 
 export function App(props: AppProps) {
   const { agent, store, catalog, config, gate } = props
+  const { width } = useTerminalDimensions()
   const [needsSetup, setNeedsSetup] = useState(() => !hasConfiguredModel(catalog, config))
   const [session, setSession] = useState(props.session)
   const [items, dispatch] = useReducer(reduceItems, undefined, () => itemsFromMessages(agent.messages))
@@ -233,7 +235,7 @@ export function App(props: AppProps) {
         agent.setModel(ref)
         setModelRef(ref)
         setNeedsSetup(false)
-      } catch (err) {
+      } catch {
         // Key saved but setModel threw — shouldn't happen; proceed anyway
         setNeedsSetup(false)
       }
@@ -400,6 +402,7 @@ export function App(props: AppProps) {
 
   const empty = items.length === 0
   const focusInput = !pickerOpen && !permission && !confirmModel
+  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width })
 
   if (needsSetup) {
     return <Setup onDone={handleSetupDone} catalog={catalog} animate={props.animate} />
@@ -436,13 +439,19 @@ export function App(props: AppProps) {
         />
       </box>
 
-      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1, justifyContent: "space-between" }}>
-        <text fg={busy ? theme.accent : theme.dim}>{busy ? "✦ working… (Esc to stop)" : modelRef}</text>
-        <text fg={theme.dim}>
-          {`↑${formatTokens(usage.inputTokens)} ↓${formatTokens(usage.outputTokens)} · ⚡${formatTokens(
-            usage.cachedInputTokens,
-          )} cached · ${formatCost(usage.cost)}`}
-        </text>
+      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
+        {footer.mode === "narrow" ? (
+          <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
+        ) : (
+          <>
+            <box style={{ width: Math.max(18, Math.floor(width * 0.45)), flexShrink: 0 }}>
+              <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
+            </box>
+            <box style={{ flexGrow: 1, justifyContent: "flex-end" }}>
+              <text fg={theme.dim}>{footer.right}</text>
+            </box>
+          </>
+        )}
       </box>
     </box>
   )
