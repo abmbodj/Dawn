@@ -2,6 +2,8 @@ import fs from "node:fs"
 import path from "node:path"
 import { z } from "zod"
 import { configDir } from "../paths"
+import type { Catalog } from "../provider/catalog"
+import { connectedProviders } from "../provider/provider"
 
 const CustomProviderSchema = z.object({
   /** Display name */
@@ -46,4 +48,24 @@ export function loadConfig(cwd: string): DawnConfig {
     },
   }
   return DawnConfigSchema.parse(merged)
+}
+
+/** Merge a patch into the global config (~/.config/dawn/config.json). */
+export function saveConfig(patch: Partial<DawnConfig>): void {
+  const file = path.join(configDir(), "config.json")
+  const current = (readJson(file) as DawnConfig | undefined) ?? {}
+  const next = { ...current, ...patch }
+  fs.writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`)
+}
+
+/**
+ * Whether the user has a model ready to use without further setup: an explicit
+ * `config.model`, or a cloud (key-requiring) provider that's connected. A
+ * reachable local provider (Ollama) alone does NOT count — we still want to run
+ * onboarding so the user consciously picks it rather than silently landing on a
+ * model their machine may not be able to run.
+ */
+export function hasConfiguredModel(catalog: Catalog, config: DawnConfig): boolean {
+  if (config.model) return true
+  return connectedProviders(catalog, config).some((p) => p.hasKey)
 }

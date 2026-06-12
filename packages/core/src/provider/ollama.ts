@@ -10,6 +10,7 @@ export function ollamaBaseURL(): string {
 
 interface OllamaTag {
   name: string
+  size?: number
 }
 
 /**
@@ -28,7 +29,7 @@ export async function detectOllama(): Promise<ProviderInfo | undefined> {
     const models: ProviderInfo["models"] = {}
     for (const t of tags) {
       // tool_call optimistic: /api/tags doesn't report tool support; the user can switch.
-      models[t.name] = { id: t.name, name: t.name, cost: null, tool_call: true }
+      models[t.name] = { id: t.name, name: t.name, cost: null, tool_call: true, sizeBytes: t.size }
     }
     return { id: "ollama", name: "Ollama (local)", env: [], api: `${base}/v1`, models }
   } catch {

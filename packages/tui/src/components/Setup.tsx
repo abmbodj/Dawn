@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { type Catalog, formatBytes, localModelFit, saveConfig, setApiKey } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
-import { setApiKey } from "@dawn/core"
+import { useState } from "react"
 import { theme } from "../theme"
 
 interface ProviderOption {
@@ -56,28 +56,66 @@ const SETUP_PROVIDERS: ProviderOption[] = [
   },
 ]
 
-export interface SetupProps {
-  onDone: (modelRef: string) => void
+interface LocalOption {
+  ref: string // "ollama/<model>"
+  label: string
+  sizeBytes?: number
 }
 
-export function Setup({ onDone }: SetupProps) {
-  const [phase, setPhase] = useState<"pick" | "key">("pick")
+export interface SetupProps {
+  onDone: (modelRef: string) => void
+  catalog: Catalog
+}
+
+export function Setup({ onDone, catalog }: SetupProps) {
+  const [phase, setPhase] = useState<"pick" | "key" | "localConfirm">("pick")
   const [selected, setSelected] = useState<ProviderOption>(SETUP_PROVIDERS[0]!)
+  const [localPick, setLocalPick] = useState<LocalOption | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const localModels: LocalOption[] = Object.values(catalog.ollama?.models ?? {}).map((m) => ({
+    ref: `ollama/${m.id}`,
+    label: m.name,
+    sizeBytes: m.sizeBytes,
+  }))
+
+  const confirmLocal = (opt: LocalOption) => {
+    saveConfig({ model: opt.ref })
+    onDone(opt.ref)
+  }
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") process.exit(0)
-    if (key.name === "escape" && phase === "key") {
+    if (key.name === "escape" && (phase === "key" || phase === "localConfirm")) {
       setPhase("pick")
+      setLocalPick(null)
       setError(null)
+    }
+    if (phase === "localConfirm" && localPick) {
+      if (key.name === "y") confirmLocal(localPick)
+      else if (key.name === "n") {
+        setPhase("pick")
+        setLocalPick(null)
+      }
     }
   })
 
   // biome-ignore lint/suspicious/noExplicitAny: SelectOption value is optional in @opentui/react types
   const handleProviderPick = (_i: number, opt: any) => {
-    const id: string | undefined = opt?.value
-    if (!id) return
-    const provider = SETUP_PROVIDERS.find((p) => p.id === id)
+    const value: string | undefined = opt?.value
+    if (!value) return
+    if (value.startsWith("local:")) {
+      const ref = value.slice("local:".length)
+      const local = localModels.find((m) => m.ref === ref)
+      if (!local) return
+      setLocalPick(local)
+      setError(null)
+      // Big local models can swap-storm a low-RAM machine into a freeze — confirm first.
+      if (localModelFit(local.sizeBytes).status === "oversized") setPhase("localConfirm")
+      else confirmLocal(local)
+      return
+    }
+    const provider = SETUP_PROVIDERS.find((p) => p.id === value)
     if (!provider) return
     setSelected(provider)
     setPhase("key")
@@ -94,14 +132,34 @@ export function Setup({ onDone }: SetupProps) {
     onDone(selected.defaultModel)
   }
 
-  const pickerOptions = SETUP_PROVIDERS.map((p) => ({
-    name: p.label,
-    value: p.id,
-    description: `${p.envVar}  ·  ${p.url}`,
-  }))
+  const pickerOptions = [
+    ...SETUP_PROVIDERS.map((p) => ({
+      name: p.label,
+      value: p.id,
+      description: `${p.envVar}  ·  ${p.url}`,
+    })),
+    ...localModels.map((m) => {
+      const fit = localModelFit(m.sizeBytes)
+      const warn =
+        fit.status === "oversized" ? "  ·  ⚠ exceeds RAM" : fit.status === "tight" ? "  ·  tight on RAM" : ""
+      return {
+        name: `${m.label}  (local)`,
+        value: `local:${m.ref}`,
+        description: `Ollama · no key · ${formatBytes(m.sizeBytes)}${warn}`,
+      }
+    }),
+  ]
 
   return (
-    <box style={{ flexDirection: "column", alignItems: "center", justifyContent: "center", flexGrow: 1, padding: 2 }}>
+    <box
+      style={{
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        flexGrow: 1,
+        padding: 2,
+      }}
+    >
       <box style={{ flexDirection: "column", width: 60 }}>
         <text fg={theme.sunCore} style={{ marginBottom: 1 }}>
           {"  D  A  W  N"}
@@ -116,7 +174,13 @@ export function Setup({ onDone }: SetupProps) {
               {"Welcome! Connect a provider to get started."}
             </text>
             <box
-              style={{ border: true, borderColor: theme.accent, height: 12, flexDirection: "column", marginBottom: 1 }}
+              style={{
+                border: true,
+                borderColor: theme.accent,
+                height: 12,
+                flexDirection: "column",
+                marginBottom: 1,
+              }}
               title="choose provider"
             >
               <select
@@ -128,6 +192,31 @@ export function Setup({ onDone }: SetupProps) {
               />
             </box>
             <text fg={theme.dim}>{"↑↓ navigate · Enter select · Ctrl+C quit"}</text>
+          </>
+        ) : phase === "localConfirm" && localPick ? (
+          <>
+            <box
+              style={{
+                border: true,
+                borderColor: theme.error,
+                padding: 1,
+                flexDirection: "column",
+                marginBottom: 1,
+              }}
+              title="heads up"
+            >
+              <text>
+                <span fg={theme.error}>{"⚠ "}</span>
+                <span
+                  fg={theme.text}
+                >{`${localPick.ref} needs ~${formatBytes(localPick.sizeBytes)} of RAM`}</span>
+              </text>
+              <text fg={theme.dim}>
+                {`This machine has ${formatBytes(localModelFit(localPick.sizeBytes).totalBytes)} total. ` +
+                  "Running it may swap-storm and freeze your system."}
+              </text>
+            </box>
+            <text fg={theme.dim}>{"[y] use it anyway · [n/Esc] pick another"}</text>
           </>
         ) : (
           <>

@@ -77,18 +77,14 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
     ["deepseek", "deepseek/deepseek-chat"],
   ]
   for (const [provider, ref] of preferred) if (connected.has(provider)) return ref
-  // Local Ollama: only reached when no cloud key is set (cloud preferred above).
-  if (connected.has("ollama")) {
-    const ids = Object.keys(catalog.ollama?.models ?? {})
-    const coder = ids.find((m) => /cod(e|er)|qwen|deepseek/i.test(m))
-    const pick = coder ?? ids[0]
-    if (pick) return `ollama/${pick}`
-  }
+  // Cloud providers without a preference entry: still safe to auto-select.
   for (const id of connected) {
+    if (id === "ollama") continue // never silently default to a local model — see Setup wizard
     const models = Object.keys(catalog[id]?.models ?? {})
     if (models[0]) return `${id}/${models[0]}`
   }
-  // No providers connected yet — placeholder; Setup wizard will override before first send
+  // Nothing usable yet (e.g. only Ollama reachable) — placeholder; the Setup
+  // wizard runs first and overrides this with an explicit, persisted choice.
   return "groq/llama-4-scout-17b-16e-instruct"
 }
 

@@ -1,18 +1,18 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react"
-import { useKeyboard } from "@opentui/react"
 import type {
   AgentEvent,
   Catalog,
   DawnAgent,
   DawnConfig,
+  ModelMessage,
   PermissionGate,
   PermissionRequest,
   SessionMeta,
   SessionStore,
   UsageTotals,
 } from "@dawn/core"
-import { connectedProviders } from "@dawn/core"
-import type { ModelMessage } from "@dawn/core"
+import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit } from "@dawn/core"
+import { useKeyboard } from "@opentui/react"
+import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
 import { Setup } from "./components/Setup"
 import { theme } from "./theme"
@@ -22,7 +22,15 @@ import { theme } from "./theme"
 export type Item =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; id: string; name: string; title: string; summary?: string; isError?: boolean; done: boolean }
+  | {
+      kind: "tool"
+      id: string
+      name: string
+      title: string
+      summary?: string
+      isError?: boolean
+      done: boolean
+    }
   | { kind: "info"; text: string }
   | { kind: "error"; text: string }
 
@@ -173,6 +181,26 @@ function PermissionView({ pending }: { pending: PendingPermission }) {
   )
 }
 
+function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?: number }) {
+  const fit = localModelFit(sizeBytes)
+  return (
+    <box
+      style={{ border: true, borderColor: theme.error, padding: 1, flexDirection: "column" }}
+      title="heads up"
+    >
+      <text>
+        <span fg={theme.error}>⚠ </span>
+        <span fg={theme.text}>{`${modelRef} needs ~${formatBytes(sizeBytes)} of RAM`}</span>
+      </text>
+      <text fg={theme.dim}>
+        {`This machine has ${formatBytes(fit.totalBytes)} total (${formatBytes(fit.freeBytes)} free). ` +
+          "Running it may swap-storm and freeze your system."}
+      </text>
+      <text fg={theme.dim}>[y] use it anyway · [n/Esc] cancel</text>
+    </box>
+  )
+}
+
 // ---------- main app ----------
 
 export interface AppProps {
@@ -187,13 +215,14 @@ export interface AppProps {
 
 export function App(props: AppProps) {
   const { agent, store, catalog, config, gate } = props
-  const [needsSetup, setNeedsSetup] = useState(() => connectedProviders(catalog, config).length === 0)
+  const [needsSetup, setNeedsSetup] = useState(() => !hasConfiguredModel(catalog, config))
   const [session, setSession] = useState(props.session)
   const [items, dispatch] = useReducer(reduceItems, undefined, () => itemsFromMessages(agent.messages))
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<UsageTotals>(agent.ledger.totals())
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [confirmModel, setConfirmModel] = useState<{ ref: string; sizeBytes?: number } | null>(null)
   const [inputEpoch, setInputEpoch] = useState(0)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const abortRef = useRef<AbortController | null>(null)
@@ -248,6 +277,16 @@ export function App(props: AppProps) {
       if (key.name === "y") permission.resolve("allow")
       else if (key.name === "a") permission.resolve("always")
       else if (key.name === "n" || key.name === "escape") permission.resolve("deny")
+      return
+    }
+    if (confirmModel) {
+      if (key.name === "y") {
+        const { ref } = confirmModel
+        setConfirmModel(null)
+        applyModel(ref)
+      } else if (key.name === "n" || key.name === "escape") {
+        setConfirmModel(null)
+      }
       return
     }
     if (key.name === "escape") {
@@ -327,9 +366,8 @@ export function App(props: AppProps) {
     [agent, busy, runCommand, session.id, store],
   )
 
-  const pickModel = useCallback(
+  const applyModel = useCallback(
     (ref: string) => {
-      setPickerOpen(false)
       try {
         agent.setModel(ref)
         setModelRef(ref)
@@ -344,11 +382,27 @@ export function App(props: AppProps) {
     [agent],
   )
 
+  const pickModel = useCallback(
+    (ref: string) => {
+      setPickerOpen(false)
+      const [providerId, modelId] = ref.split("/")
+      const sizeBytes = providerId && modelId ? catalog[providerId]?.models?.[modelId]?.sizeBytes : undefined
+      // Guard local models that won't fit in RAM — running them can swap-storm
+      // the machine into a freeze. Make the user confirm before switching.
+      if (localModelFit(sizeBytes).status === "oversized") {
+        setConfirmModel({ ref, sizeBytes })
+        return
+      }
+      applyModel(ref)
+    },
+    [applyModel, catalog],
+  )
+
   const empty = items.length === 0
-  const focusInput = !pickerOpen && !permission
+  const focusInput = !pickerOpen && !permission && !confirmModel
 
   if (needsSetup) {
-    return <Setup onDone={handleSetupDone} />
+    return <Setup onDone={handleSetupDone} catalog={catalog} />
   }
 
   return (
@@ -364,6 +418,9 @@ export function App(props: AppProps) {
       </scrollbox>
 
       {permission ? <PermissionView pending={permission} /> : null}
+      {confirmModel ? (
+        <ModelFitWarning modelRef={confirmModel.ref} sizeBytes={confirmModel.sizeBytes} />
+      ) : null}
       {pickerOpen ? (
         <ModelPicker catalog={catalog} config={config} current={modelRef} onPick={pickModel} />
       ) : null}
@@ -373,7 +430,9 @@ export function App(props: AppProps) {
           key={inputEpoch}
           focused={focusInput}
           placeholder={empty ? "Ask Dawn anything… (/help for commands)" : ""}
-          onSubmit={(raw: unknown) => submit(typeof raw === "string" ? raw : String((raw as any)?.value ?? ""))}
+          onSubmit={(raw: unknown) =>
+            submit(typeof raw === "string" ? raw : String((raw as any)?.value ?? ""))
+          }
         />
       </box>
 
@@ -408,9 +467,14 @@ function ModelPicker({ catalog, config, current, onPick }: PickerProps) {
         ? `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
         : "free/unknown"
       const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
+      // Local models carry a size; flag those that won't fit in RAM.
+      const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
+      const ram = fit
+        ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " · tight on RAM" : ""}`
+        : ""
       options.push({
         name: `${provider.id}/${model.id}`,
-        description: `${model.name} · ${cost}${ctx}`,
+        description: `${model.name} · ${cost}${ctx}${ram}`,
         value: `${provider.id}/${model.id}`,
       })
     }
@@ -432,7 +496,13 @@ function ModelPicker({ catalog, config, current, onPick }: PickerProps) {
       style={{ border: true, borderColor: theme.accent, height: 14, flexDirection: "column" }}
       title="switch model (Esc to close)"
     >
-      <select focused showScrollIndicator options={options} onChange={(_i, opt) => opt && onPick(opt.value)} style={{ flexGrow: 1 }} />
+      <select
+        focused
+        showScrollIndicator
+        options={options}
+        onChange={(_i, opt) => opt && onPick(opt.value)}
+        style={{ flexGrow: 1 }}
+      />
     </box>
   )
 }

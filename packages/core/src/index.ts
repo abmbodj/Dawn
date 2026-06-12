@@ -1,35 +1,48 @@
 export type { ModelMessage } from "ai"
-export { DawnAgent, type AgentOptions } from "./agent/agent"
+export { type AgentOptions, DawnAgent } from "./agent/agent"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
-export { Bus, type AgentEvent, type AgentEventHandler, type StepUsage } from "./bus/bus"
-export { DawnConfigSchema, loadConfig, type CustomProvider, type DawnConfig } from "./config/config"
+export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage } from "./bus/bus"
+export {
+  type CustomProvider,
+  type DawnConfig,
+  DawnConfigSchema,
+  hasConfiguredModel,
+  loadConfig,
+  saveConfig,
+} from "./config/config"
 export { cacheDir, configDir, dataDir } from "./paths"
 export {
-  FALLBACK_CATALOG,
-  getModelInfo,
-  loadCatalog,
-  parseModelRef,
-  type Catalog,
-  type ModelCost,
-  type ModelInfo,
-  type ProviderInfo,
-} from "./provider/catalog"
-export {
-  connectedProviders,
-  resolveModel,
-  type ProviderStatus,
-  type ResolvedModel,
-} from "./provider/provider"
-export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
-export {
-  PermissionGate,
   type PermissionDecision,
+  PermissionGate,
   type PermissionHandler,
   type PermissionRequest,
 } from "./permission/permission"
-export { SessionStore, type SessionMeta } from "./session/store"
+export {
+  type Catalog,
+  FALLBACK_CATALOG,
+  getModelInfo,
+  loadCatalog,
+  type ModelCost,
+  type ModelInfo,
+  type ProviderInfo,
+  parseModelRef,
+} from "./provider/catalog"
+export {
+  type FitStatus,
+  formatBytes,
+  type LocalModelFit,
+  localModelFit,
+} from "./provider/local-fit"
+export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
+export {
+  connectedProviders,
+  type ProviderStatus,
+  type ResolvedModel,
+  resolveModel,
+} from "./provider/provider"
+export { type SessionMeta, SessionStore } from "./session/store"
 export { applyEdit } from "./tools/edit"
-export { createTools, toolTitle, type ToolContext } from "./tools/index"
+export { createTools, type ToolContext, toolTitle } from "./tools/index"
 export { capLine, truncateMiddle } from "./tools/truncate"
 export { computeCost, toStepUsage, UsageLedger, type UsageTotals } from "./usage/ledger"

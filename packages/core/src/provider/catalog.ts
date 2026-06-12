@@ -17,6 +17,8 @@ export interface ModelInfo {
   tool_call?: boolean
   reasoning?: boolean
   release_date?: string
+  /** On-disk size in bytes (local providers only); used for the RAM-fit guard. */
+  sizeBytes?: number
 }
 
 export interface ProviderInfo {

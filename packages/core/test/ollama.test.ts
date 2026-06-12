@@ -33,7 +33,12 @@ describe("ollamaBaseURL", () => {
 describe("detectOllama", () => {
   test("returns a ProviderInfo with installed models", async () => {
     mockFetch(() =>
-      Response.json({ models: [{ name: "llama3.2:latest" }, { name: "qwen2.5-coder:7b" }] }),
+      Response.json({
+        models: [
+          { name: "llama3.2:latest", size: 2_000_000_000 },
+          { name: "qwen2.5-coder:7b", size: 4_680_000_000 },
+        ],
+      }),
     )
     const info = await detectOllama()
     expect(info?.id).toBe("ollama")
@@ -42,6 +47,8 @@ describe("detectOllama", () => {
     expect(Object.keys(info?.models ?? {})).toEqual(["llama3.2:latest", "qwen2.5-coder:7b"])
     expect(info?.models["llama3.2:latest"]?.tool_call).toBe(true)
     expect(info?.models["llama3.2:latest"]?.cost).toBeNull()
+    expect(info?.models["llama3.2:latest"]?.sizeBytes).toBe(2_000_000_000)
+    expect(info?.models["qwen2.5-coder:7b"]?.sizeBytes).toBe(4_680_000_000)
   })
 
   test("returns undefined when the server is unreachable", async () => {

@@ -3,7 +3,13 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "../src/auth/auth"
-import { loadConfig } from "../src/config/config"
+import { hasConfiguredModel, loadConfig, saveConfig } from "../src/config/config"
+import type { Catalog } from "../src/provider/catalog"
+
+const CATALOG: Catalog = {
+  anthropic: { id: "anthropic", name: "Anthropic", env: ["ANTHROPIC_API_KEY"], models: {} },
+  ollama: { id: "ollama", name: "Ollama (local)", env: [], api: "http://localhost:11434/v1", models: {} },
+}
 
 let tmp: string
 
@@ -74,5 +80,35 @@ describe("loadConfig", () => {
   test("rejects invalid config shape", () => {
     fs.writeFileSync(path.join(tmp, "dawn.json"), JSON.stringify({ permissions: { bash: "yolo" } }))
     expect(() => loadConfig(tmp)).toThrow()
+  })
+})
+
+describe("saveConfig", () => {
+  test("persists a model choice into global config.json", () => {
+    saveConfig({ model: "ollama/qwen2.5-coder:latest" })
+    expect(loadConfig(tmp).model).toBe("ollama/qwen2.5-coder:latest")
+  })
+
+  test("merges without clobbering existing keys", () => {
+    saveConfig({ model: "anthropic/claude-opus-4-8" })
+    saveConfig({ providers: { router: { baseURL: "http://x" } } })
+    const config = loadConfig(tmp)
+    expect(config.model).toBe("anthropic/claude-opus-4-8")
+    expect(config.providers?.router?.baseURL).toBe("http://x")
+  })
+})
+
+describe("hasConfiguredModel", () => {
+  test("false when only a key-free local provider is reachable", () => {
+    expect(hasConfiguredModel(CATALOG, { providers: {} })).toBe(false)
+  })
+
+  test("true when a cloud provider has a key", () => {
+    setApiKey("anthropic", "sk-test")
+    expect(hasConfiguredModel(CATALOG, { providers: {} })).toBe(true)
+  })
+
+  test("true when config.model is set, even with no keys", () => {
+    expect(hasConfiguredModel(CATALOG, { model: "ollama/qwen2.5-coder:latest", providers: {} })).toBe(true)
   })
 })
