@@ -178,7 +178,7 @@ describe("formatStatusUsage", () => {
 })
 
 describe("formatSavingsReport", () => {
-  test("shows session, project, and lifetime savings against the baseline", () => {
+  test("shows session, project, and lifetime savings against no planning", () => {
     const report = formatSavingsReport({
       scopes: [
         {
@@ -227,12 +227,12 @@ describe("formatSavingsReport", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(report).toContain("Baseline: full-context CLI")
+    expect(report).toContain("Compared to: without Dawn context planning")
     expect(report).toContain("session:")
     expect(report).toContain("saved: 1,200 tokens")
     expect(report).toContain("input cut: 29%")
-    expect(report).toContain("actual: 3.0k input")
-    expect(report).toContain("baseline: 4.2k input")
+    expect(report).toContain("Dawn sent: 3.0k input")
+    expect(report).toContain("would send: 4.2k input")
     expect(report).toContain("est $ saved: $0.001")
     expect(report).toContain("context items: 4 included / 3 skipped")
     expect(report).toContain("highest-saving turn: 900 tokens saved (1.8k / 8.0k, balanced)")
@@ -327,14 +327,14 @@ describe("savingsBoxRows", () => {
     expect(rows).toEqual([
       { label: "saved", value: "0 tokens", tone: "dim" },
       { label: "input cut", value: "0%", tone: "dim" },
-      { label: "baseline", value: "0 tokens" },
-      { label: "actual", value: "0 tokens" },
+      { label: "would send", value: "0 tokens" },
+      { label: "sent", value: "0 tokens" },
       { label: "$ saved", value: "$0.000", tone: "dim" },
-      { label: "vs", value: "full-context CLI", tone: "dim" },
+      { label: "vs", value: "no planning", tone: "dim" },
     ])
   })
 
-  test("calculates baseline, percentage, and estimated dollar savings", () => {
+  test("calculates would-send tokens, percentage, and estimated dollar savings", () => {
     const rows = savingsBoxRows({
       usage: {
         inputTokens: 3000,
@@ -351,10 +351,10 @@ describe("savingsBoxRows", () => {
 
     expect(rows).toContainEqual({ label: "saved", value: "1.2k tokens", tone: "accent" })
     expect(rows).toContainEqual({ label: "input cut", value: "29%", tone: "accent" })
-    expect(rows).toContainEqual({ label: "baseline", value: "4.2k tokens" })
-    expect(rows).toContainEqual({ label: "actual", value: "3.0k tokens" })
+    expect(rows).toContainEqual({ label: "would send", value: "4.2k tokens" })
+    expect(rows).toContainEqual({ label: "sent", value: "3.0k tokens" })
     expect(rows).toContainEqual({ label: "$ saved", value: "$0.001", tone: "accent" })
-    expect(rows).toContainEqual({ label: "vs", value: "full-context CLI", tone: "dim" })
+    expect(rows).toContainEqual({ label: "vs", value: "no planning", tone: "dim" })
   })
 
   test("shows unknown estimated dollar savings without pricing", () => {

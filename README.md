@@ -18,7 +18,7 @@ developer-facing setup and usage documentation, not as a production stability or
 - Local Ollama discovery, including RAM-fit warnings for large local models.
 - Permission prompts for `write`, `edit`, and `bash` tools in interactive mode.
 - Session usage and cost tracking across models.
-- Session, project, and lifetime savings reports against a full-context CLI baseline.
+- Session, project, and lifetime savings reports compared to running without Dawn context planning.
 - Offline-friendly model catalog fallback with a cached `models.dev` refresh when available.
 
 ## Requirements

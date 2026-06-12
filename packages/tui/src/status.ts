@@ -146,7 +146,7 @@ export function formatSavingsReport(args: {
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
   const lines = [
     "Savings",
-    "Baseline: full-context CLI (actual input + Dawn context savings)",
+    "Compared to: without Dawn context planning",
     inputPrice === undefined
       ? "Pricing: unknown for current model"
       : `Pricing: current model input at ${formatCost(inputPrice)} / 1M tokens`,
@@ -158,8 +158,8 @@ export function formatSavingsReport(args: {
     lines.push(`${scope.label}:`)
     lines.push(`  saved: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
     lines.push(`  input cut: ${metrics.savedPercent}%`)
-    lines.push(`  actual: ${formatTokens(scope.usage.inputTokens)} input`)
-    lines.push(`  baseline: ${formatTokens(metrics.baselineTokens)} input`)
+    lines.push(`  Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
+    lines.push(`  would send: ${formatTokens(metrics.wouldSendTokens)} input`)
     lines.push(`  est $ saved: ${metrics.estimatedCostSaved}`)
     lines.push(`  context plans: ${formatWholeTokens(scope.context.plans)}`)
     lines.push(
@@ -206,8 +206,8 @@ export function savingsBoxRows(args: {
   modelRef: string
 }): UsageBoxRow[] {
   const savedTokens = args.context.estimatedSavedTokens
-  const baselineTokens = args.usage.inputTokens + savedTokens
-  const savedPercent = baselineTokens ? Math.round((savedTokens / baselineTokens) * 100) : 0
+  const wouldSendTokens = args.usage.inputTokens + savedTokens
+  const savedPercent = wouldSendTokens ? Math.round((savedTokens / wouldSendTokens) * 100) : 0
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
   const estimatedCostSaved = inputPrice === undefined ? undefined : (savedTokens * inputPrice) / 1_000_000
   const hasSavings = savedTokens > 0
@@ -223,14 +223,14 @@ export function savingsBoxRows(args: {
       value: `${savedPercent}%`,
       tone: hasSavings ? "accent" : "dim",
     },
-    { label: "baseline", value: `${formatTokens(baselineTokens)} tokens` },
-    { label: "actual", value: `${formatTokens(args.usage.inputTokens)} tokens` },
+    { label: "would send", value: `${formatTokens(wouldSendTokens)} tokens` },
+    { label: "sent", value: `${formatTokens(args.usage.inputTokens)} tokens` },
     {
       label: "$ saved",
       value: estimatedCostSaved === undefined ? "unknown" : formatCost(estimatedCostSaved),
       tone: estimatedCostSaved && estimatedCostSaved > 0 ? "accent" : "dim",
     },
-    { label: "vs", value: "full-context CLI", tone: "dim" },
+    { label: "vs", value: "no planning", tone: "dim" },
   ]
 }
 
@@ -365,13 +365,13 @@ function savingsMetrics(
   savedTokens: number,
   inputPrice: number | undefined,
 ): {
-  baselineTokens: number
+  wouldSendTokens: number
   savedPercent: number
   estimatedCostSaved: string
 } {
-  const baselineTokens = inputTokens + savedTokens
-  const savedPercent = baselineTokens ? Math.round((savedTokens / baselineTokens) * 100) : 0
+  const wouldSendTokens = inputTokens + savedTokens
+  const savedPercent = wouldSendTokens ? Math.round((savedTokens / wouldSendTokens) * 100) : 0
   const estimatedCostSaved =
     inputPrice === undefined ? "unknown" : formatCost((savedTokens * inputPrice) / 1_000_000)
-  return { baselineTokens, savedPercent, estimatedCostSaved }
+  return { wouldSendTokens, savedPercent, estimatedCostSaved }
 }

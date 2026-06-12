@@ -34,11 +34,11 @@ describe("context planning eval fixtures", () => {
         workingSet: item.workingSet,
         budget: { mode: "balanced", budget: 260 },
       })
-      const fullContextBaseline = built.plan.totalEstimatedTokens + built.plan.savingsEstimate
+      const wouldSendTokens = built.plan.totalEstimatedTokens + built.plan.savingsEstimate
 
       expect(JSON.stringify(built.messages)).toContain(item.query)
       expect(JSON.stringify(built.messages)).toContain(item.mustKeep)
-      expect(built.plan.totalEstimatedTokens).toBeLessThan(fullContextBaseline)
+      expect(built.plan.totalEstimatedTokens).toBeLessThan(wouldSendTokens)
       expect(built.plan.savingsEstimate).toBeGreaterThan(0)
       expect(built.plan.includedItems.length).toBeGreaterThan(0)
       expect(built.plan.skippedItems.length).toBeGreaterThan(0)
