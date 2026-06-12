@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
 import { useTerminalDimensions } from "@opentui/react"
+import { useEffect, useRef, useState } from "react"
 import { LOGO_FPS, RISE_DURATION_MS, sunFrame, TAGLINE, WORDMARK } from "../logo"
 import { theme } from "../theme"
 
@@ -24,7 +24,7 @@ export function Logo({ animate }: { animate: boolean }) {
   const rows = sunFrame({ cols: Math.max(24, width - 4), time, rise })
 
   return (
-    <box style={{ flexDirection: "column", alignItems: "center", marginTop: 1 }}>
+    <box style={{ flexDirection: "column", alignItems: "center" }}>
       {rows.map((runs, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional by nature
         <text key={i}>

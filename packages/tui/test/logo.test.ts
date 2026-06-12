@@ -5,26 +5,73 @@ function plain(rows: ReturnType<typeof sunFrame>): string[] {
   return rows.map((runs) => runs.map((r) => r.text).join(""))
 }
 
+const DENSE_SUN = new Set([";", "+", "%", "#", "@"])
+
+function densePositions(rows: string[]): number[] {
+  const positions: number[] = []
+  for (const row of rows.slice(0, -1)) {
+    for (let x = 0; x < row.length; x++) {
+      if (DENSE_SUN.has(row[x] ?? "")) positions.push(x)
+    }
+  }
+  return positions
+}
+
+function denseBounds(rows: string[]): { left: number; right: number; top: number; bottom: number } {
+  const points: Array<[number, number]> = []
+  for (const [y, row] of rows.slice(0, -1).entries()) {
+    for (let x = 0; x < row.length; x++) {
+      if (DENSE_SUN.has(row[x] ?? "")) points.push([x, y])
+    }
+  }
+
+  return {
+    left: Math.min(...points.map(([x]) => x)),
+    right: Math.max(...points.map(([x]) => x)),
+    top: Math.min(...points.map(([, y]) => y)),
+    bottom: Math.max(...points.map(([, y]) => y)),
+  }
+}
+
 describe("sunFrame", () => {
   test("rows are uniform width and clamped to terminal columns", () => {
     for (const cols of [10, 80, 200]) {
       const rows = plain(sunFrame({ cols, time: 0 }))
-      const width = rows[0]!.length
+      const first = rows[0]
+      expect(first).toBeDefined()
+      const width = first?.length ?? 0
       expect(width).toBeGreaterThanOrEqual(24)
       expect(width).toBeLessThanOrEqual(72)
       for (const row of rows) expect(row.length).toBe(width)
     }
   })
 
-  test("fully risen sun shows a dense core on the horizon row", () => {
+  test("settled sun exposes a substantial dense disc above the horizon", () => {
     const rows = plain(sunFrame({ cols: 64, time: 0, rise: 1 }))
-    expect(rows[rows.length - 1]).toContain("@")
+    const aboveHorizon = rows.slice(0, -1).join("")
+    expect(aboveHorizon).toContain("@")
+    expect(densePositions(rows).length).toBeGreaterThan(150)
+  })
+
+  test("sun disc is horizontally centered", () => {
+    const rows = plain(sunFrame({ cols: 64, time: 0 }))
+    const { left, right } = denseBounds(rows)
+    const expectedCenter = ((rows[0]?.length ?? 1) - 1) / 2
+    expect((left + right) / 2).toBeCloseTo(expectedCenter, 1)
+  })
+
+  test("sun disc has a broad horizontal profile", () => {
+    const rows = plain(sunFrame({ cols: 64, time: 0 }))
+    const { left, right, top, bottom } = denseBounds(rows)
+    const cellRatio = (right - left + 1) / (bottom - top + 1)
+    expect(cellRatio).toBeGreaterThanOrEqual(3.5)
   })
 
   test("horizon line spans the frame", () => {
     const rows = plain(sunFrame({ cols: 64, time: 0 }))
-    expect(rows[rows.length - 1]!.startsWith("─")).toBe(true)
-    expect(rows[rows.length - 1]!.endsWith("─")).toBe(true)
+    const horizon = rows[rows.length - 1]
+    expect(horizon?.startsWith("─")).toBe(true)
+    expect(horizon?.endsWith("─")).toBe(true)
   })
 
   test("unrisen sun is clipped below the horizon", () => {

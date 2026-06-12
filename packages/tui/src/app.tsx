@@ -410,15 +410,20 @@ export function App(props: AppProps) {
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
-      {empty ? <Logo animate={props.animate} /> : null}
-      <scrollbox style={{ flexGrow: 1, paddingLeft: 1, paddingRight: 1 }} stickyScroll stickyStart="bottom">
-        {items.map((item, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: append-mostly list
-          <box key={i} style={{ marginTop: i === 0 ? 0 : 1, flexShrink: 0 }}>
-            <ItemView item={item} />
-          </box>
-        ))}
-      </scrollbox>
+      {empty ? (
+        <box style={{ flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
+          <Logo animate={props.animate} />
+        </box>
+      ) : (
+        <scrollbox style={{ flexGrow: 1, paddingLeft: 1, paddingRight: 1 }} stickyScroll stickyStart="bottom">
+          {items.map((item, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: append-mostly list
+            <box key={i} style={{ marginTop: i === 0 ? 0 : 1, flexShrink: 0 }}>
+              <ItemView item={item} />
+            </box>
+          ))}
+        </scrollbox>
+      )}
 
       {permission ? <PermissionView pending={permission} /> : null}
       {confirmModel ? (

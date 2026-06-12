@@ -26,10 +26,11 @@ const GRADIENT: Array<[number, string]> = [
 ]
 
 /** Terminal cells are ~twice as tall as wide; scale x distances down. */
-const ASPECT = 0.55
-const DISC_RADIUS = 6.5
-const RAY_REACH = 8
+const ASPECT = 0.48
+const DISC_RADIUS = 7
+const RAY_REACH = 9
 const ROWS_ABOVE_HORIZON = 11
+const SETTLED_PEEK_ROWS = 1.4
 
 function lerpColor(a: string, b: string, t: number): string {
   const pa = Number.parseInt(a.slice(1), 16)
@@ -43,20 +44,22 @@ function lerpColor(a: string, b: string, t: number): string {
 
 function gradientAt(t: number): string {
   const clamped = Math.min(1, Math.max(0, t))
-  for (let i = 1; i < GRADIENT.length; i++) {
-    const [stop, color] = GRADIENT[i]!
+  let previous: [number, string] = GRADIENT[0] ?? [0, "#FFF3C4"]
+  for (const current of GRADIENT.slice(1)) {
+    const [stop, color] = current
     if (clamped <= stop) {
-      const [prevStop, prevColor] = GRADIENT[i - 1]!
+      const [prevStop, prevColor] = previous
       const span = stop - prevStop || 1
       return lerpColor(prevColor, color, (clamped - prevStop) / span)
     }
+    previous = current
   }
-  return GRADIENT[GRADIENT.length - 1]![1]
+  return previous[1]
 }
 
 function rampChar(intensity: number): string {
   const idx = Math.min(RAMP.length - 1, Math.max(0, Math.floor(intensity * RAMP.length)))
-  return RAMP[idx]!
+  return RAMP[idx] ?? "@"
 }
 
 /** Deterministic 0..1 hash so the halo twinkles instead of flickering randomly. */
@@ -80,7 +83,7 @@ export interface SunFrameOptions {
   cols: number
   /** Seconds since the animation started */
   time: number
-  /** 0 → fully below horizon, 1 → fully risen (default 1) */
+  /** 0 → fully below horizon, 1 → settled above the horizon (default 1) */
   rise?: number
 }
 
@@ -94,10 +97,11 @@ export function sunFrame({ cols, time, rise = 1 }: SunFrameOptions): Run[][] {
   const horizonY = ROWS_ABOVE_HORIZON
   const pulse = Math.sin((time * 2 * Math.PI) / 2.4)
   const radius = DISC_RADIUS * (1 + 0.05 * pulse)
+  const clampedRise = Math.min(1, Math.max(0, rise))
   // the sun climbs from below the horizon as `rise` goes 0 → 1
-  const cy = horizonY + (1 - rise) * (radius + 1)
+  const cy = horizonY + (1 - clampedRise) * (radius + 1) - clampedRise * SETTLED_PEEK_ROWS
   const rayReach = RAY_REACH + 1.4 * pulse
-  const swirl = 0.18 * Math.sin((time * 2 * Math.PI) / 5.1)
+  const swirl = 0.12 * Math.sin((time * 2 * Math.PI) / 5.1)
 
   const rows: Run[][] = []
   for (let y = 0; y <= horizonY; y++) {
@@ -122,7 +126,7 @@ export function sunFrame({ cols, time, rise = 1 }: SunFrameOptions): Run[][] {
       if (r <= radius) {
         // sun disc: bright core fading to a hot rim
         const t = r / radius
-        const intensity = 1 - 0.8 * t + 0.06 * pulse
+        const intensity = 1 - 0.72 * t + 0.06 * pulse
         push(rampChar(intensity), gradientAt(t))
         continue
       }
@@ -133,20 +137,20 @@ export function sunFrame({ cols, time, rise = 1 }: SunFrameOptions): Run[][] {
       }
 
       // soft glow ring hugging the rim
-      if (r <= radius + 1.1) {
+      if (r <= radius + 1.25) {
         push(":", "#B14A1E")
         continue
       }
 
       // ray spokes start just off the rim (sunburst gap), breathing with the pulse
       const angle = Math.atan2(-dy, dx)
-      const rayStart = radius + 1.8
+      const rayStart = radius + 1.5
       if (r >= rayStart) {
-        const spoke = Math.cos(11 * angle + swirl) ** 14
+        const spoke = Math.cos(10 * angle + swirl) ** 12
         const falloff = Math.max(0, 1 - (r - rayStart) / rayReach)
         const signal = spoke * falloff
-        if (signal > 0.22) {
-          const bright = signal > 0.5
+        if (signal > 0.18) {
+          const bright = signal > 0.44
           push(bright ? rayChar(angle) : "·", bright ? "#FFB45C" : "#A65B2E")
           continue
         }
@@ -155,7 +159,7 @@ export function sunFrame({ cols, time, rise = 1 }: SunFrameOptions): Run[][] {
       // sparse twinkling halo specks near the rim
       const seed = hash2(x, y)
       const twinkle = 0.035 + 0.025 * Math.sin((time * 2 * Math.PI) / 1.6 + seed * 40)
-      if (r < radius + 5 && seed < twinkle) {
+      if (r < radius + 5.5 && seed < twinkle) {
         push(seed < twinkle / 2 ? "·" : ":", "#6E4226")
         continue
       }
