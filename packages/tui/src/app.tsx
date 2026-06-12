@@ -21,6 +21,8 @@ import {
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
+import { ModelPicker } from "./components/ModelPicker"
+import { ProviderConnect, type ProviderOption, SETUP_PROVIDERS } from "./components/ProviderConnect"
 import { Setup } from "./components/Setup"
 import { dawnSyntaxStyle } from "./markdown"
 import {
@@ -423,6 +425,9 @@ export function App(props: AppProps) {
   const [usage, setUsage] = useState<UsageTotals>(() => store.usageTotals(props.session.id))
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerProvider, setPickerProvider] = useState<string | undefined>(undefined)
+  const [connect, setConnect] = useState<{ provider?: ProviderOption } | null>(null)
+  const [connectEpoch, setConnectEpoch] = useState(0)
   const [confirmModel, setConfirmModel] = useState<{ ref: string; sizeBytes?: number } | null>(null)
   const [promptValue, setPromptValue] = useState("")
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
@@ -501,6 +506,9 @@ export function App(props: AppProps) {
           break
         case "model":
           setPickerOpen(true)
+          break
+        case "connect":
+          setConnect({})
           break
         case "usage": {
           const lifetime = store.usageTotals(session.id)
@@ -633,6 +641,23 @@ export function App(props: AppProps) {
     [agent],
   )
 
+  const handleConnectRequest = useCallback((provider: ProviderOption) => {
+    setPickerOpen(false)
+    setConnect({ provider })
+  }, [])
+
+  const handleConnected = useCallback((provider: ProviderOption) => {
+    setConnect(null)
+    setConnectEpoch((e) => e + 1)
+    dispatch({ type: "push", item: { kind: "info", text: `connected ${provider.id}` } })
+    setPickerProvider(provider.id)
+    setPickerOpen(true)
+  }, [])
+
+  const handleConnectCancel = useCallback(() => {
+    setConnect(null)
+  }, [])
+
   const pickModel = useCallback(
     (ref: string) => {
       setPickerOpen(false)
@@ -648,7 +673,7 @@ export function App(props: AppProps) {
   )
 
   const empty = items.length === 0
-  const focusInput = !pickerOpen && !permission && !confirmModel
+  const focusInput = !pickerOpen && !permission && !confirmModel && !connect
   const commandSuggestions = getSlashCommandSuggestions(promptValue)
   const completionOpen =
     focusInput && dismissedCompletionValue !== promptValue && commandSuggestions.length > 0
@@ -731,8 +756,8 @@ export function App(props: AppProps) {
       }
     }
     if (key.name === "escape") {
-      if (pickerOpen) setPickerOpen(false)
-      else if (busy) abortRef.current?.abort()
+      // Overlays own their own Esc; only handle abort here when nothing is open
+      if (!pickerOpen && !connect && busy) abortRef.current?.abort()
     }
   })
 
@@ -787,8 +812,36 @@ export function App(props: AppProps) {
       {confirmModel ? (
         <ModelFitWarning modelRef={confirmModel.ref} sizeBytes={confirmModel.sizeBytes} />
       ) : null}
+      {connect ? (
+        <box
+          style={{ border: true, borderColor: theme.accent, padding: 1, flexDirection: "column" }}
+          title="connect a provider"
+        >
+          <ProviderConnect
+            key={connectEpoch}
+            provider={connect.provider}
+            providers={SETUP_PROVIDERS.filter(
+              (p) => !connectedProviders(catalog, config).some((c) => c.id === p.id),
+            )}
+            onConnected={handleConnected}
+            onCancel={handleConnectCancel}
+          />
+        </box>
+      ) : null}
       {pickerOpen ? (
-        <ModelPicker catalog={catalog} config={config} current={modelRef} onPick={pickModel} />
+        <ModelPicker
+          catalog={catalog}
+          config={config}
+          current={modelRef}
+          width={width}
+          initialProviderId={pickerProvider}
+          onPick={pickModel}
+          onConnect={handleConnectRequest}
+          onClose={() => {
+            setPickerOpen(false)
+            setPickerProvider(undefined)
+          }}
+        />
       ) : null}
       {completionOpen ? (
         <SlashCommandSuggestionsView
@@ -825,64 +878,6 @@ export function App(props: AppProps) {
           </>
         )}
       </box>
-    </box>
-  )
-}
-
-// ---------- model picker ----------
-
-interface PickerProps {
-  catalog: Catalog
-  config: DawnConfig
-  current: string
-  onPick: (ref: string) => void
-}
-
-function ModelPicker({ catalog, config, current, onPick }: PickerProps) {
-  const options = []
-  for (const provider of connectedProviders(catalog, config)) {
-    const models = catalog[provider.id]?.models ?? {}
-    for (const model of Object.values(models)) {
-      if (model.tool_call === false) continue
-      const cost = model.cost
-        ? `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
-        : "free/unknown"
-      const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
-      const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
-      const ram = fit
-        ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " · tight on RAM" : ""}`
-        : ""
-      options.push({
-        name: `${provider.id}/${model.id}`,
-        description: `${model.name} · ${cost}${ctx}${ram}`,
-        value: `${provider.id}/${model.id}`,
-      })
-    }
-  }
-  options.sort((a, b) => (a.value === current ? -1 : b.value === current ? 1 : a.name.localeCompare(b.name)))
-
-  if (options.length === 0) {
-    return (
-      <box style={{ border: true, borderColor: theme.error, padding: 1 }}>
-        <text fg={theme.error}>
-          No connected providers. Run `dawn auth login anthropic` (or set ANTHROPIC_API_KEY).
-        </text>
-      </box>
-    )
-  }
-
-  return (
-    <box
-      style={{ border: true, borderColor: theme.accent, height: 14, flexDirection: "column" }}
-      title="switch model (Esc to close)"
-    >
-      <select
-        focused
-        showScrollIndicator
-        options={options}
-        onSelect={(_i, opt) => opt && onPick(opt.value)}
-        style={{ flexGrow: 1 }}
-      />
     </box>
   )
 }
