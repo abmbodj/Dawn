@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process"
 import type { DawnConfig } from "../config/config"
 
 export const GITHUB_CLIENT_ID_ENV = "DAWN_GITHUB_CLIENT_ID"
@@ -16,6 +17,23 @@ export function resolveGithubClientId(
 
   const fromBuiltIn = builtInClientId.trim()
   return fromBuiltIn || undefined
+}
+
+export async function tryGhCliToken(): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const child = spawn("gh", ["auth", "token", "--hostname", "github.com"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    let output = ""
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString()
+    })
+    child.once("error", () => resolve(undefined))
+    child.once("close", (code) => {
+      const token = output.trim()
+      resolve(code === 0 && token ? token : undefined)
+    })
+  })
 }
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code"

@@ -21,6 +21,7 @@ import {
   SessionStore,
   setApiKey,
   startDeviceFlow,
+  tryGhCliToken,
   withOllama,
 } from "@dawn/core"
 
@@ -186,10 +187,16 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
         process.exit(1)
       }
       if (provider === "github-copilot") {
+        const ghToken = await tryGhCliToken()
+        if (ghToken) {
+          setApiKey("github-copilot", ghToken)
+          console.log("GitHub Copilot connected via GitHub CLI.")
+          return
+        }
         const config = loadConfig(cwd)
         const clientId = resolveGithubClientId(config)
         if (!clientId) {
-          console.error("GitHub OAuth client id not configured; falling back to GitHub Copilot token paste.")
+          console.error("Run `gh auth login` for automatic sign-in, or paste a token below.")
           const key = await promptHidden("GitHub Copilot token (input hidden): ")
           if (!key.trim()) {
             console.error("no token entered, nothing saved")
@@ -202,8 +209,7 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
         const flow = await startDeviceFlow(clientId)
         const opened = await openExternalUrl(flow.verificationUri)
         if (opened) console.log("Opened GitHub device authorization in your browser.")
-        else console.log("Could not open your browser automatically.")
-        console.log(`Open: ${flow.verificationUri}`)
+        else console.log(`Open: ${flow.verificationUri}`)
         console.log(`Code: ${flow.userCode}`)
         console.log("Waiting for authorization…")
         const token = await pollForToken(clientId, flow.deviceCode, flow.interval)

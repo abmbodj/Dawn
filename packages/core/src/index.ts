@@ -9,6 +9,7 @@ export {
   pollForToken,
   resolveGithubClientId,
   startDeviceFlow,
+  tryGhCliToken,
 } from "./auth/github-oauth"
 export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage } from "./bus/bus"
 export {
@@ -55,6 +56,7 @@ export {
   type PermissionHandler,
   type PermissionRequest,
 } from "./permission/permission"
+export { copyToClipboard } from "./platform/clipboard"
 export { type ExternalOpenCommand, externalOpenCommand, openExternalUrl } from "./platform/open-external"
 export {
   type Catalog,

@@ -1,11 +1,13 @@
 import {
   type DawnConfig,
   type DeviceFlowStart,
+  copyToClipboard,
   openExternalUrl,
   pollForToken,
   resolveGithubClientId,
   setApiKey,
   startDeviceFlow,
+  tryGhCliToken,
 } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
@@ -82,6 +84,8 @@ export interface ProviderConnectProps {
   openUrl?: (url: string) => Promise<boolean>
   startDeviceFlowFn?: typeof startDeviceFlow
   pollForTokenFn?: typeof pollForToken
+  tryGhCliTokenFn?: typeof tryGhCliToken
+  copyToClipboardFn?: typeof copyToClipboard
   onExtraSelect?: (value: string) => void
   /** API key saved / OAuth completed. setApiKey already called — NO saveConfig here. */
   onConnected: (provider: ProviderOption) => void
@@ -96,14 +100,17 @@ export function ProviderConnect({
   openUrl = openExternalUrl,
   startDeviceFlowFn = startDeviceFlow,
   pollForTokenFn = pollForToken,
+  tryGhCliTokenFn = tryGhCliToken,
+  copyToClipboardFn = copyToClipboard,
   onExtraSelect,
   onConnected,
   onCancel,
 }: ProviderConnectProps) {
   const githubClientId = resolveGithubClientId(config)
-  const [phase, setPhase] = useState<"pick" | "key" | "oauth">(() => {
+  const [phase, setPhase] = useState<"pick" | "detecting" | "key" | "oauth">(() => {
     if (!fixedProvider) return "pick"
-    return fixedProvider.id === "github-copilot" && githubClientId ? "oauth" : "key"
+    if (fixedProvider.id === "github-copilot") return "detecting"
+    return "key"
   })
   const [selected, setSelected] = useState<ProviderOption>(
     fixedProvider ?? providers[0] ?? SETUP_PROVIDERS[0],
@@ -112,37 +119,60 @@ export function ProviderConnect({
   const [oauthData, setOauthData] = useState<DeviceFlowStart | null>(null)
   const [oauthError, setOauthError] = useState<string | null>(null)
   const [browserOpenStatus, setBrowserOpenStatus] = useState<"opened" | "manual" | null>(null)
+  const [clipboardStatus, setClipboardStatus] = useState<"copied" | "failed" | null>(null)
   const oauthAbortRef = useRef<AbortController | null>(null)
+  const detectCancelledRef = useRef(false)
 
   // When a fixed provider is given, start its flow on mount.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only effect; component is keyed externally
   useEffect(() => {
     if (!fixedProvider) return
-    if (fixedProvider.id === "github-copilot" && githubClientId) {
-      startGithubOAuth(fixedProvider)
+    if (fixedProvider.id === "github-copilot") {
+      detectAndStartCopilot(fixedProvider)
     }
     // key phase: no auto-start needed, user pastes
   }, [])
 
+  const detectAndStartCopilot = (prov: ProviderOption) => {
+    detectCancelledRef.current = false
+    setPhase("detecting")
+    ;(async () => {
+      const ghToken = await tryGhCliTokenFn()
+      if (detectCancelledRef.current) return
+      if (ghToken) {
+        setApiKey("github-copilot", ghToken)
+        onConnected(prov)
+        return
+      }
+      if (githubClientId) {
+        setPhase("oauth")
+        startGithubOAuth(prov)
+      } else {
+        setPhase("key")
+      }
+    })()
+  }
+
   const startGithubOAuth = (prov: ProviderOption) => {
-    if (!githubClientId) {
-      setPhase("key")
-      return
-    }
     setOauthData(null)
     setOauthError(null)
     setBrowserOpenStatus(null)
+    setClipboardStatus(null)
     const abort = new AbortController()
     oauthAbortRef.current = abort
     ;(async () => {
       try {
-        const flow = await startDeviceFlowFn(githubClientId)
+        const flow = await startDeviceFlowFn(githubClientId!)
         setOauthData(flow)
-        const opened = await openUrl(flow.verificationUri)
+        const [opened, copied] = await Promise.all([
+          openUrl(flow.verificationUri),
+          copyToClipboardFn(flow.userCode),
+        ])
         if (!abort.signal.aborted) {
           setBrowserOpenStatus(opened ? "opened" : "manual")
+          setClipboardStatus(copied ? "copied" : "failed")
         }
-        const token = await pollForTokenFn(githubClientId, flow.deviceCode, flow.interval, abort.signal)
+        const token = await pollForTokenFn(githubClientId!, flow.deviceCode, flow.interval, abort.signal)
         setApiKey("github-copilot", token)
         onConnected(prov)
       } catch (err: unknown) {
@@ -161,8 +191,12 @@ export function ProviderConnect({
         setOauthData(null)
         setOauthError(null)
         setBrowserOpenStatus(null)
+        setClipboardStatus(null)
       }
-      if (phase === "key" || phase === "oauth") {
+      if (phase === "detecting") {
+        detectCancelledRef.current = true
+      }
+      if (phase === "key" || phase === "oauth" || phase === "detecting") {
         if (fixedProvider) {
           onCancel()
         } else {
@@ -188,12 +222,7 @@ export function ProviderConnect({
     setError(null)
 
     if (value === "github-copilot") {
-      if (githubClientId) {
-        setPhase("oauth")
-        startGithubOAuth(prov)
-      } else {
-        setPhase("key")
-      }
+      detectAndStartCopilot(prov)
       return
     }
     setPhase("key")
@@ -244,6 +273,15 @@ export function ProviderConnect({
     )
   }
 
+  if (phase === "detecting") {
+    return (
+      <box style={{ flexDirection: "column" }}>
+        <text fg={theme.dim}>{"Checking for GitHub CLI authentication…"}</text>
+        <text fg={theme.dim}>{"Esc to cancel"}</text>
+      </box>
+    )
+  }
+
   if (phase === "oauth") {
     return (
       <box style={{ flexDirection: "column" }}>
@@ -262,21 +300,27 @@ export function ProviderConnect({
         >
           {oauthData ? (
             <>
-              <text fg={theme.dim}>{"1. Open this URL in your browser:"}</text>
-              <text fg={theme.accent} style={{ marginBottom: 1 }}>
-                {"   github.com/login/device"}
-              </text>
-              {browserOpenStatus ? (
+              {browserOpenStatus === "opened" ? (
                 <text fg={theme.dim} style={{ marginBottom: 1 }}>
-                  {browserOpenStatus === "opened"
-                    ? "Browser opened automatically. Use the code below if prompted."
-                    : "Open the URL manually if your browser did not launch."}
+                  {"Your browser is open. Enter the code below when prompted:"}
+                </text>
+              ) : (
+                <>
+                  <text fg={theme.dim}>{"Open this URL in your browser:"}</text>
+                  <text fg={theme.accent} style={{ marginBottom: 1 }}>
+                    {"  github.com/login/device"}
+                  </text>
+                  <text fg={theme.dim}>{"Then enter this code:"}</text>
+                </>
+              )}
+              <text fg={theme.text} style={{ marginBottom: 1 }}>
+                {`  ${oauthData.userCode}`}
+              </text>
+              {clipboardStatus === "copied" ? (
+                <text fg={theme.dim} style={{ marginBottom: 1 }}>
+                  {"(copied to clipboard)"}
                 </text>
               ) : null}
-              <text fg={theme.dim}>{"2. Enter this code:"}</text>
-              <text fg={theme.text} style={{ marginBottom: 1 }}>
-                {`   ${oauthData.userCode}`}
-              </text>
               <text fg={theme.dim}>{"Waiting for authorization…"}</text>
             </>
           ) : oauthError ? null : (
@@ -299,9 +343,9 @@ export function ProviderConnect({
     <box style={{ flexDirection: "column" }}>
       {githubTokenFallback ? (
         <>
-          <text fg={theme.text}>{"GitHub OAuth client id is not configured."}</text>
+          <text fg={theme.text}>{"Run `gh auth login` and reconnect for automatic sign-in."}</text>
           <text fg={theme.dim} style={{ marginBottom: 1 }}>
-            {"Paste an existing GitHub Copilot token, or set DAWN_GITHUB_CLIENT_ID to enable device login."}
+            {"Or paste an existing GitHub Copilot token below."}
           </text>
         </>
       ) : (
