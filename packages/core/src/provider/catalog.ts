@@ -412,36 +412,8 @@ export const FALLBACK_CATALOG: Catalog = {
     },
   },
 
-  // ── Ollama — local, no key required ──────────────────────────────────────
-  ollama: {
-    id: "ollama",
-    name: "Ollama (local)",
-    env: [],
-    api: "http://localhost:11434/v1",
-    models: {
-      "llama3.2": {
-        id: "llama3.2",
-        name: "Llama 3.2",
-        cost: null,
-        limit: { context: 128_000 },
-        tool_call: true,
-      },
-      "qwen2.5-coder": {
-        id: "qwen2.5-coder",
-        name: "Qwen 2.5 Coder",
-        cost: null,
-        limit: { context: 32_768 },
-        tool_call: true,
-      },
-      phi4: {
-        id: "phi4",
-        name: "Phi-4",
-        cost: null,
-        limit: { context: 16_384 },
-        tool_call: true,
-      },
-    },
-  },
+  // Ollama is intentionally not static here — it's injected at runtime by
+  // withOllama() only when an actual local server is detected (see provider/ollama.ts).
 }
 
 function readCache(maxAgeMs: number | null): Catalog | undefined {

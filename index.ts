@@ -12,6 +12,7 @@ import {
   removeApiKey,
   SessionStore,
   setApiKey,
+  withOllama,
 } from "@dawn/core"
 
 const VERSION = "0.1.0"
@@ -76,6 +77,13 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
     ["deepseek", "deepseek/deepseek-chat"],
   ]
   for (const [provider, ref] of preferred) if (connected.has(provider)) return ref
+  // Local Ollama: only reached when no cloud key is set (cloud preferred above).
+  if (connected.has("ollama")) {
+    const ids = Object.keys(catalog.ollama?.models ?? {})
+    const coder = ids.find((m) => /cod(e|er)|qwen|deepseek/i.test(m))
+    const pick = coder ?? ids[0]
+    if (pick) return `ollama/${pick}`
+  }
   for (const id of connected) {
     const models = Object.keys(catalog[id]?.models ?? {})
     if (models[0]) return `${id}/${models[0]}`
@@ -158,6 +166,7 @@ async function authCommand(args: string[]): Promise<void> {
 async function modelsCommand(filter: string | undefined, cwd: string): Promise<void> {
   const config = loadConfig(cwd)
   const catalog = await loadCatalog()
+  await withOllama(catalog)
   for (const provider of connectedProviders(catalog, config)) {
     if (filter && provider.id !== filter) continue
     for (const model of Object.values(catalog[provider.id]?.models ?? {})) {
@@ -176,6 +185,7 @@ async function oneShot(flags: Flags): Promise<void> {
   }
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
+  await withOllama(catalog)
   const bus = new Bus()
   const gate = new PermissionGate()
   gate.preAllow("read")
@@ -228,6 +238,7 @@ async function oneShot(flags: Flags): Promise<void> {
 async function interactive(flags: Flags): Promise<void> {
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
+  await withOllama(catalog)
 
   const store = new SessionStore()
   const existing = flags.continue ? store.lastSession(flags.cwd) : undefined

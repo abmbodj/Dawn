@@ -49,7 +49,9 @@ export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig):
           `Unknown provider "${providerId}". Add it to dawn.json under "providers" with a baseURL.`,
         )
       }
-      model = createOpenAICompatible({ name: providerId, baseURL, apiKey })(modelId)
+      // Keyless local endpoints (Ollama) still want a well-formed Authorization
+      // header; a harmless placeholder is ignored by servers that don't need a key.
+      model = createOpenAICompatible({ name: providerId, baseURL, apiKey: apiKey ?? "ollama" })(modelId)
     }
   }
 

@@ -21,6 +21,7 @@ export {
   type ProviderStatus,
   type ResolvedModel,
 } from "./provider/provider"
+export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
 export {
   PermissionGate,
   type PermissionDecision,
