@@ -1,0 +1,17 @@
+{
+  "name": "@dawn/tui",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "dependencies": {
+    "@dawn/core": "workspace:*",
+    "@opentui/core": "0.4.1",
+    "@opentui/react": "0.4.1",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0"
+  }
+}

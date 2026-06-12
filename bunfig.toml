@@ -1,0 +1,4 @@
+[install]
+# hoisted = classic node_modules layout; bun 1.3's isolated linker was leaving
+# dangling store symlinks for this workspace
+linker = "hoisted"
