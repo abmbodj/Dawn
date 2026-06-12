@@ -402,7 +402,7 @@ export function App(props: AppProps) {
   const focusInput = !pickerOpen && !permission && !confirmModel
 
   if (needsSetup) {
-    return <Setup onDone={handleSetupDone} catalog={catalog} />
+    return <Setup onDone={handleSetupDone} catalog={catalog} animate={props.animate} />
   }
 
   return (

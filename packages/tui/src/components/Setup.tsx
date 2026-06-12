@@ -2,6 +2,7 @@ import { type Catalog, formatBytes, localModelFit, saveConfig, setApiKey } from 
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
+import { Logo } from "./Logo"
 
 interface ProviderOption {
   id: string
@@ -65,9 +66,10 @@ interface LocalOption {
 export interface SetupProps {
   onDone: (modelRef: string) => void
   catalog: Catalog
+  animate?: boolean
 }
 
-export function Setup({ onDone, catalog }: SetupProps) {
+export function Setup({ onDone, catalog, animate }: SetupProps) {
   const [phase, setPhase] = useState<"pick" | "key" | "localConfirm">("pick")
   const [selected, setSelected] = useState<ProviderOption>(SETUP_PROVIDERS[0]!)
   const [localPick, setLocalPick] = useState<LocalOption | null>(null)
@@ -157,17 +159,11 @@ export function Setup({ onDone, catalog }: SetupProps) {
         alignItems: "center",
         justifyContent: "center",
         flexGrow: 1,
-        padding: 2,
+        padding: 1,
       }}
     >
-      <box style={{ flexDirection: "column", width: 60 }}>
-        <text fg={theme.sunCore} style={{ marginBottom: 1 }}>
-          {"  D  A  W  N"}
-        </text>
-        <text fg={theme.dim} style={{ marginBottom: 2 }}>
-          {"  reasoning, not memory"}
-        </text>
-
+      <Logo animate={animate ?? true} />
+      <box style={{ flexDirection: "column", width: 60, alignSelf: "center", marginTop: 1 }}>
         {phase === "pick" ? (
           <>
             <text fg={theme.text} style={{ marginBottom: 1 }}>
@@ -187,7 +183,7 @@ export function Setup({ onDone, catalog }: SetupProps) {
                 focused
                 showScrollIndicator
                 options={pickerOptions}
-                onChange={handleProviderPick}
+                onSelect={handleProviderPick}
                 style={{ flexGrow: 1 }}
               />
             </box>
@@ -222,7 +218,9 @@ export function Setup({ onDone, catalog }: SetupProps) {
           <>
             <text fg={theme.text} style={{ marginBottom: 1 }}>
               {`Get your free ${selected.id} key → `}
-              <span fg={theme.accent}>{selected.url}</span>
+              <a href={`https://${selected.url}`} fg={theme.accent}>
+                {selected.url}
+              </a>
             </text>
             <box
               style={{ border: true, borderColor: theme.accent, height: 3, marginBottom: 1 }}
