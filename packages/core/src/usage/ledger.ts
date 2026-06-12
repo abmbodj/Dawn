@@ -98,4 +98,8 @@ export class UsageLedger {
   perModel(): ReadonlyMap<string, UsageTotals> {
     return this.byModel
   }
+
+  reset(): void {
+    this.byModel.clear()
+  }
 }

@@ -6,6 +6,7 @@ import {
   formatUsageReport,
   modelLabel,
   statusFooterParts,
+  usageBoxRows,
 } from "../src/status"
 
 const catalog: Catalog = {
@@ -29,6 +30,17 @@ const usage: UsageTotals = {
   cacheWriteTokens: 0,
   cost: 0.001,
   steps: 1,
+}
+
+const emptyContext: ContextStats = {
+  mode: "balanced",
+  budget: 8000,
+  workingSetTokens: 0,
+  loadedItems: [],
+  cachedSummaries: 0,
+  repoIndex: { cwd: "/repo", indexedFiles: 0 },
+  estimatedSavedTokens: 0,
+  averageInputTokens: 0,
 }
 
 describe("modelLabel", () => {
@@ -110,7 +122,9 @@ describe("formatUsageReport", () => {
       context,
       catalog,
     })
+    const lines = report.split("\n")
 
+    expect(lines[1]).toBe("estimated context savings: 1,200 tokens")
     expect(report).toContain("cache write 250")
     expect(report).toContain("average input: 1,500 tokens/turn")
     expect(report).toContain("highest-cost turn: groq/meta-llama/llama-4-scout-17b-16e-instruct")
@@ -129,6 +143,70 @@ describe("formatStatusUsage", () => {
   })
 })
 
+describe("usageBoxRows", () => {
+  test("renders zero savings as a quiet savings-first summary", () => {
+    const rows = usageBoxRows({
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        cost: 0,
+        steps: 0,
+      },
+      context: emptyContext,
+    })
+
+    expect(rows[0]).toEqual({ label: "saved", value: "0 tokens", priority: "hero", tone: "dim" })
+    expect(rows).toContainEqual({ label: "mode", value: "balanced" })
+    expect(rows).toContainEqual({ label: "context", value: "0 / 8.0k" })
+    expect(rows).toContainEqual({ label: "loaded", value: "0" })
+    expect(rows).toContainEqual({ label: "cache", value: "read 0 / write 0", tone: "dim" })
+    expect(rows).toContainEqual({ label: "avg in", value: "0/turn" })
+    expect(rows).toContainEqual({ label: "cost", value: "$0.000", tone: "dim" })
+  })
+
+  test("includes accented savings, context health, cache writes, and average input", () => {
+    const rows = usageBoxRows({
+      usage: {
+        inputTokens: 3000,
+        outputTokens: 500,
+        cachedInputTokens: 1000,
+        cacheWriteTokens: 250,
+        cost: 0.01,
+        steps: 2,
+      },
+      context: {
+        ...emptyContext,
+        workingSetTokens: 2430,
+        loadedItems: [
+          {
+            kind: "file-range",
+            path: "packages/core/src/agent/agent.ts",
+            startLine: 60,
+            endLine: 130,
+            reason: "request builder",
+            ttl: 2,
+            estimatedTokens: 900,
+            createdAt: 1,
+          },
+        ],
+        cachedSummaries: 42,
+        estimatedSavedTokens: 1200,
+      },
+    })
+
+    expect(rows[0]).toEqual({ label: "saved", value: "1.2k tokens", priority: "hero", tone: "accent" })
+    expect(rows).toContainEqual({ label: "context", value: "2.4k / 8.0k" })
+    expect(rows).toContainEqual({ label: "loaded", value: "1" })
+    expect(rows).toContainEqual({ label: "summaries", value: "42", tone: "dim" })
+    expect(rows).toContainEqual({ label: "tokens", value: "↑3.0k ↓500" })
+    expect(rows).toContainEqual({ label: "cache", value: "read 1.0k / write 250", tone: "accent" })
+    expect(rows).toContainEqual({ label: "avg in", value: "1.5k/turn" })
+    expect(rows).toContainEqual({ label: "cost", value: "$0.010", tone: "dim" })
+  })
+})
+
 describe("statusFooterParts", () => {
   test("wide mode separates model and usage text", () => {
     expect(
@@ -143,6 +221,39 @@ describe("statusFooterParts", () => {
       mode: "wide",
       left: "Model: Groq · Llama 4 Scout",
       right: "Usage: 1.6k in / 28 out · Cache: 0 · Cost: $0.001",
+    })
+  })
+
+  test("wide mode suppresses footer usage when the usage box is visible", () => {
+    expect(
+      statusFooterParts({
+        busy: false,
+        catalog,
+        modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        usage,
+        width: 140,
+        showUsageBox: true,
+      }),
+    ).toEqual({
+      mode: "wide",
+      left: "Model: Groq · Llama 4 Scout",
+    })
+  })
+
+  test("medium mode keeps footer usage even when the box flag is set", () => {
+    expect(
+      statusFooterParts({
+        busy: false,
+        catalog,
+        modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        usage,
+        width: 90,
+        showUsageBox: true,
+      }),
+    ).toEqual({
+      mode: "medium",
+      left: "Model: Groq · Llama 4 Scout",
+      right: "1.6k in / 28 out · $0.001",
     })
   })
 

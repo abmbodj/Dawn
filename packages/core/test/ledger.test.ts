@@ -81,4 +81,29 @@ describe("UsageLedger", () => {
     expect(ledger.perModel().size).toBe(2)
     expect(ledger.perModel().get("anthropic/claude-opus-4-8")?.cachedInputTokens).toBe(500)
   })
+
+  test("reset clears per-model and overall totals", () => {
+    const ledger = new UsageLedger()
+    ledger.record({
+      providerId: "anthropic",
+      modelId: "claude-opus-4-8",
+      inputTokens: 1000,
+      outputTokens: 200,
+      cachedInputTokens: 500,
+      cacheWriteTokens: 100,
+      cost: 0.01,
+    })
+
+    ledger.reset()
+
+    expect(ledger.totals()).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+      steps: 0,
+    })
+    expect(ledger.perModel().size).toBe(0)
+  })
 })

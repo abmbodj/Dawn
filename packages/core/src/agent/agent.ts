@@ -115,6 +115,19 @@ export class DawnAgent {
     this.modelRef = ref
   }
 
+  startSession(sessionId: string, messages: ModelMessage[] = []): void {
+    if (this.busy) throw new Error("Cannot start a new session while the agent is processing a turn")
+    this.opts.sessionId = sessionId
+    this.opts.initialMessages = messages
+    this.messages = messages
+    this.ledger.reset()
+    this.workingSet.clear()
+    this.latestContextPlan = undefined
+    this.estimatedSavedTokens = 0
+    this.inputTokenEstimates = []
+    this.highestCostTurn = undefined
+  }
+
   contextStats(): ContextStats {
     const repoIndex = this.contextStore.indexStatus(this.opts.cwd)
     return {

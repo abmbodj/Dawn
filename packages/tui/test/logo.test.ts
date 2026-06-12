@@ -1,7 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { sunFrame } from "../src/logo"
+import {
+  COMPACT_WORDMARK_ROWS,
+  sunFrame,
+  TAGLINE,
+  WIDE_WORDMARK_MIN_COLS,
+  WIDE_WORDMARK_ROWS,
+  WORDMARK,
+  wordmarkRows,
+} from "../src/logo"
 
 function plain(rows: ReturnType<typeof sunFrame>): string[] {
+  return rows.map((runs) => runs.map((r) => r.text).join(""))
+}
+
+function plainRuns(rows: Array<Array<{ text: string }>>): string[] {
   return rows.map((runs) => runs.map((r) => r.text).join(""))
 }
 
@@ -88,5 +100,35 @@ describe("sunFrame", () => {
 
   test("pulse animates between phases", () => {
     expect(plain(sunFrame({ cols: 64, time: 0.3 }))).not.toEqual(plain(sunFrame({ cols: 64, time: 1.4 })))
+  })
+})
+
+describe("wordmarkRows", () => {
+  test("wide wordmark rows have uniform width", () => {
+    const rows = plainRuns(WIDE_WORDMARK_ROWS)
+    expect(rows).toEqual(["D   A   W   N"])
+    const width = rows[0]?.length ?? 0
+    expect(width).toBeGreaterThan(WORDMARK.length)
+    for (const row of rows) expect(row.length).toBe(width)
+  })
+
+  test("uses compact fallback below the wide threshold", () => {
+    expect(wordmarkRows(WIDE_WORDMARK_MIN_COLS - 1)).toBe(COMPACT_WORDMARK_ROWS)
+    expect(wordmarkRows(WIDE_WORDMARK_MIN_COLS)).toBe(WIDE_WORDMARK_ROWS)
+  })
+
+  test("rendered title output contains recognizable Dawn lettering", () => {
+    const wide = plainRuns(WIDE_WORDMARK_ROWS).join("\n")
+    expect(wide).toBe("D   A   W   N")
+    expect(wide).not.toContain("█")
+    expect(wide).not.toContain("╭")
+    expect(wide).not.toContain("╰")
+    expect(wide).not.toContain("╭━━╮")
+    expect(wide).not.toContain("╰━━╯")
+    expect(plainRuns(COMPACT_WORDMARK_ROWS).join("")).toBe("DAWN")
+  })
+
+  test("tagline remains unchanged", () => {
+    expect(TAGLINE).toBe("reasoning, not memory")
   })
 })

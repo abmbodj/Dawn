@@ -29,7 +29,14 @@ import {
   resolveSlashCommand,
   type SlashCommand,
 } from "./slashCommands"
-import { formatContextReport, formatUsageReport, statusFooterParts } from "./status"
+import {
+  footerMode,
+  formatContextReport,
+  formatUsageReport,
+  statusFooterParts,
+  type UsageBoxRow,
+  usageBoxRows,
+} from "./status"
 import { theme } from "./theme"
 
 // ---------- transcript state ----------
@@ -325,6 +332,50 @@ function SlashCommandSuggestionsView({
   )
 }
 
+const USAGE_BOX_WIDTH = 36
+const USAGE_BOX_HEIGHT = 10
+
+function UsageBox({ rows }: { rows: UsageBoxRow[] }) {
+  return (
+    <box
+      title="usage"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 1,
+        zIndex: 10,
+        width: USAGE_BOX_WIDTH,
+        height: USAGE_BOX_HEIGHT,
+        border: true,
+        borderColor: theme.border,
+        flexDirection: "column",
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+    >
+      {rows.map((row) => (
+        <text key={row.label}>
+          <span fg={theme.dim}>{row.label.padEnd(7)}</span>
+          <span fg={usageBoxToneColor(row.tone)}>
+            {row.priority === "hero" ? <strong>{row.value}</strong> : row.value}
+          </span>
+        </text>
+      ))}
+    </box>
+  )
+}
+
+function usageBoxToneColor(tone: UsageBoxRow["tone"]): string {
+  switch (tone) {
+    case "accent":
+      return theme.accent
+    case "dim":
+      return theme.dim
+    default:
+      return theme.text
+  }
+}
+
 // ---------- main app ----------
 
 export interface AppProps {
@@ -344,7 +395,7 @@ export function App(props: AppProps) {
   const [session, setSession] = useState(props.session)
   const [items, dispatch] = useReducer(reduceItems, undefined, () => itemsFromMessages(agent.messages))
   const [busy, setBusy] = useState(false)
-  const [usage, setUsage] = useState<UsageTotals>(agent.ledger.totals())
+  const [usage, setUsage] = useState<UsageTotals>(() => store.usageTotals(props.session.id))
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmModel, setConfirmModel] = useState<{ ref: string; sizeBytes?: number } | null>(null)
@@ -386,7 +437,7 @@ export function App(props: AppProps) {
       dispatch({ type: "agent", event })
       if (event.type === "turn-start") setBusy(true)
       if (event.type === "turn-end") setBusy(false)
-      if (event.type === "step-finish") setUsage(agent.ledger.totals())
+      if (event.type === "step-finish") setUsage(store.usageTotals(session.id))
     })
     gate.setHandler(
       (req) =>
@@ -404,7 +455,7 @@ export function App(props: AppProps) {
       unsubscribe()
       gate.setHandler(undefined)
     }
-  }, [agent, gate])
+  }, [agent, gate, session.id, store])
 
   const quit = useCallback(() => {
     agent.close()
@@ -447,9 +498,14 @@ export function App(props: AppProps) {
           break
         }
         case "new": {
+          if (busy) {
+            dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt" } })
+            break
+          }
           const fresh = store.createSession(session.cwd)
           setSession(fresh)
-          agent.messages = []
+          agent.startSession(fresh.id)
+          setUsage(store.usageTotals(fresh.id))
           dispatch({ type: "reset", items: [] })
           dispatch({ type: "push", item: { kind: "info", text: "started a new session" } })
           break
@@ -467,7 +523,7 @@ export function App(props: AppProps) {
           break
       }
     },
-    [agent, catalog, quit, session, store],
+    [agent, busy, catalog, quit, session, store],
   )
 
   const submit = useCallback(
@@ -542,7 +598,9 @@ export function App(props: AppProps) {
   const selectedSuggestionIndex =
     commandSuggestions.length > 0 ? Math.min(selectedSuggestion, commandSuggestions.length - 1) : 0
   const selectedCommand = commandSuggestions[selectedSuggestionIndex]
-  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width })
+  const showUsageBox = footerMode(width) === "wide"
+  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width, showUsageBox })
+  const usageRows = showUsageBox ? usageBoxRows({ usage, context: agent.contextStats() }) : []
 
   const fillSuggestion = useCallback((command: SlashCommand) => {
     const value = `/${command.name}`
@@ -623,13 +681,21 @@ export function App(props: AppProps) {
   }
 
   return (
-    <box style={{ flexDirection: "column", flexGrow: 1 }}>
+    <box style={{ position: "relative", flexDirection: "column", flexGrow: 1 }}>
       {empty ? (
         <box style={{ flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
           <Logo animate={props.animate} />
         </box>
       ) : (
-        <scrollbox style={{ flexGrow: 1, paddingLeft: 1, paddingRight: 1 }} stickyScroll stickyStart="bottom">
+        <scrollbox
+          style={{
+            flexGrow: 1,
+            paddingLeft: 1,
+            paddingRight: showUsageBox ? USAGE_BOX_WIDTH + 3 : 1,
+          }}
+          stickyScroll
+          stickyStart="bottom"
+        >
           {items.map((item, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: append-mostly list
             <box key={i} style={{ marginTop: i === 0 ? 0 : 1, flexShrink: 0 }}>
@@ -649,6 +715,8 @@ export function App(props: AppProps) {
           ) : null}
         </scrollbox>
       )}
+
+      {showUsageBox ? <UsageBox rows={usageRows} /> : null}
 
       {permission ? <PermissionView pending={permission} /> : null}
       {confirmModel ? (
@@ -684,9 +752,11 @@ export function App(props: AppProps) {
             <box style={{ width: Math.max(18, Math.floor(width * 0.45)), flexShrink: 0 }}>
               <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
             </box>
-            <box style={{ flexGrow: 1, justifyContent: "flex-end" }}>
-              <text fg={theme.dim}>{footer.right}</text>
-            </box>
+            {footer.right ? (
+              <box style={{ flexGrow: 1, justifyContent: "flex-end" }}>
+                <text fg={theme.dim}>{footer.right}</text>
+              </box>
+            ) : null}
           </>
         )}
       </box>

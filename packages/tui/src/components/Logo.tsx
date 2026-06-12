@@ -1,6 +1,6 @@
 import { useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
-import { LOGO_FPS, RISE_DURATION_MS, sunFrame, TAGLINE, WORDMARK } from "../logo"
+import { LOGO_FPS, RISE_DURATION_MS, sunFrame, TAGLINE, wordmarkRows } from "../logo"
 import { theme } from "../theme"
 
 /**
@@ -22,6 +22,7 @@ export function Logo({ animate }: { animate: boolean }) {
   const rise = animate ? Math.min(1, elapsedMs / RISE_DURATION_MS) : 1
   const time = animate ? elapsedMs / 1000 : 0.3
   const rows = sunFrame({ cols: Math.max(24, width - 4), time, rise })
+  const titleRows = wordmarkRows(Math.max(1, width - 4))
 
   return (
     <box style={{ flexDirection: "column", alignItems: "center" }}>
@@ -37,10 +38,20 @@ export function Logo({ animate }: { animate: boolean }) {
         </text>
       ))}
       <box style={{ marginTop: 1, flexDirection: "column", alignItems: "center" }}>
-        <text fg={theme.accent}>
-          <strong>{WORDMARK}</strong>
+        {titleRows.map((runs, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: title rows are positional by nature
+          <text key={i}>
+            {runs.map((run, j) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: runs are positional by nature
+              <span key={j} fg={run.color}>
+                <strong>{run.text}</strong>
+              </span>
+            ))}
+          </text>
+        ))}
+        <text fg={theme.dim} style={{ marginTop: 1 }}>
+          {TAGLINE}
         </text>
-        <text fg={theme.dim}>{TAGLINE}</text>
       </box>
     </box>
   )

@@ -174,5 +174,31 @@ export function sunFrame({ cols, time, rise = 1 }: SunFrameOptions): Run[][] {
 
 export const LOGO_FPS = 12
 export const RISE_DURATION_MS = 1200
-export const WORDMARK = "D  A  W  N"
+export const WORDMARK = "DAWN"
 export const TAGLINE = "reasoning, not memory"
+
+export const WIDE_WORDMARK_ROWS: Run[][] = [
+  [
+    { text: "D", color: "#FFF3C4" },
+    { text: "   ", color: "#FFF3C4" },
+    { text: "A", color: "#FFF3C4" },
+    { text: "   ", color: "#FFF3C4" },
+    { text: "W", color: "#FFB45C" },
+    { text: "   ", color: "#FFB45C" },
+    { text: "N", color: "#FF8C42" },
+  ],
+]
+
+export const COMPACT_WORDMARK_ROWS: Run[][] = [
+  [
+    { text: "DA", color: "#FFF3C4" },
+    { text: "WN", color: "#FFB45C" },
+  ],
+]
+
+export const WIDE_WORDMARK_MIN_COLS =
+  Math.max(...WIDE_WORDMARK_ROWS.map((row) => row.reduce((sum, run) => sum + run.text.length, 0))) + 4
+
+export function wordmarkRows(cols: number): Run[][] {
+  return cols >= WIDE_WORDMARK_MIN_COLS ? WIDE_WORDMARK_ROWS : COMPACT_WORDMARK_ROWS
+}

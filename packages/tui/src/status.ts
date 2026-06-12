@@ -8,6 +8,13 @@ export interface FooterParts {
   right?: string
 }
 
+export interface UsageBoxRow {
+  label: string
+  value: string
+  priority?: "hero" | "normal"
+  tone?: "normal" | "accent" | "dim"
+}
+
 export function footerMode(width: number): FooterMode {
   if (width < 72) return "narrow"
   if (width < 112) return "medium"
@@ -89,6 +96,7 @@ export function formatUsageReport(args: {
   catalog: Catalog
 }): string {
   const lines = [`session usage (${args.lifetime.steps} steps):`]
+  lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
   for (const [model, t] of args.perModel) {
     lines.push(
       `  ${model}: ↑${formatTokens(t.inputTokens)} ↓${formatTokens(t.outputTokens)} ` +
@@ -113,8 +121,47 @@ export function formatUsageReport(args: {
         `(↑${formatTokens(turn.inputTokens)} ↓${formatTokens(turn.outputTokens)})`,
     )
   }
-  lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
   return lines.join("\n")
+}
+
+export function usageBoxRows(args: { usage: UsageTotals; context: ContextStats }): UsageBoxRow[] {
+  const avgInput = args.usage.steps ? Math.round(args.usage.inputTokens / args.usage.steps) : 0
+  const hasCache = args.usage.cachedInputTokens > 0 || args.usage.cacheWriteTokens > 0
+  const hasSavings = args.context.estimatedSavedTokens > 0
+  const rows: UsageBoxRow[] = [
+    {
+      label: "saved",
+      value: `${formatTokens(args.context.estimatedSavedTokens)} tokens`,
+      priority: "hero",
+      tone: hasSavings ? "accent" : "dim",
+    },
+    { label: "mode", value: args.context.mode },
+    {
+      label: "context",
+      value: `${formatTokens(args.context.workingSetTokens)} / ${formatTokens(args.context.budget)}`,
+    },
+    { label: "loaded", value: formatWholeTokens(args.context.loadedItems.length) },
+  ]
+
+  if (args.context.cachedSummaries > 0) {
+    rows.push({ label: "summaries", value: formatWholeTokens(args.context.cachedSummaries), tone: "dim" })
+  }
+
+  rows.push(
+    {
+      label: "tokens",
+      value: `↑${formatTokens(args.usage.inputTokens)} ↓${formatTokens(args.usage.outputTokens)}`,
+    },
+    {
+      label: "cache",
+      value: `read ${formatTokens(args.usage.cachedInputTokens)} / write ${formatTokens(args.usage.cacheWriteTokens)}`,
+      tone: hasCache ? "accent" : "dim",
+    },
+    { label: "avg in", value: `${formatTokens(avgInput)}/turn` },
+    { label: "cost", value: formatCost(args.usage.cost), tone: "dim" },
+  )
+
+  return rows
 }
 
 export function statusFooterParts(args: {
@@ -123,14 +170,20 @@ export function statusFooterParts(args: {
   modelRef: string
   usage: UsageTotals
   width: number
+  showUsageBox?: boolean
 }): FooterParts {
   const mode = footerMode(args.width)
   const cost = formatCost(args.usage.cost)
+  const showUsageInFooter = !(args.showUsageBox && mode === "wide")
 
   if (args.busy) {
-    return mode === "narrow"
-      ? { mode, left: "Working... Esc to stop" }
-      : { mode, left: "Working... Esc to stop", right: formatStatusUsage(args.usage, mode) }
+    if (mode === "narrow") {
+      return { mode, left: "Working... Esc to stop" }
+    }
+    if (showUsageInFooter) {
+      return { mode, left: "Working... Esc to stop", right: formatStatusUsage(args.usage, mode) }
+    }
+    return { mode, left: "Working... Esc to stop" }
   }
 
   if (mode === "narrow") {
@@ -140,6 +193,13 @@ export function statusFooterParts(args: {
         `Model: ${modelLabel(args.catalog, args.modelRef, { includeProvider: false })} · ${cost}`,
         args.width - 2,
       ),
+    }
+  }
+
+  if (!showUsageInFooter) {
+    return {
+      mode,
+      left: truncateEnd(`Model: ${modelLabel(args.catalog, args.modelRef)}`, args.width - 2),
     }
   }
 
