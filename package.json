@@ -10,6 +10,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "dawn": "bun run index.ts",
+    "setup": "bun install && bun link",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
