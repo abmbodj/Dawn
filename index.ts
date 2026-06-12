@@ -70,13 +70,18 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
     ["anthropic", "anthropic/claude-opus-4-8"],
     ["openai", "openai/gpt-5.5"],
     ["google", "google/gemini-3.5-flash"],
+    ["groq", "groq/llama-4-scout-17b-16e-instruct"],
+    ["xai", "xai/grok-3"],
+    ["mistral", "mistral/mistral-large-latest"],
+    ["deepseek", "deepseek/deepseek-chat"],
   ]
   for (const [provider, ref] of preferred) if (connected.has(provider)) return ref
   for (const id of connected) {
     const models = Object.keys(catalog[id]?.models ?? {})
     if (models[0]) return `${id}/${models[0]}`
   }
-  return "anthropic/claude-opus-4-8"
+  // No providers connected yet — placeholder; Setup wizard will override before first send
+  return "groq/llama-4-scout-17b-16e-instruct"
 }
 
 async function promptHidden(label: string): Promise<string> {
@@ -223,13 +228,6 @@ async function oneShot(flags: Flags): Promise<void> {
 async function interactive(flags: Flags): Promise<void> {
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
-
-  if (connectedProviders(catalog, config).length === 0) {
-    console.error("No AI providers connected yet.\n")
-    console.error("Connect one with:  dawn auth login anthropic")
-    console.error("or set an env var: ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY")
-    process.exit(1)
-  }
 
   const store = new SessionStore()
   const existing = flags.continue ? store.lastSession(flags.cwd) : undefined

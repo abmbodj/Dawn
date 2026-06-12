@@ -14,9 +14,6 @@ export interface ResolvedModel {
   info: ModelInfo | undefined
 }
 
-/** Cloud providers that hard-require a key; local/openai-compatible endpoints may not. */
-const KEY_REQUIRED = new Set(["anthropic", "openai", "google"])
-
 export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig): ResolvedModel {
   const { providerId, modelId } = parseModelRef(ref)
   const providerInfo = catalog[providerId]
@@ -27,7 +24,9 @@ export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig):
   ]
   const apiKey = resolveApiKey(providerId, envNames)
 
-  if (!apiKey && KEY_REQUIRED.has(providerId)) {
+  // A provider requires a key if it declares env vars. Key-free providers (Ollama, local) have no env entries.
+  const requiresKey = envNames.length > 0
+  if (!apiKey && requiresKey) {
     const hint = envNames[0] ? ` or set ${envNames[0]}` : ""
     throw new Error(`No API key for "${providerId}". Run \`dawn auth login ${providerId}\`${hint}.`)
   }
@@ -61,6 +60,8 @@ export interface ProviderStatus {
   id: string
   name: string
   hasKey: boolean
+  /** For key-free local providers (Ollama), true means reachable without auth */
+  local: boolean
 }
 
 /** Providers usable right now (key present or no key required), for the /model picker. */
@@ -72,8 +73,11 @@ export function connectedProviders(catalog: Catalog, config: DawnConfig): Provid
     const custom = config.providers?.[id]
     const envNames = [...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []), ...(info?.env ?? [])]
     const hasKey = resolveApiKey(id, envNames) !== undefined
-    if (hasKey || (custom?.baseURL && !KEY_REQUIRED.has(id))) {
-      result.push({ id, name: custom?.name ?? info?.name ?? id, hasKey })
+    const requiresKey = envNames.length > 0
+    const baseURL = custom?.baseURL ?? info?.api
+    // Connected if: has a key, OR is a key-free provider with a known endpoint
+    if (hasKey || (!requiresKey && baseURL)) {
+      result.push({ id, name: custom?.name ?? info?.name ?? id, hasKey, local: !requiresKey })
     }
   }
   return result.sort((a, b) => a.id.localeCompare(b.id))

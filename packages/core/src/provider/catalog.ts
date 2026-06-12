@@ -37,20 +37,30 @@ function cachePath(): string {
   return path.join(cacheDir(), "models.json")
 }
 
-/** Minimal embedded catalog so first runs work offline. Prices are USD per 1M tokens. */
+/** Embedded catalog — prices USD/1M tokens. Updated when models.dev is reachable. */
 export const FALLBACK_CATALOG: Catalog = {
+  // ── Anthropic ─────────────────────────────────────────────────────────────
   anthropic: {
     id: "anthropic",
     name: "Anthropic",
     env: ["ANTHROPIC_API_KEY"],
     npm: "@ai-sdk/anthropic",
     models: {
+      "claude-fable-5": {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 0, output: 0 },
+        limit: { context: 1_000_000, output: 128_000 },
+        tool_call: true,
+        reasoning: true,
+      },
       "claude-opus-4-8": {
         id: "claude-opus-4-8",
         name: "Claude Opus 4.8",
         cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
         limit: { context: 1_000_000, output: 128_000 },
         tool_call: true,
+        reasoning: true,
       },
       "claude-sonnet-4-6": {
         id: "claude-sonnet-4-6",
@@ -68,6 +78,8 @@ export const FALLBACK_CATALOG: Catalog = {
       },
     },
   },
+
+  // ── OpenAI ────────────────────────────────────────────────────────────────
   openai: {
     id: "openai",
     name: "OpenAI",
@@ -88,19 +100,344 @@ export const FALLBACK_CATALOG: Catalog = {
         limit: { context: 400_000, output: 128_000 },
         tool_call: true,
       },
+      o3: {
+        id: "o3",
+        name: "o3",
+        cost: { input: 10, output: 40, cache_read: 1 },
+        limit: { context: 200_000, output: 100_000 },
+        tool_call: true,
+        reasoning: true,
+      },
+      "o4-mini": {
+        id: "o4-mini",
+        name: "o4-mini",
+        cost: { input: 1.25, output: 5, cache_read: 0.125 },
+        limit: { context: 200_000, output: 100_000 },
+        tool_call: true,
+        reasoning: true,
+      },
     },
   },
+
+  // ── Google ────────────────────────────────────────────────────────────────
   google: {
     id: "google",
     name: "Google",
     env: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
     npm: "@ai-sdk/google",
     models: {
+      "gemini-3.5-pro": {
+        id: "gemini-3.5-pro",
+        name: "Gemini 3.5 Pro",
+        cost: { input: 3.5, output: 10.5, cache_read: 0.35 },
+        limit: { context: 1_048_576, output: 65_536 },
+        tool_call: true,
+      },
       "gemini-3.5-flash": {
         id: "gemini-3.5-flash",
         name: "Gemini 3.5 Flash",
         cost: { input: 1.5, output: 9, cache_read: 0.15 },
         limit: { context: 1_048_576, output: 65_536 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Groq — free tier, recommended for first-run ───────────────────────────
+  groq: {
+    id: "groq",
+    name: "Groq",
+    env: ["GROQ_API_KEY"],
+    api: "https://api.groq.com/openai/v1",
+    models: {
+      "llama-4-scout-17b-16e-instruct": {
+        id: "llama-4-scout-17b-16e-instruct",
+        name: "Llama 4 Scout",
+        cost: { input: 0.11, output: 0.34 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "llama-4-maverick-17b-128e-instruct": {
+        id: "llama-4-maverick-17b-128e-instruct",
+        name: "Llama 4 Maverick",
+        cost: { input: 0.2, output: 0.6 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "qwen-qwq-32b": {
+        id: "qwen-qwq-32b",
+        name: "Qwen QwQ 32B",
+        cost: { input: 0.29, output: 0.39 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+        reasoning: true,
+      },
+    },
+  },
+
+  // ── xAI ───────────────────────────────────────────────────────────────────
+  xai: {
+    id: "xai",
+    name: "xAI",
+    env: ["XAI_API_KEY"],
+    api: "https://api.x.ai/v1",
+    models: {
+      "grok-3": {
+        id: "grok-3",
+        name: "Grok 3",
+        cost: { input: 3, output: 15 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "grok-3-mini": {
+        id: "grok-3-mini",
+        name: "Grok 3 Mini",
+        cost: { input: 0.3, output: 0.5 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+        reasoning: true,
+      },
+      "grok-3-fast": {
+        id: "grok-3-fast",
+        name: "Grok 3 Fast",
+        cost: { input: 5, output: 25 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Mistral ───────────────────────────────────────────────────────────────
+  mistral: {
+    id: "mistral",
+    name: "Mistral",
+    env: ["MISTRAL_API_KEY"],
+    api: "https://api.mistral.ai/v1",
+    models: {
+      "mistral-large-latest": {
+        id: "mistral-large-latest",
+        name: "Mistral Large",
+        cost: { input: 2, output: 6 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+      "codestral-latest": {
+        id: "codestral-latest",
+        name: "Codestral",
+        cost: { input: 0.3, output: 0.9 },
+        limit: { context: 256_000, output: 32_768 },
+        tool_call: true,
+      },
+      "mistral-small-latest": {
+        id: "mistral-small-latest",
+        name: "Mistral Small",
+        cost: { input: 0.1, output: 0.3 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── DeepSeek ──────────────────────────────────────────────────────────────
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek",
+    env: ["DEEPSEEK_API_KEY"],
+    api: "https://api.deepseek.com/v1",
+    models: {
+      "deepseek-chat": {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        cost: { input: 0.27, output: 1.1 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+      "deepseek-reasoner": {
+        id: "deepseek-reasoner",
+        name: "DeepSeek Reasoner",
+        cost: { input: 0.55, output: 2.19 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+        reasoning: true,
+      },
+    },
+  },
+
+  // ── Perplexity ────────────────────────────────────────────────────────────
+  perplexity: {
+    id: "perplexity",
+    name: "Perplexity",
+    env: ["PERPLEXITY_API_KEY"],
+    api: "https://api.perplexity.ai",
+    models: {
+      "sonar-pro": {
+        id: "sonar-pro",
+        name: "Sonar Pro",
+        cost: { input: 3, output: 15 },
+        limit: { context: 200_000, output: 16_384 },
+        tool_call: true,
+      },
+      sonar: {
+        id: "sonar",
+        name: "Sonar",
+        cost: { input: 1, output: 1 },
+        limit: { context: 200_000, output: 16_384 },
+        tool_call: true,
+      },
+      "sonar-reasoning-pro": {
+        id: "sonar-reasoning-pro",
+        name: "Sonar Reasoning Pro",
+        cost: { input: 2, output: 8 },
+        limit: { context: 200_000, output: 16_384 },
+        tool_call: true,
+        reasoning: true,
+      },
+    },
+  },
+
+  // ── Together AI ───────────────────────────────────────────────────────────
+  together: {
+    id: "together",
+    name: "Together AI",
+    env: ["TOGETHER_API_KEY"],
+    api: "https://api.together.xyz/v1",
+    models: {
+      "meta-llama/Llama-4-Maverick-Instruct-Basic": {
+        id: "meta-llama/Llama-4-Maverick-Instruct-Basic",
+        name: "Llama 4 Maverick",
+        cost: { input: 0.27, output: 0.27 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "meta-llama/Llama-4-Scout-Instruct-Basic": {
+        id: "meta-llama/Llama-4-Scout-Instruct-Basic",
+        name: "Llama 4 Scout",
+        cost: { input: 0.1, output: 0.1 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "deepseek-ai/DeepSeek-V3": {
+        id: "deepseek-ai/DeepSeek-V3",
+        name: "DeepSeek V3",
+        cost: { input: 1.25, output: 1.25 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Fireworks ─────────────────────────────────────────────────────────────
+  fireworks: {
+    id: "fireworks",
+    name: "Fireworks AI",
+    env: ["FIREWORKS_API_KEY"],
+    api: "https://api.fireworks.ai/inference/v1",
+    models: {
+      "accounts/fireworks/models/llama-4-maverick": {
+        id: "accounts/fireworks/models/llama-4-maverick",
+        name: "Llama 4 Maverick",
+        cost: { input: 0.22, output: 0.88 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "accounts/fireworks/models/llama-4-scout": {
+        id: "accounts/fireworks/models/llama-4-scout",
+        name: "Llama 4 Scout",
+        cost: { input: 0.15, output: 0.6 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "accounts/fireworks/models/deepseek-v3": {
+        id: "accounts/fireworks/models/deepseek-v3",
+        name: "DeepSeek V3",
+        cost: { input: 0.9, output: 0.9 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Cerebras ──────────────────────────────────────────────────────────────
+  cerebras: {
+    id: "cerebras",
+    name: "Cerebras",
+    env: ["CEREBRAS_API_KEY"],
+    api: "https://api.cerebras.ai/v1",
+    models: {
+      "llama-4-scout": {
+        id: "llama-4-scout",
+        name: "Llama 4 Scout",
+        cost: { input: 0.1, output: 0.1 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "llama3.1-70b": {
+        id: "llama3.1-70b",
+        name: "Llama 3.1 70B",
+        cost: { input: 0.6, output: 0.6 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── OpenRouter ────────────────────────────────────────────────────────────
+  openrouter: {
+    id: "openrouter",
+    name: "OpenRouter",
+    env: ["OPENROUTER_API_KEY"],
+    api: "https://openrouter.ai/api/v1",
+    models: {
+      "meta-llama/llama-4-maverick": {
+        id: "meta-llama/llama-4-maverick",
+        name: "Llama 4 Maverick",
+        cost: { input: 0.18, output: 0.59 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
+      "google/gemini-2.5-pro-preview": {
+        id: "google/gemini-2.5-pro-preview",
+        name: "Gemini 2.5 Pro",
+        cost: { input: 1.25, output: 10 },
+        limit: { context: 1_048_576, output: 65_536 },
+        tool_call: true,
+      },
+      "anthropic/claude-opus-4-8": {
+        id: "anthropic/claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        cost: { input: 5, output: 25 },
+        limit: { context: 1_000_000, output: 128_000 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Ollama — local, no key required ──────────────────────────────────────
+  ollama: {
+    id: "ollama",
+    name: "Ollama (local)",
+    env: [],
+    api: "http://localhost:11434/v1",
+    models: {
+      "llama3.2": {
+        id: "llama3.2",
+        name: "Llama 3.2",
+        cost: null,
+        limit: { context: 128_000 },
+        tool_call: true,
+      },
+      "qwen2.5-coder": {
+        id: "qwen2.5-coder",
+        name: "Qwen 2.5 Coder",
+        cost: null,
+        limit: { context: 32_768 },
+        tool_call: true,
+      },
+      phi4: {
+        id: "phi4",
+        name: "Phi-4",
+        cost: null,
+        limit: { context: 16_384 },
         tool_call: true,
       },
     },

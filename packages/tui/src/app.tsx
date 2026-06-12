@@ -14,6 +14,7 @@ import type {
 import { connectedProviders } from "@dawn/core"
 import type { ModelMessage } from "@dawn/core"
 import { Logo } from "./components/Logo"
+import { Setup } from "./components/Setup"
 import { theme } from "./theme"
 
 // ---------- transcript state ----------
@@ -186,6 +187,7 @@ export interface AppProps {
 
 export function App(props: AppProps) {
   const { agent, store, catalog, config, gate } = props
+  const [needsSetup, setNeedsSetup] = useState(() => connectedProviders(catalog, config).length === 0)
   const [session, setSession] = useState(props.session)
   const [items, dispatch] = useReducer(reduceItems, undefined, () => itemsFromMessages(agent.messages))
   const [busy, setBusy] = useState(false)
@@ -195,6 +197,20 @@ export function App(props: AppProps) {
   const [inputEpoch, setInputEpoch] = useState(0)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const abortRef = useRef<AbortController | null>(null)
+
+  const handleSetupDone = useCallback(
+    (ref: string) => {
+      try {
+        agent.setModel(ref)
+        setModelRef(ref)
+        setNeedsSetup(false)
+      } catch (err) {
+        // Key saved but setModel threw — shouldn't happen; proceed anyway
+        setNeedsSetup(false)
+      }
+    },
+    [agent],
+  )
 
   useEffect(() => {
     const unsubscribe = agent.bus.subscribe((event) => {
@@ -330,6 +346,10 @@ export function App(props: AppProps) {
 
   const empty = items.length === 0
   const focusInput = !pickerOpen && !permission
+
+  if (needsSetup) {
+    return <Setup onDone={handleSetupDone} />
+  }
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
