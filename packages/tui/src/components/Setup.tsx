@@ -1,8 +1,8 @@
 import {
   type Catalog,
   type DeviceFlowStart,
-  GITHUB_CLIENT_ID,
   formatBytes,
+  GITHUB_CLIENT_ID,
   localModelFit,
   pollForToken,
   saveConfig,

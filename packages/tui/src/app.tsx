@@ -32,6 +32,7 @@ import {
 import {
   footerMode,
   formatContextReport,
+  formatSavingsReport,
   formatUsageReport,
   savingsBoxRows,
   statusFooterParts,
@@ -509,6 +510,38 @@ export function App(props: AppProps) {
           })
           break
         }
+        case "savings": {
+          const projectSessions = store.sessionsForCwd(session.cwd).map((meta) => meta.id)
+          const lifetimeSessions = store.allSessions().map((meta) => meta.id)
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: formatSavingsReport({
+                scopes: [
+                  {
+                    label: "session",
+                    usage: store.usageTotals(session.id),
+                    context: agent.contextPlanTotals([session.id]),
+                  },
+                  {
+                    label: "project",
+                    usage: store.usageTotalsForCwd(session.cwd),
+                    context: agent.contextPlanTotals(projectSessions),
+                  },
+                  {
+                    label: "lifetime",
+                    usage: store.usageTotalsAll(),
+                    context: agent.contextPlanTotals(lifetimeSessions),
+                  },
+                ],
+                catalog,
+                modelRef,
+              }),
+            },
+          })
+          break
+        }
         case "context": {
           dispatch({ type: "push", item: { kind: "info", text: formatContextReport(agent.contextStats()) } })
           break
@@ -539,7 +572,7 @@ export function App(props: AppProps) {
           break
       }
     },
-    [agent, busy, catalog, quit, session, store],
+    [agent, busy, catalog, modelRef, quit, session, store],
   )
 
   const submit = useCallback(

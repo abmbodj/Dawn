@@ -50,6 +50,15 @@ export interface WorkingSetItem {
   createdAt: number
 }
 
+export type ContextPlanItemKind = WorkingSetKind | "history"
+
+export interface ContextPlanItem {
+  kind: ContextPlanItemKind
+  label: string
+  tokens: number
+  reason: string
+}
+
 export interface ContextPlan {
   systemTokens: number
   historyTokens: number
@@ -60,7 +69,32 @@ export interface ContextPlan {
   budget: number
   mode: ContextMode
   trimmedItems: string[]
+  includedItems: ContextPlanItem[]
+  skippedItems: ContextPlanItem[]
   savingsEstimate: number
+}
+
+export interface RecordedContextPlan {
+  id: number
+  sessionId?: string
+  ts: number
+  plan: ContextPlan
+}
+
+export interface ContextPlanTotals {
+  plans: number
+  estimatedSavedTokens: number
+  plannedInputTokens: number
+  includedItems: number
+  skippedItems: number
+  highestSavingsPlan?: {
+    sessionId?: string
+    ts: number
+    savedTokens: number
+    totalEstimatedTokens: number
+    budget: number
+    mode: ContextMode
+  }
 }
 
 export interface BuiltRequest {

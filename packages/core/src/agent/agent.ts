@@ -12,7 +12,7 @@ import {
 } from "../context/budget"
 import { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
-import type { ContextMode, ContextPlan, ContextStats, FileSummary } from "../context/types"
+import type { ContextMode, ContextPlan, ContextPlanTotals, ContextStats, FileSummary } from "../context/types"
 import { ContextWorkingSet } from "../context/working-set"
 import type { PermissionGate } from "../permission/permission"
 import type { Catalog } from "../provider/catalog"
@@ -142,6 +142,10 @@ export class DawnAgent {
       averageInputTokens: average(this.inputTokenEstimates),
       highestCostTurn: this.highestCostTurn,
     }
+  }
+
+  contextPlanTotals(sessionIds?: string[]): ContextPlanTotals {
+    return this.contextStore.contextPlanTotals(sessionIds)
   }
 
   private requestMessages(isAnthropic: boolean): {

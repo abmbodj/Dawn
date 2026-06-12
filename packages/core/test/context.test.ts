@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { ModelMessage } from "ai"
-import { buildRequestMessages, groupHistory, trimHistory } from "../src/context/budget"
+import { buildContextPlan, buildRequestMessages, groupHistory, trimHistory } from "../src/context/budget"
 import { buildRepoIndex } from "../src/context/indexer"
 import { ContextStore } from "../src/context/store"
 import { getFileSummary } from "../src/context/summarize"
@@ -111,7 +111,7 @@ describe("groupHistory", () => {
     ]
     const groups = groupHistory(messages)
     expect(groups).toHaveLength(1)
-    expect(groups[0]![0]!.role).toBe("user")
+    expect(groups[0]?.[0]?.role).toBe("user")
   })
 })
 
@@ -147,7 +147,7 @@ describe("trimHistory", () => {
     for (let i = 0; i < roles.length; i++) {
       if (roles[i] === "tool") {
         expect(roles[i - 1]).toBe("assistant")
-        const prevContent = result.kept[i - 1]!.content
+        const prevContent = result.kept[i - 1]?.content
         const hasCalls =
           Array.isArray(prevContent) && (prevContent as any[]).some((p: any) => p.type === "tool-call")
         expect(hasCalls).toBe(true)
@@ -201,6 +201,12 @@ describe("context budget", () => {
     })
 
     expect(built.plan.trimmedItems).toContain("old.ts lines 1-80")
+    expect(built.plan.skippedItems).toContainEqual(
+      expect.objectContaining({ label: "old.ts lines 1-80", reason: "expired" }),
+    )
+    expect(built.plan.includedItems).toContainEqual(
+      expect.objectContaining({ label: "current.ts lines 1-5", reason: "current" }),
+    )
     expect(JSON.stringify(built.messages)).toContain("current.ts")
     expect(JSON.stringify(built.messages)).toContain("latest request")
   })
@@ -275,6 +281,67 @@ describe("context budget", () => {
     expect((built.system as any).providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
     const last = built.messages.at(-1)
     expect((last as any)?.providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
+  })
+})
+
+describe("context plan persistence", () => {
+  let tmp: string
+  let store: ContextStore
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dawn-context-plan-"))
+    store = new ContextStore(path.join(tmp, "test.db"))
+  })
+
+  afterEach(() => {
+    store.close()
+    fs.rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test("aggregates saved tokens and highest-saving turns by session", () => {
+    const small = buildContextPlan({
+      systemTokens: 10,
+      historyTokens: 20,
+      summaryTokens: 0,
+      fileTokens: 0,
+      toolResultTokens: 0,
+      budget: { mode: "balanced", budget: 100 },
+      trimmedItems: ["history message"],
+      includedItems: [
+        { kind: "history", label: "conversation history", tokens: 20, reason: "recent history" },
+      ],
+      skippedItems: [{ kind: "history", label: "history message", tokens: 50, reason: "history budget" }],
+      savingsEstimate: 50,
+    })
+    const large = buildContextPlan({
+      systemTokens: 10,
+      historyTokens: 20,
+      summaryTokens: 30,
+      fileTokens: 40,
+      toolResultTokens: 0,
+      budget: { mode: "deep", budget: 500 },
+      trimmedItems: ["summary old.ts"],
+      includedItems: [{ kind: "summary", label: "summary app.ts", tokens: 30, reason: "relevant summary" }],
+      skippedItems: [{ kind: "summary", label: "summary old.ts", tokens: 200, reason: "summary budget" }],
+      savingsEstimate: 200,
+    })
+
+    store.recordContextPlan("session-a", small)
+    store.recordContextPlan("session-a", large)
+    store.recordContextPlan("session-b", { ...large, savingsEstimate: 1000 })
+
+    const totals = store.contextPlanTotals(["session-a"])
+
+    expect(totals.plans).toBe(2)
+    expect(totals.estimatedSavedTokens).toBe(250)
+    expect(totals.plannedInputTokens).toBe(130)
+    expect(totals.includedItems).toBe(2)
+    expect(totals.skippedItems).toBe(2)
+    expect(totals.highestSavingsPlan).toEqual(
+      expect.objectContaining({ sessionId: "session-a", savedTokens: 200, totalEstimatedTokens: 100 }),
+    )
+    expect(store.contextPlans(["session-a"], 1)).toHaveLength(1)
+    expect(store.contextPlanTotals([]).plans).toBe(0)
   })
 })
 

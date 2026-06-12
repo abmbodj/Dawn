@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Catalog, ContextStats, UsageTotals } from "@dawn/core"
 import {
   formatContextReport,
+  formatSavingsReport,
   formatStatusUsage,
   formatUsageReport,
   modelLabel,
@@ -76,6 +77,33 @@ describe("formatContextReport", () => {
       repoIndex: { cwd: "/repo", indexedFiles: 100, updatedAt: 1 },
       estimatedSavedTokens: 18200,
       averageInputTokens: 0,
+      latestPlan: {
+        systemTokens: 100,
+        historyTokens: 500,
+        summaryTokens: 300,
+        fileTokens: 900,
+        toolResultTokens: 0,
+        totalEstimatedTokens: 1800,
+        budget: 8000,
+        mode: "balanced",
+        trimmedItems: ["history message"],
+        includedItems: [
+          {
+            kind: "summary",
+            label: "summary packages/core/src/agent/agent.ts",
+            tokens: 300,
+            reason: "relevant summary",
+          },
+          {
+            kind: "file-range",
+            label: "packages/core/src/agent/agent.ts lines 60-130",
+            tokens: 900,
+            reason: "request builder",
+          },
+        ],
+        skippedItems: [{ kind: "history", label: "history message", tokens: 1200, reason: "history budget" }],
+        savingsEstimate: 1200,
+      },
     }
 
     const report = formatContextReport(stats)
@@ -86,6 +114,13 @@ describe("formatContextReport", () => {
     expect(report).toContain("Cached summaries: 42")
     expect(report).toContain("Repo index: 100 files")
     expect(report).toContain("Estimated saved: 18,200 tokens")
+    expect(report).toContain("Audit:")
+    expect(report).toContain("Loaded: 1")
+    expect(report).toContain("Summarized: 1")
+    expect(report).toContain("Skipped: 1")
+    expect(report).toContain("Saved this turn: 1,200 tokens")
+    expect(report).toContain("Included:")
+    expect(report).toContain("Skipped:")
   })
 })
 
@@ -139,6 +174,93 @@ describe("formatStatusUsage", () => {
     expect(text).toContain("28 out")
     expect(text).toContain("Cache: 0")
     expect(text).toContain("Cost: $0.001")
+  })
+})
+
+describe("formatSavingsReport", () => {
+  test("shows session, project, and lifetime savings against the baseline", () => {
+    const report = formatSavingsReport({
+      scopes: [
+        {
+          label: "session",
+          usage: { ...usage, inputTokens: 3000, steps: 2 },
+          context: {
+            plans: 2,
+            estimatedSavedTokens: 1200,
+            plannedInputTokens: 2200,
+            includedItems: 4,
+            skippedItems: 3,
+            highestSavingsPlan: {
+              sessionId: "session-a",
+              ts: 1,
+              savedTokens: 900,
+              totalEstimatedTokens: 1800,
+              budget: 8000,
+              mode: "balanced",
+            },
+          },
+        },
+        {
+          label: "project",
+          usage: { ...usage, inputTokens: 6000, steps: 4 },
+          context: {
+            plans: 4,
+            estimatedSavedTokens: 3000,
+            plannedInputTokens: 5000,
+            includedItems: 8,
+            skippedItems: 6,
+          },
+        },
+        {
+          label: "lifetime",
+          usage: { ...usage, inputTokens: 10_000, steps: 6 },
+          context: {
+            plans: 6,
+            estimatedSavedTokens: 5000,
+            plannedInputTokens: 9000,
+            includedItems: 12,
+            skippedItems: 10,
+          },
+        },
+      ],
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    })
+
+    expect(report).toContain("Baseline: full-context CLI")
+    expect(report).toContain("session:")
+    expect(report).toContain("saved: 1,200 tokens")
+    expect(report).toContain("input cut: 29%")
+    expect(report).toContain("actual: 3.0k input")
+    expect(report).toContain("baseline: 4.2k input")
+    expect(report).toContain("est $ saved: $0.001")
+    expect(report).toContain("context items: 4 included / 3 skipped")
+    expect(report).toContain("highest-saving turn: 900 tokens saved (1.8k / 8.0k, balanced)")
+    expect(report).toContain("project:")
+    expect(report).toContain("lifetime:")
+  })
+
+  test("shows unknown savings pricing when the current model is unpriced", () => {
+    const report = formatSavingsReport({
+      scopes: [
+        {
+          label: "session",
+          usage,
+          context: {
+            plans: 1,
+            estimatedSavedTokens: 1200,
+            plannedInputTokens: 1600,
+            includedItems: 1,
+            skippedItems: 1,
+          },
+        },
+      ],
+      catalog,
+      modelRef: "custom/some-model",
+    })
+
+    expect(report).toContain("Pricing: unknown")
+    expect(report).toContain("est $ saved: unknown")
   })
 })
 

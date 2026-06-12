@@ -18,6 +18,7 @@ developer-facing setup and usage documentation, not as a production stability or
 - Local Ollama discovery, including RAM-fit warnings for large local models.
 - Permission prompts for `write`, `edit`, and `bash` tools in interactive mode.
 - Session usage and cost tracking across models.
+- Session, project, and lifetime savings reports against a full-context CLI baseline.
 - Offline-friendly model catalog fallback with a cached `models.dev` refresh when available.
 
 ## Requirements
@@ -72,8 +73,11 @@ dawn                       Start an interactive session in the current directory
 dawn -c, --continue        Resume the most recent session for this directory.
 dawn -m, --model <ref>     Use a model reference like provider/model.
 dawn --cwd <path>          Run against a different working directory.
+dawn --budget <tokens>     Cap estimated prompt tokens.
+dawn --context <mode>      Use minimal, balanced, or deep context planning.
 dawn run "<prompt>"        Run a one-shot non-interactive prompt.
 dawn run --yolo "<prompt>" Allow read, write, edit, and bash tools without prompts.
+dawn index                 Build or refresh the repository context index.
 dawn auth login <provider> Store an API key for a provider.
 dawn auth list             Show providers with stored API keys.
 dawn auth logout <provider> Remove a stored API key.
@@ -100,6 +104,7 @@ Inside the TUI, submit these slash commands in the prompt:
 /model   Switch model across connected providers.
 /context Show context budget, working set, and savings.
 /usage   Show token and cost breakdown for the session.
+/savings Show session, project, and lifetime token savings.
 /new     Start a fresh session.
 /clear   Clear the visible transcript while keeping the conversation.
 /reset   Wipe all Dawn data and return to setup wizard.

@@ -48,6 +48,6 @@ describe("markdownStyles", () => {
   })
 
   test("default uses text color", () => {
-    expect(markdownStyles["default"]?.fg).toBe(theme.text)
+    expect(markdownStyles.default?.fg).toBe(theme.text)
   })
 })

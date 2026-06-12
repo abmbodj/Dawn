@@ -10,7 +10,6 @@ afterEach(() => {
 })
 
 function mockFetch(impl: (url: string) => Response | Promise<Response> | Promise<never>) {
-  // biome-ignore lint/suspicious/noExplicitAny: test stub
   globalThis.fetch = ((input: any) => Promise.resolve(impl(String(input)))) as any
 }
 

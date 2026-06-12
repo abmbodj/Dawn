@@ -186,7 +186,9 @@ async function authCommand(args: string[]): Promise<void> {
       }
       if (provider === "github-copilot") {
         if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID === "REPLACE_WITH_REGISTERED_CLIENT_ID") {
-          console.error("OAuth app not configured — replace GITHUB_CLIENT_ID in packages/core/src/auth/github-oauth.ts")
+          console.error(
+            "OAuth app not configured — replace GITHUB_CLIENT_ID in packages/core/src/auth/github-oauth.ts",
+          )
           process.exit(1)
         }
         const flow = await startDeviceFlow(GITHUB_CLIENT_ID)

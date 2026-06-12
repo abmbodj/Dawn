@@ -1,4 +1,11 @@
-import { type Catalog, type ContextStats, parseModelRef, type UsageTotals } from "@dawn/core"
+import {
+  type Catalog,
+  type ContextPlanItem,
+  type ContextPlanTotals,
+  type ContextStats,
+  parseModelRef,
+  type UsageTotals,
+} from "@dawn/core"
 
 export type FooterMode = "wide" | "medium" | "narrow"
 
@@ -12,6 +19,12 @@ export interface UsageBoxRow {
   label: string
   value: string
   tone?: "normal" | "accent" | "dim"
+}
+
+export interface SavingsReportScope {
+  label: "session" | "project" | "lifetime"
+  usage: UsageTotals
+  context: ContextPlanTotals
 }
 
 export function footerMode(width: number): FooterMode {
@@ -85,6 +98,8 @@ export function formatContextReport(stats: ContextStats): string {
       (stats.repoIndex.updatedAt ? `, updated ${new Date(stats.repoIndex.updatedAt).toLocaleString()}` : ""),
   )
   lines.push(`Estimated saved: ${formatWholeTokens(stats.estimatedSavedTokens)} tokens`)
+  lines.push("")
+  lines.push(...formatContextAudit(stats))
   return lines.join("\n")
 }
 
@@ -120,6 +135,46 @@ export function formatUsageReport(args: {
     )
   }
   lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
+  return lines.join("\n")
+}
+
+export function formatSavingsReport(args: {
+  scopes: SavingsReportScope[]
+  catalog: Catalog
+  modelRef: string
+}): string {
+  const inputPrice = modelInputPrice(args.catalog, args.modelRef)
+  const lines = [
+    "Savings",
+    "Baseline: full-context CLI (actual input + Dawn context savings)",
+    inputPrice === undefined
+      ? "Pricing: unknown for current model"
+      : `Pricing: current model input at ${formatCost(inputPrice)} / 1M tokens`,
+  ]
+
+  for (const scope of args.scopes) {
+    const metrics = savingsMetrics(scope.usage.inputTokens, scope.context.estimatedSavedTokens, inputPrice)
+    lines.push("")
+    lines.push(`${scope.label}:`)
+    lines.push(`  saved: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
+    lines.push(`  input cut: ${metrics.savedPercent}%`)
+    lines.push(`  actual: ${formatTokens(scope.usage.inputTokens)} input`)
+    lines.push(`  baseline: ${formatTokens(metrics.baselineTokens)} input`)
+    lines.push(`  est $ saved: ${metrics.estimatedCostSaved}`)
+    lines.push(`  context plans: ${formatWholeTokens(scope.context.plans)}`)
+    lines.push(
+      `  context items: ${formatWholeTokens(scope.context.includedItems)} included / ` +
+        `${formatWholeTokens(scope.context.skippedItems)} skipped`,
+    )
+    if (scope.context.highestSavingsPlan) {
+      const plan = scope.context.highestSavingsPlan
+      lines.push(
+        `  highest-saving turn: ${formatWholeTokens(plan.savedTokens)} tokens saved ` +
+          `(${formatTokens(plan.totalEstimatedTokens)} / ${formatTokens(plan.budget)}, ${plan.mode})`,
+      )
+    }
+  }
+
   return lines.join("\n")
 }
 
@@ -269,4 +324,54 @@ function modelInputPrice(catalog: Catalog, modelRef: string): number | undefined
   } catch {
     return undefined
   }
+}
+
+function formatContextAudit(stats: ContextStats): string[] {
+  const plan = stats.latestPlan
+  if (!plan) return ["Audit:", "- no context plan recorded yet"]
+
+  const included = plan.includedItems ?? []
+  const skipped = plan.skippedItems ?? []
+  const loaded = included.filter((item) => item.kind !== "summary" && item.kind !== "history").length
+  const summarized = included.filter((item) => item.kind === "summary").length
+  const expired = skipped.filter((item) => item.reason.includes("expired")).length
+  const overBudget = skipped.filter((item) => item.reason.includes("budget")).length
+
+  return [
+    "Audit:",
+    `Loaded: ${formatWholeTokens(loaded)}`,
+    `Summarized: ${formatWholeTokens(summarized)}`,
+    `Skipped: ${formatWholeTokens(skipped.length)}`,
+    `Expired: ${formatWholeTokens(expired)}`,
+    `Over budget: ${formatWholeTokens(overBudget)}`,
+    `Saved this turn: ${formatWholeTokens(plan.savingsEstimate)} tokens`,
+    ...formatPlanItems("Included", included),
+    ...formatPlanItems("Skipped", skipped),
+  ]
+}
+
+function formatPlanItems(title: string, items: ContextPlanItem[]): string[] {
+  if (items.length === 0) return [`${title}: none`]
+  const lines = [`${title}:`]
+  for (const item of items.slice(0, 6)) {
+    lines.push(`- ${item.label} (${formatWholeTokens(item.tokens)} tokens) — ${item.reason}`)
+  }
+  if (items.length > 6) lines.push(`- … ${items.length - 6} more`)
+  return lines
+}
+
+function savingsMetrics(
+  inputTokens: number,
+  savedTokens: number,
+  inputPrice: number | undefined,
+): {
+  baselineTokens: number
+  savedPercent: number
+  estimatedCostSaved: string
+} {
+  const baselineTokens = inputTokens + savedTokens
+  const savedPercent = baselineTokens ? Math.round((savedTokens / baselineTokens) * 100) : 0
+  const estimatedCostSaved =
+    inputPrice === undefined ? "unknown" : formatCost((savedTokens * inputPrice) / 1_000_000)
+  return { baselineTokens, savedPercent, estimatedCostSaved }
 }

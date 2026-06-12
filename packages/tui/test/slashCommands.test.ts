@@ -15,6 +15,7 @@ describe("slash command suggestions", () => {
 
   test("filters by prefix", () => {
     expect(getSlashCommandSuggestions("/m").map((command) => command.name)).toEqual(["model"])
+    expect(getSlashCommandSuggestions("/s").map((command) => command.name)).toEqual(["savings"])
   })
 
   test("matching is case-insensitive", () => {

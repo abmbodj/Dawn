@@ -178,4 +178,35 @@ describe("SessionStore", () => {
     expect(totals.cost).toBeCloseTo(0.003, 10)
     expect(totals.steps).toBe(2)
   })
+
+  test("usage rolls up by project and lifetime", () => {
+    const first = store.createSession("/p")
+    const second = store.createSession("/p")
+    const other = store.createSession("/other")
+    const step = {
+      providerId: "anthropic",
+      modelId: "claude-opus-4-8",
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedInputTokens: 10,
+      cacheWriteTokens: 5,
+      cost: 0.001,
+    }
+
+    store.recordUsage(first.id, step)
+    store.recordUsage(second.id, { ...step, inputTokens: 200, cost: 0.002 })
+    store.recordUsage(other.id, { ...step, inputTokens: 300, cost: 0.003 })
+
+    expect(
+      store
+        .sessionsForCwd("/p")
+        .map((session) => session.id)
+        .sort(),
+    ).toEqual([first.id, second.id].sort())
+    expect(store.allSessions()).toHaveLength(3)
+    expect(store.usageTotalsForCwd("/p").inputTokens).toBe(300)
+    expect(store.usageTotalsForCwd("/p").steps).toBe(2)
+    expect(store.usageTotalsAll().inputTokens).toBe(600)
+    expect(store.usageTotalsAll().cost).toBeCloseTo(0.006, 10)
+  })
 })

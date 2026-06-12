@@ -64,6 +64,18 @@ export class SessionStore {
     return row ? rowToMeta(row as any) : undefined
   }
 
+  sessionsForCwd(cwd: string): SessionMeta[] {
+    const rows = this.db
+      .query("SELECT * FROM sessions WHERE cwd = ? ORDER BY updated_at DESC")
+      .all(cwd) as any[]
+    return rows.map(rowToMeta)
+  }
+
+  allSessions(): SessionMeta[] {
+    const rows = this.db.query("SELECT * FROM sessions ORDER BY updated_at DESC").all() as any[]
+    return rows.map(rowToMeta)
+  }
+
   setTitle(sessionId: string, title: string): void {
     this.db.query("UPDATE sessions SET title = ? WHERE id = ?").run(title, sessionId)
   }
@@ -73,7 +85,9 @@ export class SessionStore {
     const tx = this.db.transaction(() => {
       this.db.query("DELETE FROM messages WHERE session_id = ?").run(sessionId)
       const insert = this.db.query("INSERT INTO messages (session_id, idx, json) VALUES (?, ?, ?)")
-      messages.forEach((m, i) => insert.run(sessionId, i, JSON.stringify(m)))
+      messages.forEach((m, i) => {
+        insert.run(sessionId, i, JSON.stringify(m))
+      })
       this.db.query("UPDATE sessions SET updated_at = ? WHERE id = ?").run(Date.now(), sessionId)
     })
     tx()
@@ -106,13 +120,31 @@ export class SessionStore {
   }
 
   usageTotals(sessionId: string): UsageTotals {
+    return this.usageTotalsWhere("usage.session_id = ?", [sessionId])
+  }
+
+  usageTotalsForCwd(cwd: string): UsageTotals {
+    return this.usageTotalsWhere("sessions.cwd = ?", [cwd])
+  }
+
+  usageTotalsAll(): UsageTotals {
+    return this.usageTotalsWhere()
+  }
+
+  close(): void {
+    this.db.close()
+  }
+
+  private usageTotalsWhere(where?: string, params: Array<string | number> = []): UsageTotals {
+    const whereClause = where ? ` WHERE ${where}` : ""
     const row = this.db
       .query(
         `SELECT COALESCE(SUM(input_tokens),0) i, COALESCE(SUM(output_tokens),0) o,
          COALESCE(SUM(cached_input_tokens),0) cr, COALESCE(SUM(cache_write_tokens),0) cw,
-         COALESCE(SUM(cost),0) c, COUNT(*) n FROM usage WHERE session_id = ?`,
+         COALESCE(SUM(cost),0) c, COUNT(usage.id) n
+         FROM usage JOIN sessions ON sessions.id = usage.session_id${whereClause}`,
       )
-      .get(sessionId) as { i: number; o: number; cr: number; cw: number; c: number; n: number }
+      .get(...params) as { i: number; o: number; cr: number; cw: number; c: number; n: number }
     return {
       inputTokens: row.i,
       outputTokens: row.o,
@@ -121,10 +153,6 @@ export class SessionStore {
       cost: row.c,
       steps: row.n,
     }
-  }
-
-  close(): void {
-    this.db.close()
   }
 }
 

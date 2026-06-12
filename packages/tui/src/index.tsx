@@ -12,5 +12,5 @@ export async function launchTui(opts: TuiOptions): Promise<void> {
   createRoot(renderer).render(<App {...opts} animate={animate} />)
 }
 
-export { sunFrame, LOGO_FPS, RISE_DURATION_MS, WORDMARK, TAGLINE } from "./logo"
 export type { Run } from "./logo"
+export { LOGO_FPS, RISE_DURATION_MS, sunFrame, TAGLINE, WORDMARK } from "./logo"

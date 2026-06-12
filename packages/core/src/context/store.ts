@@ -1,7 +1,14 @@
 import { Database } from "bun:sqlite"
 import path from "node:path"
 import { dataDir } from "../paths"
-import type { ContextPlan, FileSummary, RepoIndexEntry, RepoIndexStatus } from "./types"
+import type {
+  ContextPlan,
+  ContextPlanTotals,
+  FileSummary,
+  RecordedContextPlan,
+  RepoIndexEntry,
+  RepoIndexStatus,
+} from "./types"
 
 export class ContextStore {
   private db: Database
@@ -171,8 +178,69 @@ export class ContextStore {
       .run(sessionId ?? null, Date.now(), JSON.stringify(plan))
   }
 
+  contextPlans(sessionIds?: string[], limit = 50): RecordedContextPlan[] {
+    const rows = this.contextPlanRows(sessionIds, limit)
+    return rows.map(rowToContextPlan).filter((plan): plan is RecordedContextPlan => plan !== undefined)
+  }
+
+  contextPlanTotals(sessionIds?: string[]): ContextPlanTotals {
+    const totals: ContextPlanTotals = {
+      plans: 0,
+      estimatedSavedTokens: 0,
+      plannedInputTokens: 0,
+      includedItems: 0,
+      skippedItems: 0,
+    }
+
+    for (const row of this.contextPlanRows(sessionIds)) {
+      const recorded = rowToContextPlan(row)
+      if (!recorded) continue
+      const plan = recorded.plan
+      totals.plans += 1
+      totals.estimatedSavedTokens += plan.savingsEstimate
+      totals.plannedInputTokens += plan.totalEstimatedTokens
+      totals.includedItems += plan.includedItems?.length ?? 0
+      totals.skippedItems += plan.skippedItems?.length ?? plan.trimmedItems.length
+
+      if (!totals.highestSavingsPlan || plan.savingsEstimate > totals.highestSavingsPlan.savedTokens) {
+        totals.highestSavingsPlan = {
+          sessionId: recorded.sessionId,
+          ts: recorded.ts,
+          savedTokens: plan.savingsEstimate,
+          totalEstimatedTokens: plan.totalEstimatedTokens,
+          budget: plan.budget,
+          mode: plan.mode,
+        }
+      }
+    }
+
+    return totals
+  }
+
   close(): void {
     this.db.close()
+  }
+
+  private contextPlanRows(
+    sessionIds?: string[],
+    limit?: number,
+  ): Array<{ id: number; session_id: string | null; ts: number; json: string }> {
+    if (sessionIds && sessionIds.length === 0) return []
+
+    const limitClause = limit === undefined ? "" : ` LIMIT ${Math.max(0, Math.floor(limit))}`
+    if (!sessionIds) {
+      return this.db
+        .query(`SELECT id, session_id, ts, json FROM context_plans ORDER BY ts DESC, id DESC${limitClause}`)
+        .all() as Array<{ id: number; session_id: string | null; ts: number; json: string }>
+    }
+
+    const placeholders = sessionIds.map(() => "?").join(", ")
+    return this.db
+      .query(
+        `SELECT id, session_id, ts, json FROM context_plans ` +
+          `WHERE session_id IN (${placeholders}) ORDER BY ts DESC, id DESC${limitClause}`,
+      )
+      .all(...sessionIds) as Array<{ id: number; session_id: string | null; ts: number; json: string }>
   }
 }
 
@@ -199,5 +267,23 @@ function rowToSummary(row: any): FileSummary {
     dependencies: JSON.parse(row.dependencies_json),
     lastSummarizedAt: row.last_summarized_at,
     tokenEstimate: row.token_estimate,
+  }
+}
+
+function rowToContextPlan(row: {
+  id: number
+  session_id: string | null
+  ts: number
+  json: string
+}): RecordedContextPlan | undefined {
+  try {
+    return {
+      id: row.id,
+      sessionId: row.session_id ?? undefined,
+      ts: row.ts,
+      plan: JSON.parse(row.json),
+    }
+  } catch {
+    return undefined
   }
 }

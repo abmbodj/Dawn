@@ -1,4 +1,4 @@
-import { SyntaxStyle, type StyleDefinitionInput } from "@opentui/core"
+import { type StyleDefinitionInput, SyntaxStyle } from "@opentui/core"
 import { theme } from "./theme"
 
 export const markdownStyles: Record<string, StyleDefinitionInput> = {

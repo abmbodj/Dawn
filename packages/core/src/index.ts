@@ -2,7 +2,6 @@ export type { ModelMessage } from "ai"
 export { type AgentOptions, DawnAgent } from "./agent/agent"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
-export { resetDawnData } from "./reset"
 export {
   type DeviceFlowStart,
   GITHUB_CLIENT_ID,
@@ -35,8 +34,12 @@ export type {
   ContextBudget,
   ContextMode,
   ContextPlan,
+  ContextPlanItem,
+  ContextPlanItemKind,
+  ContextPlanTotals,
   ContextStats,
   FileSummary,
+  RecordedContextPlan,
   RepoIndexEntry,
   RepoIndexStatus,
   WorkingSetItem,
@@ -74,6 +77,7 @@ export {
   type ResolvedModel,
   resolveModel,
 } from "./provider/provider"
+export { resetDawnData } from "./reset"
 export { type SessionMeta, SessionStore } from "./session/store"
 export { applyEdit } from "./tools/edit"
 export {

@@ -1,5 +1,12 @@
 import type { ModelMessage } from "ai"
-import type { ContextBudget, ContextMode, ContextPlan, FileSummary, WorkingSetItem } from "./types"
+import type {
+  ContextBudget,
+  ContextMode,
+  ContextPlan,
+  ContextPlanItem,
+  FileSummary,
+  WorkingSetItem,
+} from "./types"
 
 export const DEFAULT_CONTEXT_MODE: ContextMode = "balanced"
 export const DEFAULT_TOKEN_BUDGET = 8000
@@ -86,7 +93,8 @@ export function groupHistory(messages: ModelMessage[]): ModelMessage[][] {
       i++
       // Absorb all immediately-following tool messages
       while (i < messages.length && messages[i]?.role === "tool") {
-        group.push(messages[i]!)
+        const toolMessage = messages[i]
+        if (toolMessage) group.push(toolMessage)
         i++
       }
       groups.push(group)
@@ -105,11 +113,13 @@ export function trimWorkingSet(
 ): {
   kept: WorkingSetItem[]
   trimmed: string[]
+  trimmedDetails: ContextPlanItem[]
   savedTokens: number
 } {
   let used = 0
   const kept: WorkingSetItem[] = []
   const trimmed: string[] = []
+  const trimmedDetails: ContextPlanItem[] = []
   let savedTokens = 0
   const ordered = [...items].sort((a, b) => priority(a) - priority(b) || b.createdAt - a.createdAt)
 
@@ -118,7 +128,11 @@ export function trimWorkingSet(
       kept.push(item)
       used += item.estimatedTokens
     } else {
-      trimmed.push(itemLabel(item))
+      const label = itemLabel(item)
+      trimmed.push(label)
+      trimmedDetails.push(
+        planItem(item.kind, label, item.estimatedTokens, item.ttl <= 0 ? "expired" : "over budget"),
+      )
       savedTokens += item.estimatedTokens
     }
   }
@@ -126,6 +140,7 @@ export function trimWorkingSet(
   return {
     kept: kept.sort((a, b) => a.createdAt - b.createdAt),
     trimmed,
+    trimmedDetails,
     savedTokens,
   }
 }
@@ -136,39 +151,43 @@ export function trimHistory(
 ): {
   kept: ModelMessage[]
   trimmed: string[]
+  trimmedDetails: ContextPlanItem[]
   tokens: number
   savedTokens: number
 } {
-  if (messages.length === 0) return { kept: [], trimmed: [], tokens: 0, savedTokens: 0 }
+  if (messages.length === 0) return { kept: [], trimmed: [], trimmedDetails: [], tokens: 0, savedTokens: 0 }
 
   const groups = groupHistory(messages)
-  if (groups.length === 0) return { kept: [], trimmed: [], tokens: 0, savedTokens: 0 }
+  if (groups.length === 0) return { kept: [], trimmed: [], trimmedDetails: [], tokens: 0, savedTokens: 0 }
 
   // Always keep the last group (latest user message)
-  const lastGroup = groups[groups.length - 1]!
+  const lastGroup = groups.at(-1)
+  if (!lastGroup) return { kept: [], trimmed: [], trimmedDetails: [], tokens: 0, savedTokens: 0 }
   const lastTokens = lastGroup.reduce((sum, m) => sum + messageTokens(m), 0)
   let used = lastTokens
   const keptGroups: ModelMessage[][] = [lastGroup]
   const trimmed: string[] = []
+  const trimmedDetails: ContextPlanItem[] = []
   let savedTokens = 0
 
   for (let i = groups.length - 2; i >= 0; i--) {
-    const group = groups[i]!
+    const group = groups[i]
+    const first = group?.[0]
+    if (!group || !first) continue
     const groupTokens = group.reduce((sum, m) => sum + messageTokens(m), 0)
     if (used + groupTokens <= budgetLeft) {
       keptGroups.unshift(group)
       used += groupTokens
     } else {
       const label =
-        group.length > 1
-          ? `${group[0]!.role}+tool group (${group.length} messages)`
-          : `${group[0]!.role} message`
+        group.length > 1 ? `${first.role}+tool group (${group.length} messages)` : `${first.role} message`
       trimmed.push(label)
+      trimmedDetails.push(planItem("history", label, groupTokens, "history budget"))
       savedTokens += groupTokens
     }
   }
 
-  return { kept: keptGroups.flat(), trimmed, tokens: used, savedTokens }
+  return { kept: keptGroups.flat(), trimmed, trimmedDetails, tokens: used, savedTokens }
 }
 
 export function buildContextPlan(args: {
@@ -179,6 +198,8 @@ export function buildContextPlan(args: {
   toolResultTokens: number
   budget: ContextBudget
   trimmedItems: string[]
+  includedItems?: ContextPlanItem[]
+  skippedItems?: ContextPlanItem[]
   savingsEstimate: number
 }): ContextPlan {
   const totalEstimatedTokens =
@@ -193,6 +214,8 @@ export function buildContextPlan(args: {
     budget: args.budget.budget,
     mode: args.budget.mode,
     trimmedItems: args.trimmedItems,
+    includedItems: args.includedItems ?? [],
+    skippedItems: args.skippedItems ?? [],
     savingsEstimate: args.savingsEstimate,
   }
 }
@@ -249,6 +272,21 @@ export function buildRequestMessages(args: {
     .filter((item) => item.kind === "tool-result")
     .reduce((sum, item) => sum + item.estimatedTokens, 0)
   const trimmedItems = [...summaries.trimmed, ...history.trimmed, ...working.trimmed]
+  const includedItems: ContextPlanItem[] = [
+    ...summaries.kept.map((summary) =>
+      planItem(
+        "summary",
+        `summary ${summary.path}`,
+        estimateTokens(summaryText(summary)),
+        "relevant summary",
+      ),
+    ),
+    ...(history.tokens > 0
+      ? [planItem("history", "conversation history", history.tokens, "recent history")]
+      : []),
+    ...working.kept.map((item) => planItem(item.kind, itemLabel(item), item.estimatedTokens, item.reason)),
+  ]
+  const skippedItems = [...summaries.trimmedDetails, ...history.trimmedDetails, ...working.trimmedDetails]
   const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens
   const plan = buildContextPlan({
     systemTokens,
@@ -258,6 +296,8 @@ export function buildRequestMessages(args: {
     toolResultTokens,
     budget: args.budget,
     trimmedItems,
+    includedItems,
+    skippedItems,
     savingsEstimate,
   })
 
@@ -320,11 +360,13 @@ function trimSummaries(
 ): {
   kept: FileSummary[]
   trimmed: string[]
+  trimmedDetails: ContextPlanItem[]
   savedTokens: number
 } {
   let used = 0
   const kept: FileSummary[] = []
   const trimmed: string[] = []
+  const trimmedDetails: ContextPlanItem[] = []
   let savedTokens = 0
   for (const summary of summaries) {
     const tokens = estimateTokens(summaryText(summary))
@@ -332,11 +374,13 @@ function trimSummaries(
       kept.push(summary)
       used += tokens
     } else {
-      trimmed.push(`summary ${summary.path}`)
+      const label = `summary ${summary.path}`
+      trimmed.push(label)
+      trimmedDetails.push(planItem("summary", label, tokens, "summary budget"))
       savedTokens += tokens
     }
   }
-  return { kept, trimmed, savedTokens }
+  return { kept, trimmed, trimmedDetails, savedTokens }
 }
 
 function withMovingAnthropicBreakpoint(messages: ModelMessage[]): ModelMessage[] {
@@ -358,4 +402,13 @@ function itemLabel(item: WorkingSetItem): string {
     return `${item.path ?? "file"} lines ${item.startLine ?? "?"}-${item.endLine ?? "?"}`
   if (item.path) return `${item.kind} ${item.path}`
   return item.kind
+}
+
+function planItem(
+  kind: ContextPlanItem["kind"],
+  label: string,
+  tokens: number,
+  reason: string,
+): ContextPlanItem {
+  return { kind, label, tokens, reason }
 }
