@@ -106,6 +106,15 @@ export function toolTitle(toolName: string, input: any): string {
 
 const DENIED = "Permission denied by user. Ask before retrying, or propose an alternative."
 
+const rgAvailable: Promise<boolean> = (async () => {
+  try {
+    const proc = Bun.spawn(["rg", "--version"], { stdout: "ignore", stderr: "ignore" })
+    return (await proc.exited) === 0
+  } catch {
+    return false
+  }
+})()
+
 export function createTools(ctx: ToolContext): ToolSet {
   const { cwd, gate } = ctx
   const mode = ctx.contextMode ?? "balanced"
@@ -236,25 +245,41 @@ export function createTools(ctx: ToolContext): ToolSet {
   })
 
   const grep = tool({
-    description: "Search file contents with a regex (ripgrep). Use this to locate code before reading files.",
+    description:
+      "Search file contents with a regex (ripgrep if available, otherwise grep). Use this to locate code before reading files.",
     inputSchema: z.object({
       pattern: z.string().describe("Regular expression to search for"),
       path: z.string().optional().describe("Directory or file to search (default cwd)"),
       glob: z.string().optional().describe('Limit to files matching a glob, e.g. "*.ts"'),
     }),
     execute: async ({ pattern, path: searchPath, glob }) => {
-      const args = ["--no-heading", "-n", "--color=never", "-S", "-m", "50"]
-      if (glob) args.push("-g", glob)
-      args.push("--", pattern, searchPath ? resolvePath(cwd, searchPath) : ".")
-      const proc = Bun.spawn(["rg", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      if (exitCode === 1) return "No matches found"
-      if (exitCode !== 0) throw new Error(`ripgrep failed: ${stderr.trim()}`)
-      return truncateMiddle(stdout.trimEnd(), 15_000)
+      if (await rgAvailable) {
+        const args = ["--no-heading", "-n", "--color=never", "-S", "-m", "50"]
+        if (glob) args.push("-g", glob)
+        args.push("--", pattern, searchPath ? resolvePath(cwd, searchPath) : ".")
+        const proc = Bun.spawn(["rg", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+        if (exitCode === 1) return "No matches found"
+        if (exitCode !== 0) throw new Error(`ripgrep failed: ${stderr.trim()}`)
+        return truncateMiddle(stdout.trimEnd(), 15_000)
+      } else {
+        const args = ["-rn", "-m", "50"]
+        if (glob) args.push(`--include=${glob}`)
+        args.push("--", pattern, searchPath ? resolvePath(cwd, searchPath) : ".")
+        const proc = Bun.spawn(["grep", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+        if (exitCode === 1) return "No matches found"
+        if (exitCode !== 0) throw new Error(`grep failed: ${stderr.trim()}`)
+        return truncateMiddle(stdout.trimEnd(), 15_000)
+      }
     },
   })
 
