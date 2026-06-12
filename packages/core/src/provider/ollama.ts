@@ -2,9 +2,9 @@ import type { Catalog, ProviderInfo } from "./catalog"
 
 /** Default endpoint; OLLAMA_HOST overrides (accepts "host:port" or a full URL). */
 export function ollamaBaseURL(): string {
-  const raw = process.env.OLLAMA_HOST?.trim()
+  const raw = process.env.OLLAMA_HOST?.trim().replace(/\/+$/, "")
   if (!raw) return "http://localhost:11434"
-  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw.replace(/\/+$/, "")
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
   return `http://${raw}`
 }
 
