@@ -1,4 +1,4 @@
-import { type Catalog, parseModelRef, type UsageTotals } from "@dawn/core"
+import { type Catalog, type ContextStats, parseModelRef, type UsageTotals } from "@dawn/core"
 
 export type FooterMode = "wide" | "medium" | "narrow"
 
@@ -48,6 +48,75 @@ export function formatStatusUsage(usage: UsageTotals, mode: FooterMode): string 
   }
 }
 
+export function formatContextReport(stats: ContextStats): string {
+  const lines = [
+    "Context",
+    `Mode: ${stats.mode}`,
+    `Budget: ${formatWholeTokens(stats.budget)} tokens`,
+    `Working set: ${formatWholeTokens(stats.workingSetTokens)} tokens`,
+    "",
+    "Loaded:",
+  ]
+  if (stats.loadedItems.length === 0) {
+    lines.push("- none")
+  } else {
+    for (const item of stats.loadedItems) {
+      if (item.kind === "file-range") {
+        lines.push(
+          `- ${item.path ?? "(unknown)"} lines ${item.startLine ?? "?"}-${item.endLine ?? "?"} — ${item.reason}`,
+        )
+      } else if (item.path) {
+        lines.push(`- ${item.path} ${item.kind} — ${item.reason}`)
+      } else {
+        lines.push(`- ${item.kind} — ${item.reason}`)
+      }
+    }
+  }
+  lines.push("")
+  lines.push(`Cached summaries: ${stats.cachedSummaries}`)
+  lines.push(
+    `Repo index: ${stats.repoIndex.indexedFiles} files` +
+      (stats.repoIndex.updatedAt ? `, updated ${new Date(stats.repoIndex.updatedAt).toLocaleString()}` : ""),
+  )
+  lines.push(`Estimated saved: ${formatWholeTokens(stats.estimatedSavedTokens)} tokens`)
+  return lines.join("\n")
+}
+
+export function formatUsageReport(args: {
+  perModel: ReadonlyMap<string, UsageTotals>
+  lifetime: UsageTotals
+  context: ContextStats
+  catalog: Catalog
+}): string {
+  const lines = [`session usage (${args.lifetime.steps} steps):`]
+  for (const [model, t] of args.perModel) {
+    lines.push(
+      `  ${model}: ↑${formatTokens(t.inputTokens)} ↓${formatTokens(t.outputTokens)} ` +
+        `· cache read ${formatTokens(t.cachedInputTokens)} · cache write ${formatTokens(t.cacheWriteTokens)} ` +
+        `· ${formatCost(t.cost)}`,
+    )
+    const comparison = modelCostComparison(args.catalog, model, t)
+    if (comparison) lines.push(`    ${comparison}`)
+  }
+  lines.push(
+    `total this session: ${formatCost(args.lifetime.cost)} ` +
+      `(↑${formatTokens(args.lifetime.inputTokens)} ↓${formatTokens(args.lifetime.outputTokens)}, ` +
+      `${formatTokens(args.lifetime.cachedInputTokens)} cached reads, ` +
+      `${formatTokens(args.lifetime.cacheWriteTokens)} cache writes)`,
+  )
+  const avg = args.lifetime.steps ? Math.round(args.lifetime.inputTokens / args.lifetime.steps) : 0
+  lines.push(`average input: ${formatWholeTokens(avg)} tokens/turn`)
+  if (args.context.highestCostTurn) {
+    const turn = args.context.highestCostTurn
+    lines.push(
+      `highest-cost turn: ${turn.providerId}/${turn.modelId} ${formatCost(turn.cost)} ` +
+        `(↑${formatTokens(turn.inputTokens)} ↓${formatTokens(turn.outputTokens)})`,
+    )
+  }
+  lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
+  return lines.join("\n")
+}
+
 export function statusFooterParts(args: {
   busy: boolean
   catalog: Catalog
@@ -89,6 +158,10 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+function formatWholeTokens(n: number): string {
+  return Math.round(n).toLocaleString("en-US")
+}
+
 function formatCost(usd: number): string {
   return usd >= 0.995 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(3)}`
 }
@@ -97,4 +170,18 @@ function truncateEnd(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   if (maxChars <= 1) return text.slice(0, Math.max(0, maxChars))
   return `${text.slice(0, maxChars - 1)}…`
+}
+
+function modelCostComparison(catalog: Catalog, modelRef: string, usage: UsageTotals): string | undefined {
+  try {
+    const { providerId, modelId } = parseModelRef(modelRef)
+    const cost = catalog[providerId]?.models?.[modelId]?.cost
+    if (!cost) return undefined
+    const uncached =
+      (usage.inputTokens * (cost.input ?? 0) + usage.outputTokens * (cost.output ?? 0)) / 1_000_000
+    if (uncached <= 0) return undefined
+    return `without cache pricing: ${formatCost(uncached)} vs actual ${formatCost(usage.cost)}`
+  } catch {
+    return undefined
+  }
 }

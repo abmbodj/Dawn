@@ -15,7 +15,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
 import { Setup } from "./components/Setup"
-import { statusFooterParts } from "./status"
+import { formatContextReport, formatUsageReport, statusFooterParts } from "./status"
 import { theme } from "./theme"
 
 // ---------- transcript state ----------
@@ -104,18 +104,9 @@ export function itemsFromMessages(messages: ModelMessage[]): Item[] {
 
 // ---------- helpers ----------
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
-
-function formatCost(usd: number): string {
-  return usd >= 0.995 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(3)}`
-}
-
 const HELP = `Commands:
   /model   switch model (multi-provider)
+  /context show context budget, working set, and savings
   /usage   token + cost breakdown for this session
   /new     start a fresh session
   /clear   clear the screen (keeps the conversation)
@@ -269,9 +260,10 @@ export function App(props: AppProps) {
   }, [agent, gate])
 
   const quit = useCallback(() => {
+    agent.close()
     store.close()
     process.exit(0)
-  }, [store])
+  }, [agent, store])
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") quit()
@@ -308,20 +300,23 @@ export function App(props: AppProps) {
           setPickerOpen(true)
           break
         case "usage": {
-          const lines = [`session usage (${usage.steps} steps):`]
-          for (const [model, t] of agent.ledger.perModel()) {
-            lines.push(
-              `  ${model}: ↑${formatTokens(t.inputTokens)} ↓${formatTokens(t.outputTokens)} ` +
-                `· cache read ${formatTokens(t.cachedInputTokens)} · ${formatCost(t.cost)}`,
-            )
-          }
           const lifetime = store.usageTotals(session.id)
-          lines.push(
-            `total this session: ${formatCost(lifetime.cost)} ` +
-              `(↑${formatTokens(lifetime.inputTokens)} ↓${formatTokens(lifetime.outputTokens)}, ` +
-              `${formatTokens(lifetime.cachedInputTokens)} cached reads)`,
-          )
-          dispatch({ type: "push", item: { kind: "info", text: lines.join("\n") } })
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: formatUsageReport({
+                perModel: agent.ledger.perModel(),
+                lifetime,
+                context: agent.contextStats(),
+                catalog,
+              }),
+            },
+          })
+          break
+        }
+        case "context": {
+          dispatch({ type: "push", item: { kind: "info", text: formatContextReport(agent.contextStats()) } })
           break
         }
         case "new": {
@@ -343,7 +338,7 @@ export function App(props: AppProps) {
           dispatch({ type: "push", item: { kind: "error", text: `unknown command ${cmd} — try /help` } })
       }
     },
-    [agent, quit, session, store, usage.steps],
+    [agent, catalog, quit, session, store],
   )
 
   const submit = useCallback(

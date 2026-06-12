@@ -1,10 +1,15 @@
 #!/usr/bin/env bun
 import {
   Bus,
+  buildRepoIndex,
   type Catalog,
+  type ContextMode,
+  ContextStore,
   connectedProviders,
   DawnAgent,
   type DawnConfig,
+  DEFAULT_CONTEXT_MODE,
+  DEFAULT_TOKEN_BUDGET,
   listAuthProviders,
   loadCatalog,
   loadConfig,
@@ -23,7 +28,10 @@ Usage:
   dawn                       interactive session in the current directory
   dawn -c, --continue        resume the most recent session for this directory
   dawn -m, --model <ref>     model as provider/model (e.g. anthropic/claude-opus-4-8)
+  dawn --budget <tokens>     cap estimated prompt tokens (default 8000)
+  dawn --context <mode>      minimal, balanced, or deep (default balanced)
   dawn run "<prompt>"        one-shot non-interactive run (add --yolo to allow edits/bash)
+  dawn index                 build or refresh the repo context index
   dawn auth login <provider> store an API key (anthropic, openai, google, …)
   dawn auth list             show configured providers
   dawn auth logout <provider>
@@ -35,11 +43,20 @@ interface Flags {
   model?: string
   cwd: string
   yolo: boolean
+  budget: number
+  contextMode: ContextMode
   positional: string[]
 }
 
 function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { continue: false, cwd: process.cwd(), yolo: false, positional: [] }
+  const flags: Flags = {
+    continue: false,
+    cwd: process.cwd(),
+    yolo: false,
+    budget: DEFAULT_TOKEN_BUDGET,
+    contextMode: DEFAULT_CONTEXT_MODE,
+    positional: [],
+  }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (!arg) continue
@@ -58,11 +75,44 @@ function parseFlags(argv: string[]): Flags {
       case "--yolo":
         flags.yolo = true
         break
+      case "--budget": {
+        const raw = argv[++i]
+        const budget = Number(raw)
+        if (!Number.isFinite(budget) || budget <= 0) {
+          console.error("usage: --budget <positive token count>")
+          process.exit(1)
+        }
+        flags.budget = Math.floor(budget)
+        break
+      }
+      case "--context": {
+        const mode = argv[++i] as ContextMode | undefined
+        if (mode !== "minimal" && mode !== "balanced" && mode !== "deep") {
+          console.error("usage: --context <minimal|balanced|deep>")
+          process.exit(1)
+        }
+        flags.contextMode = mode
+        break
+      }
       default:
         flags.positional.push(arg)
     }
   }
   return flags
+}
+
+async function indexCommand(flags: Flags): Promise<void> {
+  const store = new ContextStore()
+  try {
+    const result = await buildRepoIndex(flags.cwd, store)
+    const status = store.indexStatus(flags.cwd)
+    console.log(
+      `indexed ${result.indexed} files for ${flags.cwd} (${result.skipped} skipped) ` +
+        `at ${new Date(status.updatedAt ?? Date.now()).toLocaleString()}`,
+    )
+  } finally {
+    store.close()
+  }
 }
 
 function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
@@ -189,6 +239,7 @@ async function oneShot(flags: Flags): Promise<void> {
   if (flags.yolo) gate.allowAll = true
 
   const store = new SessionStore()
+  const contextStore = new ContextStore()
   const session = store.createSession(flags.cwd, prompt.slice(0, 80))
   const agent = new DawnAgent({
     cwd: flags.cwd,
@@ -199,6 +250,9 @@ async function oneShot(flags: Flags): Promise<void> {
     config,
     store,
     sessionId: session.id,
+    contextStore,
+    contextMode: flags.contextMode,
+    tokenBudget: flags.budget,
   })
 
   let failed = false
@@ -229,6 +283,7 @@ async function oneShot(flags: Flags): Promise<void> {
       `${totals.cachedInputTokens} cached · $${totals.cost.toFixed(4)}`,
   )
   store.close()
+  contextStore.close()
   process.exit(failed ? 1 : 0)
 }
 
@@ -238,6 +293,7 @@ async function interactive(flags: Flags): Promise<void> {
   await withOllama(catalog)
 
   const store = new SessionStore()
+  const contextStore = new ContextStore()
   const existing = flags.continue ? store.lastSession(flags.cwd) : undefined
   const session = existing ?? store.createSession(flags.cwd)
   const initialMessages = existing ? store.loadMessages(existing.id) : []
@@ -254,6 +310,9 @@ async function interactive(flags: Flags): Promise<void> {
     store,
     sessionId: session.id,
     initialMessages,
+    contextStore,
+    contextMode: flags.contextMode,
+    tokenBudget: flags.budget,
   })
 
   const { launchTui } = await import("@dawn/tui")
@@ -280,6 +339,9 @@ async function main(): Promise<void> {
       await modelsCommand(flags.positional[0], flags.cwd)
       return
     }
+    case "index":
+      await indexCommand(parseFlags(rest))
+      return
     case "run":
       await oneShot(parseFlags(rest))
       return

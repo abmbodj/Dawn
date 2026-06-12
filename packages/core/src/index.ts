@@ -11,6 +11,31 @@ export {
   loadConfig,
   saveConfig,
 } from "./config/config"
+export {
+  buildRequestMessages,
+  contextBudget,
+  DEFAULT_CONTEXT_MODE,
+  DEFAULT_TOKEN_BUDGET,
+  estimateTokens,
+  maxReadLines,
+  ttlForKind,
+} from "./context/budget"
+export { buildRepoIndex, guessLanguage, type IndexResult, indexFile, isIgnoredPath } from "./context/indexer"
+export { ContextStore } from "./context/store"
+export { getFileSummary, summarizeEntry } from "./context/summarize"
+export type {
+  BuiltRequest,
+  ContextBudget,
+  ContextMode,
+  ContextPlan,
+  ContextStats,
+  FileSummary,
+  RepoIndexEntry,
+  RepoIndexStatus,
+  WorkingSetItem,
+  WorkingSetKind,
+} from "./context/types"
+export { ContextWorkingSet } from "./context/working-set"
 export { cacheDir, configDir, dataDir } from "./paths"
 export {
   type PermissionDecision,
@@ -44,6 +69,12 @@ export {
 } from "./provider/provider"
 export { type SessionMeta, SessionStore } from "./session/store"
 export { applyEdit } from "./tools/edit"
-export { createTools, type ToolContext, toolTitle } from "./tools/index"
+export {
+  buildRepoOverview,
+  createTools,
+  type RepoOverviewOptions,
+  type ToolContext,
+  toolTitle,
+} from "./tools/index"
 export { capLine, truncateMiddle } from "./tools/truncate"
 export { computeCost, toStepUsage, UsageLedger, type UsageTotals } from "./usage/ledger"

@@ -1,6 +1,18 @@
 import { type ModelMessage, stepCountIs, streamText, type ToolSet } from "ai"
 import type { Bus } from "../bus/bus"
 import type { DawnConfig } from "../config/config"
+import {
+  buildRequestMessages,
+  contextBudget,
+  DEFAULT_CONTEXT_MODE,
+  DEFAULT_TOKEN_BUDGET,
+  estimateTokens,
+  ttlForKind,
+} from "../context/budget"
+import { ContextStore } from "../context/store"
+import { getFileSummary } from "../context/summarize"
+import type { ContextMode, ContextPlan, ContextStats, FileSummary } from "../context/types"
+import { ContextWorkingSet } from "../context/working-set"
 import type { PermissionGate } from "../permission/permission"
 import type { Catalog } from "../provider/catalog"
 import { normalizeModelRef, parseModelRef } from "../provider/catalog"
@@ -21,12 +33,31 @@ export interface AgentOptions {
   store?: SessionStore
   sessionId?: string
   initialMessages?: ModelMessage[]
+  contextMode?: ContextMode
+  tokenBudget?: number
+  contextStore?: ContextStore
 }
 
 const MAX_STEPS = 40
+const REPO_OVERVIEW_TOOL = "repo_overview"
 
-const ANTHROPIC_CACHE = {
-  anthropic: { cacheControl: { type: "ephemeral" as const } },
+export function isRepoOverviewQuestion(text: string): boolean {
+  const query = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (!query) return false
+
+  const asksForOverview =
+    /\b(what is|what's|what does|summari[sz]e|explain|describe|overview|tell me about|walk me through)\b/.test(
+      query,
+    )
+  const mentionsRepo = /\b(project|repo|repository|codebase)\b/.test(query)
+  const directProjectQuestion = /\bwhat(?:'s| is) this project\b/.test(query)
+
+  return (asksForOverview && mentionsRepo) || directProjectQuestion
 }
 
 export class DawnAgent {
@@ -36,13 +67,31 @@ export class DawnAgent {
   readonly bus: Bus
   private readonly tools: ToolSet
   private readonly system: string
+  private readonly contextStore: ContextStore
+  private readonly workingSet = new ContextWorkingSet()
+  private readonly contextMode: ContextMode
+  private readonly tokenBudget: number
+  private latestContextPlan: ContextPlan | undefined
+  private estimatedSavedTokens = 0
+  private inputTokenEstimates: number[] = []
+  private highestCostTurn: ContextStats["highestCostTurn"]
   private busy = false
 
   constructor(private opts: AgentOptions) {
     this.bus = opts.bus
     this.modelRef = normalizeModelRef(opts.modelRef)
     this.messages = opts.initialMessages ?? []
-    this.tools = createTools({ cwd: opts.cwd, gate: opts.gate, bus: opts.bus })
+    this.contextMode = opts.contextMode ?? DEFAULT_CONTEXT_MODE
+    this.tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+    this.contextStore = opts.contextStore ?? new ContextStore()
+    this.tools = createTools({
+      cwd: opts.cwd,
+      gate: opts.gate,
+      bus: opts.bus,
+      contextStore: this.contextStore,
+      workingSet: this.workingSet,
+      contextMode: this.contextMode,
+    })
     // Captured once: a byte-stable system prompt is what keeps the provider
     // prompt-cache prefix valid across turns.
     this.system = buildSystemPrompt(opts.cwd)
@@ -52,6 +101,10 @@ export class DawnAgent {
     return this.busy
   }
 
+  close(): void {
+    this.contextStore.close()
+  }
+
   /** Validates the ref resolves (provider known, key present) before switching. */
   setModel(ref: string): void {
     ref = normalizeModelRef(ref)
@@ -59,21 +112,45 @@ export class DawnAgent {
     this.modelRef = ref
   }
 
-  /**
-   * Build the request messages: stable system prefix first, then history,
-   * with Anthropic cache breakpoints on the system message and the final
-   * message (the moving breakpoint pattern).
-   */
-  private requestMessages(isAnthropic: boolean): ModelMessage[] {
-    const system: ModelMessage = {
-      role: "system",
-      content: this.system,
-      ...(isAnthropic ? { providerOptions: ANTHROPIC_CACHE } : {}),
+  contextStats(): ContextStats {
+    const repoIndex = this.contextStore.indexStatus(this.opts.cwd)
+    return {
+      mode: this.contextMode,
+      budget: this.tokenBudget,
+      workingSetTokens: this.workingSet.tokens(),
+      loadedItems: this.workingSet.all(),
+      cachedSummaries: this.contextStore.summaryCount(this.opts.cwd),
+      repoIndex,
+      latestPlan: this.latestContextPlan,
+      estimatedSavedTokens: this.estimatedSavedTokens,
+      averageInputTokens: average(this.inputTokenEstimates),
+      highestCostTurn: this.highestCostTurn,
     }
-    const history = this.messages.map((m, i) =>
-      isAnthropic && i === this.messages.length - 1 ? { ...m, providerOptions: ANTHROPIC_CACHE } : m,
-    )
-    return [system, ...history]
+  }
+
+  private requestMessages(isAnthropic: boolean): ModelMessage[] {
+    const latest = this.messages[this.messages.length - 1]
+    const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
+    const summaries = this.relevantSummaries(query)
+    const built = buildRequestMessages({
+      system: this.system,
+      messages: this.messages,
+      workingSet: this.workingSet.all(),
+      summaries,
+      budget: contextBudget(this.contextMode, this.tokenBudget),
+      isAnthropic,
+    })
+    this.latestContextPlan = built.plan
+    if (built.plan.totalEstimatedTokens > this.tokenBudget) {
+      throw new Error(
+        `Context budget exceeded: estimated ${built.plan.totalEstimatedTokens} tokens > budget ${this.tokenBudget}. ` +
+          "Raise --budget or narrow the request.",
+      )
+    }
+    this.estimatedSavedTokens += built.plan.savingsEstimate
+    this.inputTokenEstimates.push(built.plan.totalEstimatedTokens)
+    this.contextStore.recordContextPlan(this.opts.sessionId, built.plan)
+    return built.messages
   }
 
   async send(text: string, signal?: AbortSignal): Promise<void> {
@@ -88,11 +165,21 @@ export class DawnAgent {
     try {
       const resolved = resolveModel(this.modelRef, opts.catalog, opts.config)
       const { providerId } = parseModelRef(this.modelRef)
+      const forceRepoOverview = isRepoOverviewQuestion(text)
 
       const result = streamText({
         model: resolved.model,
         messages: this.requestMessages(providerId === "anthropic"),
         tools: this.tools,
+        prepareStep: forceRepoOverview
+          ? ({ stepNumber }) =>
+              stepNumber === 0
+                ? {
+                    activeTools: [REPO_OVERVIEW_TOOL],
+                    toolChoice: { type: "tool", toolName: REPO_OVERVIEW_TOOL },
+                  }
+                : undefined
+          : undefined,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal: signal,
       })
@@ -117,6 +204,13 @@ export class DawnAgent {
             })
             break
           case "tool-result":
+            this.workingSet.add({
+              kind: "tool-result",
+              content: truncateMiddle(String(part.output ?? ""), 4000),
+              reason: `${part.toolName} output`,
+              ttl: ttlForKind(this.contextMode, "tool-result"),
+              estimatedTokens: estimateTokens(part.output),
+            })
             bus.emit({
               type: "tool-end",
               id: part.toolCallId,
@@ -139,6 +233,15 @@ export class DawnAgent {
           case "finish-step": {
             const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
             this.ledger.record(usage)
+            if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
+              this.highestCostTurn = {
+                providerId: usage.providerId,
+                modelId: usage.modelId,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cost: usage.cost,
+              }
+            }
             if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, usage)
             bus.emit({ type: "step-finish", usage })
             break
@@ -157,6 +260,7 @@ export class DawnAgent {
       const response = await result.response
       this.messages.push(...response.messages)
       this.persist()
+      this.workingSet.decrementLeases()
       bus.emit({ type: "turn-end" })
     } catch (err) {
       if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
@@ -175,4 +279,27 @@ export class DawnAgent {
       this.opts.store.saveMessages(this.opts.sessionId, this.messages)
     }
   }
+
+  private relevantSummaries(query: string): FileSummary[] {
+    const entries = this.contextStore.relevantEntries(
+      this.opts.cwd,
+      query,
+      this.contextMode === "deep" ? 12 : 6,
+    )
+    const summaries: FileSummary[] = []
+    for (const entry of entries) {
+      try {
+        summaries.push(getFileSummary({ cwd: this.opts.cwd, path: entry.path, store: this.contextStore }))
+      } catch {
+        // Ignore stale index rows for files that disappeared; the next `dawn index`
+        // refresh will remove them.
+      }
+    }
+    return summaries
+  }
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
 }
