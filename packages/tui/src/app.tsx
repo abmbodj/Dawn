@@ -33,6 +33,7 @@ import {
   footerMode,
   formatContextReport,
   formatUsageReport,
+  savingsBoxRows,
   statusFooterParts,
   type UsageBoxRow,
   usageBoxRows,
@@ -332,20 +333,32 @@ function SlashCommandSuggestionsView({
   )
 }
 
-const USAGE_BOX_WIDTH = 36
-const USAGE_BOX_HEIGHT = 10
+const USAGE_BOX_WIDTH = 40
+const USAGE_BOX_HEIGHT = 8
+const SAVINGS_BOX_HEIGHT = 8
+const METRIC_LABEL_WIDTH = 12
 
-function UsageBox({ rows }: { rows: UsageBoxRow[] }) {
+function MetricBox({
+  title,
+  rows,
+  top,
+  height,
+}: {
+  title: string
+  rows: UsageBoxRow[]
+  top: number
+  height: number
+}) {
   return (
     <box
-      title="usage"
+      title={title}
       style={{
         position: "absolute",
-        top: 0,
+        top,
         right: 1,
         zIndex: 10,
         width: USAGE_BOX_WIDTH,
-        height: USAGE_BOX_HEIGHT,
+        height,
         border: true,
         borderColor: theme.border,
         flexDirection: "column",
@@ -355,14 +368,17 @@ function UsageBox({ rows }: { rows: UsageBoxRow[] }) {
     >
       {rows.map((row) => (
         <text key={row.label}>
-          <span fg={theme.dim}>{row.label.padEnd(7)}</span>
-          <span fg={usageBoxToneColor(row.tone)}>
-            {row.priority === "hero" ? <strong>{row.value}</strong> : row.value}
-          </span>
+          <span fg={theme.dim}>{metricLabel(row.label)}</span>
+          <span fg={usageBoxToneColor(row.tone)}>{row.value}</span>
         </text>
       ))}
     </box>
   )
+}
+
+function metricLabel(label: string): string {
+  const visibleLabel = label.length > METRIC_LABEL_WIDTH - 1 ? label.slice(0, METRIC_LABEL_WIDTH - 1) : label
+  return visibleLabel.padEnd(METRIC_LABEL_WIDTH)
 }
 
 function usageBoxToneColor(tone: UsageBoxRow["tone"]): string {
@@ -601,6 +617,9 @@ export function App(props: AppProps) {
   const showUsageBox = footerMode(width) === "wide"
   const footer = statusFooterParts({ busy, catalog, modelRef, usage, width, showUsageBox })
   const usageRows = showUsageBox ? usageBoxRows({ usage, context: agent.contextStats() }) : []
+  const savingsRows = showUsageBox
+    ? savingsBoxRows({ usage, context: agent.contextStats(), catalog, modelRef })
+    : []
 
   const fillSuggestion = useCallback((command: SlashCommand) => {
     const value = `/${command.name}`
@@ -716,7 +735,12 @@ export function App(props: AppProps) {
         </scrollbox>
       )}
 
-      {showUsageBox ? <UsageBox rows={usageRows} /> : null}
+      {showUsageBox ? (
+        <>
+          <MetricBox title="usage" rows={usageRows} top={0} height={USAGE_BOX_HEIGHT} />
+          <MetricBox title="savings" rows={savingsRows} top={USAGE_BOX_HEIGHT} height={SAVINGS_BOX_HEIGHT} />
+        </>
+      ) : null}
 
       {permission ? <PermissionView pending={permission} /> : null}
       {confirmModel ? (

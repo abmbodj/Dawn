@@ -11,7 +11,6 @@ export interface FooterParts {
 export interface UsageBoxRow {
   label: string
   value: string
-  priority?: "hero" | "normal"
   tone?: "normal" | "accent" | "dim"
 }
 
@@ -96,7 +95,6 @@ export function formatUsageReport(args: {
   catalog: Catalog
 }): string {
   const lines = [`session usage (${args.lifetime.steps} steps):`]
-  lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
   for (const [model, t] of args.perModel) {
     lines.push(
       `  ${model}: ↑${formatTokens(t.inputTokens)} ↓${formatTokens(t.outputTokens)} ` +
@@ -121,33 +119,18 @@ export function formatUsageReport(args: {
         `(↑${formatTokens(turn.inputTokens)} ↓${formatTokens(turn.outputTokens)})`,
     )
   }
+  lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
   return lines.join("\n")
 }
 
 export function usageBoxRows(args: { usage: UsageTotals; context: ContextStats }): UsageBoxRow[] {
   const avgInput = args.usage.steps ? Math.round(args.usage.inputTokens / args.usage.steps) : 0
   const hasCache = args.usage.cachedInputTokens > 0 || args.usage.cacheWriteTokens > 0
-  const hasSavings = args.context.estimatedSavedTokens > 0
-  const rows: UsageBoxRow[] = [
-    {
-      label: "saved",
-      value: `${formatTokens(args.context.estimatedSavedTokens)} tokens`,
-      priority: "hero",
-      tone: hasSavings ? "accent" : "dim",
-    },
-    { label: "mode", value: args.context.mode },
-    {
-      label: "context",
-      value: `${formatTokens(args.context.workingSetTokens)} / ${formatTokens(args.context.budget)}`,
-    },
-    { label: "loaded", value: formatWholeTokens(args.context.loadedItems.length) },
-  ]
+  const hasCost = args.usage.cost > 0
 
-  if (args.context.cachedSummaries > 0) {
-    rows.push({ label: "summaries", value: formatWholeTokens(args.context.cachedSummaries), tone: "dim" })
-  }
-
-  rows.push(
+  return [
+    { label: "cost", value: formatCost(args.usage.cost), tone: hasCost ? "accent" : "dim" },
+    { label: "steps", value: formatWholeTokens(args.usage.steps), tone: "dim" },
     {
       label: "tokens",
       value: `↑${formatTokens(args.usage.inputTokens)} ↓${formatTokens(args.usage.outputTokens)}`,
@@ -157,11 +140,43 @@ export function usageBoxRows(args: { usage: UsageTotals; context: ContextStats }
       value: `read ${formatTokens(args.usage.cachedInputTokens)} / write ${formatTokens(args.usage.cacheWriteTokens)}`,
       tone: hasCache ? "accent" : "dim",
     },
-    { label: "avg in", value: `${formatTokens(avgInput)}/turn` },
-    { label: "cost", value: formatCost(args.usage.cost), tone: "dim" },
-  )
+    { label: "avg input", value: `${formatTokens(avgInput)}/turn` },
+  ]
+}
 
-  return rows
+export function savingsBoxRows(args: {
+  usage: UsageTotals
+  context: ContextStats
+  catalog: Catalog
+  modelRef: string
+}): UsageBoxRow[] {
+  const savedTokens = args.context.estimatedSavedTokens
+  const baselineTokens = args.usage.inputTokens + savedTokens
+  const savedPercent = baselineTokens ? Math.round((savedTokens / baselineTokens) * 100) : 0
+  const inputPrice = modelInputPrice(args.catalog, args.modelRef)
+  const estimatedCostSaved = inputPrice === undefined ? undefined : (savedTokens * inputPrice) / 1_000_000
+  const hasSavings = savedTokens > 0
+
+  return [
+    {
+      label: "saved",
+      value: `${formatTokens(savedTokens)} tokens`,
+      tone: hasSavings ? "accent" : "dim",
+    },
+    {
+      label: "input cut",
+      value: `${savedPercent}%`,
+      tone: hasSavings ? "accent" : "dim",
+    },
+    { label: "baseline", value: `${formatTokens(baselineTokens)} tokens` },
+    { label: "actual", value: `${formatTokens(args.usage.inputTokens)} tokens` },
+    {
+      label: "$ saved",
+      value: estimatedCostSaved === undefined ? "unknown" : formatCost(estimatedCostSaved),
+      tone: estimatedCostSaved && estimatedCostSaved > 0 ? "accent" : "dim",
+    },
+    { label: "vs", value: "full-context CLI", tone: "dim" },
+  ]
 }
 
 export function statusFooterParts(args: {
@@ -241,6 +256,16 @@ function modelCostComparison(catalog: Catalog, modelRef: string, usage: UsageTot
       (usage.inputTokens * (cost.input ?? 0) + usage.outputTokens * (cost.output ?? 0)) / 1_000_000
     if (uncached <= 0) return undefined
     return `without cache pricing: ${formatCost(uncached)} vs actual ${formatCost(usage.cost)}`
+  } catch {
+    return undefined
+  }
+}
+
+function modelInputPrice(catalog: Catalog, modelRef: string): number | undefined {
+  try {
+    const { providerId, modelId } = parseModelRef(modelRef)
+    const input = catalog[providerId]?.models?.[modelId]?.cost?.input
+    return typeof input === "number" ? input : undefined
   } catch {
     return undefined
   }

@@ -5,6 +5,7 @@ import {
   formatStatusUsage,
   formatUsageReport,
   modelLabel,
+  savingsBoxRows,
   statusFooterParts,
   usageBoxRows,
 } from "../src/status"
@@ -122,9 +123,7 @@ describe("formatUsageReport", () => {
       context,
       catalog,
     })
-    const lines = report.split("\n")
 
-    expect(lines[1]).toBe("estimated context savings: 1,200 tokens")
     expect(report).toContain("cache write 250")
     expect(report).toContain("average input: 1,500 tokens/turn")
     expect(report).toContain("highest-cost turn: groq/meta-llama/llama-4-scout-17b-16e-instruct")
@@ -144,7 +143,7 @@ describe("formatStatusUsage", () => {
 })
 
 describe("usageBoxRows", () => {
-  test("renders zero savings as a quiet savings-first summary", () => {
+  test("renders zero usage as a compact frugal summary", () => {
     const rows = usageBoxRows({
       usage: {
         inputTokens: 0,
@@ -157,16 +156,16 @@ describe("usageBoxRows", () => {
       context: emptyContext,
     })
 
-    expect(rows[0]).toEqual({ label: "saved", value: "0 tokens", priority: "hero", tone: "dim" })
-    expect(rows).toContainEqual({ label: "mode", value: "balanced" })
-    expect(rows).toContainEqual({ label: "context", value: "0 / 8.0k" })
-    expect(rows).toContainEqual({ label: "loaded", value: "0" })
-    expect(rows).toContainEqual({ label: "cache", value: "read 0 / write 0", tone: "dim" })
-    expect(rows).toContainEqual({ label: "avg in", value: "0/turn" })
-    expect(rows).toContainEqual({ label: "cost", value: "$0.000", tone: "dim" })
+    expect(rows).toEqual([
+      { label: "cost", value: "$0.000", tone: "dim" },
+      { label: "steps", value: "0", tone: "dim" },
+      { label: "tokens", value: "↑0 ↓0" },
+      { label: "cache", value: "read 0 / write 0", tone: "dim" },
+      { label: "avg input", value: "0/turn" },
+    ])
   })
 
-  test("includes accented savings, context health, cache writes, and average input", () => {
+  test("includes cache writes, average input, and context savings", () => {
     const rows = usageBoxRows({
       usage: {
         inputTokens: 3000,
@@ -176,34 +175,75 @@ describe("usageBoxRows", () => {
         cost: 0.01,
         steps: 2,
       },
-      context: {
-        ...emptyContext,
-        workingSetTokens: 2430,
-        loadedItems: [
-          {
-            kind: "file-range",
-            path: "packages/core/src/agent/agent.ts",
-            startLine: 60,
-            endLine: 130,
-            reason: "request builder",
-            ttl: 2,
-            estimatedTokens: 900,
-            createdAt: 1,
-          },
-        ],
-        cachedSummaries: 42,
-        estimatedSavedTokens: 1200,
-      },
+      context: { ...emptyContext, estimatedSavedTokens: 1200 },
     })
 
-    expect(rows[0]).toEqual({ label: "saved", value: "1.2k tokens", priority: "hero", tone: "accent" })
-    expect(rows).toContainEqual({ label: "context", value: "2.4k / 8.0k" })
-    expect(rows).toContainEqual({ label: "loaded", value: "1" })
-    expect(rows).toContainEqual({ label: "summaries", value: "42", tone: "dim" })
+    expect(rows).toContainEqual({ label: "cost", value: "$0.010", tone: "accent" })
     expect(rows).toContainEqual({ label: "tokens", value: "↑3.0k ↓500" })
     expect(rows).toContainEqual({ label: "cache", value: "read 1.0k / write 250", tone: "accent" })
-    expect(rows).toContainEqual({ label: "avg in", value: "1.5k/turn" })
-    expect(rows).toContainEqual({ label: "cost", value: "$0.010", tone: "dim" })
+    expect(rows).toContainEqual({ label: "avg input", value: "1.5k/turn" })
+    expect(rows).not.toContainEqual({ label: "saved", value: "1.2k", tone: "accent" })
+  })
+})
+
+describe("savingsBoxRows", () => {
+  test("renders zero saved tokens as quiet comparison values", () => {
+    const rows = savingsBoxRows({
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        cost: 0,
+        steps: 0,
+      },
+      context: emptyContext,
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    })
+
+    expect(rows).toEqual([
+      { label: "saved", value: "0 tokens", tone: "dim" },
+      { label: "input cut", value: "0%", tone: "dim" },
+      { label: "baseline", value: "0 tokens" },
+      { label: "actual", value: "0 tokens" },
+      { label: "$ saved", value: "$0.000", tone: "dim" },
+      { label: "vs", value: "full-context CLI", tone: "dim" },
+    ])
+  })
+
+  test("calculates baseline, percentage, and estimated dollar savings", () => {
+    const rows = savingsBoxRows({
+      usage: {
+        inputTokens: 3000,
+        outputTokens: 500,
+        cachedInputTokens: 1000,
+        cacheWriteTokens: 250,
+        cost: 0.01,
+        steps: 2,
+      },
+      context: { ...emptyContext, estimatedSavedTokens: 1200 },
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    })
+
+    expect(rows).toContainEqual({ label: "saved", value: "1.2k tokens", tone: "accent" })
+    expect(rows).toContainEqual({ label: "input cut", value: "29%", tone: "accent" })
+    expect(rows).toContainEqual({ label: "baseline", value: "4.2k tokens" })
+    expect(rows).toContainEqual({ label: "actual", value: "3.0k tokens" })
+    expect(rows).toContainEqual({ label: "$ saved", value: "$0.001", tone: "accent" })
+    expect(rows).toContainEqual({ label: "vs", value: "full-context CLI", tone: "dim" })
+  })
+
+  test("shows unknown estimated dollar savings without pricing", () => {
+    const rows = savingsBoxRows({
+      usage,
+      context: { ...emptyContext, estimatedSavedTokens: 1200 },
+      catalog,
+      modelRef: "custom/some-model",
+    })
+
+    expect(rows).toContainEqual({ label: "$ saved", value: "unknown", tone: "dim" })
   })
 })
 
