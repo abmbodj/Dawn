@@ -131,6 +131,7 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
       return
     }
     setApiKey(selected.id, key)
+    saveConfig({ model: selected.defaultModel })
     onDone(selected.defaultModel)
   }
 

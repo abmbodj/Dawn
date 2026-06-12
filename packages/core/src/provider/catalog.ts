@@ -428,6 +428,27 @@ function readCache(maxAgeMs: number | null): Catalog | undefined {
   }
 }
 
+// models.dev omits provider-level fields like `api` (baseURL) and `env` that the FALLBACK_CATALOG
+// carries. Overlay the fallback values so built-in providers are always resolvable.
+function mergeCatalog(fetched: Catalog): Catalog {
+  const result: Catalog = { ...fetched }
+  for (const [id, fallback] of Object.entries(FALLBACK_CATALOG)) {
+    const existing = result[id]
+    if (!existing) {
+      result[id] = fallback
+    } else {
+      result[id] = {
+        ...existing,
+        api: existing.api ?? fallback.api,
+        env: existing.env ?? fallback.env,
+        npm: existing.npm ?? fallback.npm,
+        models: { ...fallback.models, ...existing.models },
+      }
+    }
+  }
+  return result
+}
+
 /**
  * Load the models.dev catalog: fresh disk cache → network → stale cache → embedded fallback.
  * Never throws; the agent must boot offline.
@@ -435,16 +456,17 @@ function readCache(maxAgeMs: number | null): Catalog | undefined {
 export async function loadCatalog(opts: { refresh?: boolean } = {}): Promise<Catalog> {
   if (!opts.refresh) {
     const fresh = readCache(CACHE_TTL_MS)
-    if (fresh) return fresh
+    if (fresh) return mergeCatalog(fresh)
   }
   try {
     const res = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(5000) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as Catalog
     fs.writeFileSync(cachePath(), JSON.stringify(data))
-    return data
+    return mergeCatalog(data)
   } catch {
-    return readCache(null) ?? FALLBACK_CATALOG
+    const stale = readCache(null)
+    return stale ? mergeCatalog(stale) : FALLBACK_CATALOG
   }
 }
 

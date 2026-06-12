@@ -500,7 +500,7 @@ function ModelPicker({ catalog, config, current, onPick }: PickerProps) {
         focused
         showScrollIndicator
         options={options}
-        onChange={(_i, opt) => opt && onPick(opt.value)}
+        onSelect={(_i, opt) => opt && onPick(opt.value)}
         style={{ flexGrow: 1 }}
       />
     </box>
