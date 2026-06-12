@@ -25,6 +25,7 @@ export {
   loadCatalog,
   type ModelCost,
   type ModelInfo,
+  normalizeModelRef,
   type ProviderInfo,
   parseModelRef,
 } from "./provider/catalog"

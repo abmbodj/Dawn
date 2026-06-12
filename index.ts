@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import {
   Bus,
+  type Catalog,
   connectedProviders,
   DawnAgent,
   type DawnConfig,
-  type Catalog,
   listAuthProviders,
   loadCatalog,
   loadConfig,
@@ -41,7 +41,8 @@ interface Flags {
 function parseFlags(argv: string[]): Flags {
   const flags: Flags = { continue: false, cwd: process.cwd(), yolo: false, positional: [] }
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!
+    const arg = argv[i]
+    if (!arg) continue
     switch (arg) {
       case "-c":
       case "--continue":
@@ -71,7 +72,7 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
     ["anthropic", "anthropic/claude-opus-4-8"],
     ["openai", "openai/gpt-5.5"],
     ["google", "google/gemini-3.5-flash"],
-    ["groq", "groq/llama-4-scout-17b-16e-instruct"],
+    ["groq", "groq/meta-llama/llama-4-scout-17b-16e-instruct"],
     ["xai", "xai/grok-3"],
     ["mistral", "mistral/mistral-large-latest"],
     ["deepseek", "deepseek/deepseek-chat"],
@@ -85,7 +86,7 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
   }
   // Nothing usable yet (e.g. only Ollama reachable) — placeholder; the Setup
   // wizard runs first and overrides this with an explicit, persisted choice.
-  return "groq/llama-4-scout-17b-16e-instruct"
+  return "groq/meta-llama/llama-4-scout-17b-16e-instruct"
 }
 
 async function promptHidden(label: string): Promise<string> {

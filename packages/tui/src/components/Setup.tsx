@@ -12,12 +12,12 @@ interface ProviderOption {
   envVar: string
 }
 
-const SETUP_PROVIDERS: ProviderOption[] = [
+const SETUP_PROVIDERS: [ProviderOption, ...ProviderOption[]] = [
   {
     id: "groq",
     label: "Groq  (free — no credit card)",
     url: "console.groq.com",
-    defaultModel: "groq/llama-4-scout-17b-16e-instruct",
+    defaultModel: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     envVar: "GROQ_API_KEY",
   },
   {
@@ -71,7 +71,7 @@ export interface SetupProps {
 
 export function Setup({ onDone, catalog, animate }: SetupProps) {
   const [phase, setPhase] = useState<"pick" | "key" | "localConfirm">("pick")
-  const [selected, setSelected] = useState<ProviderOption>(SETUP_PROVIDERS[0]!)
+  const [selected, setSelected] = useState<ProviderOption>(SETUP_PROVIDERS[0])
   const [localPick, setLocalPick] = useState<LocalOption | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -102,7 +102,6 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
     }
   })
 
-  // biome-ignore lint/suspicious/noExplicitAny: SelectOption value is optional in @opentui/react types
   const handleProviderPick = (_i: number, opt: any) => {
     const value: string | undefined = opt?.value
     if (!value) return

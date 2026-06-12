@@ -3,7 +3,7 @@ import type { Bus } from "../bus/bus"
 import type { DawnConfig } from "../config/config"
 import type { PermissionGate } from "../permission/permission"
 import type { Catalog } from "../provider/catalog"
-import { parseModelRef } from "../provider/catalog"
+import { normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
 import { createTools, toolTitle } from "../tools/index"
@@ -40,7 +40,7 @@ export class DawnAgent {
 
   constructor(private opts: AgentOptions) {
     this.bus = opts.bus
-    this.modelRef = opts.modelRef
+    this.modelRef = normalizeModelRef(opts.modelRef)
     this.messages = opts.initialMessages ?? []
     this.tools = createTools({ cwd: opts.cwd, gate: opts.gate, bus: opts.bus })
     // Captured once: a byte-stable system prompt is what keeps the provider
@@ -54,6 +54,7 @@ export class DawnAgent {
 
   /** Validates the ref resolves (provider known, key present) before switching. */
   setModel(ref: string): void {
+    ref = normalizeModelRef(ref)
     resolveModel(ref, this.opts.catalog, this.opts.config)
     this.modelRef = ref
   }

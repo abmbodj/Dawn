@@ -5,7 +5,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import type { LanguageModel } from "ai"
 import { resolveApiKey } from "../auth/auth"
 import type { DawnConfig } from "../config/config"
-import { type Catalog, type ModelInfo, parseModelRef } from "./catalog"
+import { type Catalog, type ModelInfo, normalizeModelRef, parseModelRef } from "./catalog"
 
 export interface ResolvedModel {
   model: LanguageModel
@@ -15,13 +15,11 @@ export interface ResolvedModel {
 }
 
 export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig): ResolvedModel {
+  ref = normalizeModelRef(ref)
   const { providerId, modelId } = parseModelRef(ref)
   const providerInfo = catalog[providerId]
   const custom = config.providers?.[providerId]
-  const envNames = [
-    ...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []),
-    ...(providerInfo?.env ?? []),
-  ]
+  const envNames = [...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []), ...(providerInfo?.env ?? [])]
   const apiKey = resolveApiKey(providerId, envNames)
 
   // A provider requires a key if it declares env vars. Key-free providers (Ollama, local) have no env entries.

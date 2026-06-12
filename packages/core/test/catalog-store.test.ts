@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { FALLBACK_CATALOG, getModelInfo, parseModelRef } from "../src/provider/catalog"
+import {
+  FALLBACK_CATALOG,
+  getModelInfo,
+  loadCatalog,
+  normalizeModelRef,
+  parseModelRef,
+} from "../src/provider/catalog"
+import { resolveModel } from "../src/provider/provider"
 import { SessionStore } from "../src/session/store"
 
 describe("parseModelRef", () => {
@@ -20,8 +27,33 @@ describe("parseModelRef", () => {
     })
   })
 
+  test("keeps Groq namespaced model ids intact", () => {
+    expect(parseModelRef("groq/meta-llama/llama-4-scout-17b-16e-instruct")).toEqual({
+      providerId: "groq",
+      modelId: "meta-llama/llama-4-scout-17b-16e-instruct",
+    })
+  })
+
   test("rejects refs without a slash", () => {
     expect(() => parseModelRef("claude")).toThrow("provider/model")
+  })
+})
+
+describe("normalizeModelRef", () => {
+  test("maps legacy Groq Scout and Maverick refs to canonical namespaced ids", () => {
+    expect(normalizeModelRef("groq/llama-4-scout-17b-16e-instruct")).toBe(
+      "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    )
+    expect(normalizeModelRef("groq/llama-4-maverick-17b-128e-instruct")).toBe(
+      "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+    )
+  })
+
+  test("leaves canonical and unrelated refs unchanged", () => {
+    expect(normalizeModelRef("groq/meta-llama/llama-4-scout-17b-16e-instruct")).toBe(
+      "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    )
+    expect(normalizeModelRef("anthropic/claude-opus-4-8")).toBe("anthropic/claude-opus-4-8")
   })
 })
 
@@ -30,6 +62,74 @@ describe("fallback catalog", () => {
     const info = getModelInfo(FALLBACK_CATALOG, "anthropic/claude-opus-4-8")
     expect(info?.cost?.input).toBe(5)
     expect(info?.cost?.cache_read).toBe(0.5)
+  })
+
+  test("contains canonical Groq Scout and omits the legacy bare key", () => {
+    const models = FALLBACK_CATALOG.groq?.models ?? {}
+    expect(models["meta-llama/llama-4-scout-17b-16e-instruct"]).toBeDefined()
+    expect(models["llama-4-scout-17b-16e-instruct"]).toBeUndefined()
+  })
+
+  test("normalizes stale cached Groq model ids", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dawn-cache-"))
+    const previous = process.env.DAWN_CACHE_DIR
+    process.env.DAWN_CACHE_DIR = tmp
+
+    try {
+      fs.writeFileSync(
+        path.join(tmp, "models.json"),
+        JSON.stringify({
+          groq: {
+            id: "groq",
+            name: "Groq",
+            env: ["GROQ_API_KEY"],
+            api: "https://api.groq.com/openai/v1",
+            models: {
+              "llama-4-scout-17b-16e-instruct": {
+                id: "llama-4-scout-17b-16e-instruct",
+                name: "Legacy Scout",
+                tool_call: true,
+              },
+            },
+          },
+        }),
+      )
+
+      const catalog = await loadCatalog()
+      expect(catalog.groq?.models["llama-4-scout-17b-16e-instruct"]).toBeUndefined()
+      expect(catalog.groq?.models["meta-llama/llama-4-scout-17b-16e-instruct"]).toBeDefined()
+    } finally {
+      if (previous === undefined) delete process.env.DAWN_CACHE_DIR
+      else process.env.DAWN_CACHE_DIR = previous
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("resolveModel", () => {
+  test("resolves a legacy Groq ref to the canonical model id", () => {
+    const resolved = resolveModel(
+      "groq/llama-4-scout-17b-16e-instruct",
+      {
+        groq: {
+          id: "groq",
+          name: "Groq",
+          env: [],
+          api: "https://api.groq.com/openai/v1",
+          models: {
+            "meta-llama/llama-4-scout-17b-16e-instruct": {
+              id: "meta-llama/llama-4-scout-17b-16e-instruct",
+              name: "Llama 4 Scout",
+            },
+          },
+        },
+      },
+      { providers: {} },
+    )
+
+    expect(resolved.providerId).toBe("groq")
+    expect(resolved.modelId).toBe("meta-llama/llama-4-scout-17b-16e-instruct")
+    expect(resolved.info?.name).toBe("Llama 4 Scout")
   })
 })
 

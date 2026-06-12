@@ -35,6 +35,11 @@ export type Catalog = Record<string, ProviderInfo>
 const CATALOG_URL = "https://models.dev/api.json"
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
+const LEGACY_MODEL_REFS: Record<string, string> = {
+  "groq/llama-4-scout-17b-16e-instruct": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+  "groq/llama-4-maverick-17b-128e-instruct": "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+}
+
 function cachePath(): string {
   return path.join(cacheDir(), "models.json")
 }
@@ -152,15 +157,15 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["GROQ_API_KEY"],
     api: "https://api.groq.com/openai/v1",
     models: {
-      "llama-4-scout-17b-16e-instruct": {
-        id: "llama-4-scout-17b-16e-instruct",
+      "meta-llama/llama-4-scout-17b-16e-instruct": {
+        id: "meta-llama/llama-4-scout-17b-16e-instruct",
         name: "Llama 4 Scout",
         cost: { input: 0.11, output: 0.34 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
       },
-      "llama-4-maverick-17b-128e-instruct": {
-        id: "llama-4-maverick-17b-128e-instruct",
+      "meta-llama/llama-4-maverick-17b-128e-instruct": {
+        id: "meta-llama/llama-4-maverick-17b-128e-instruct",
         name: "Llama 4 Maverick",
         cost: { input: 0.2, output: 0.6 },
         limit: { context: 131_072, output: 16_384 },
@@ -428,6 +433,36 @@ function readCache(maxAgeMs: number | null): Catalog | undefined {
   }
 }
 
+export function normalizeModelRef(ref: string): string {
+  return LEGACY_MODEL_REFS[ref] ?? ref
+}
+
+function parseRawModelRef(ref: string): { providerId: string; modelId: string } {
+  const slash = ref.indexOf("/")
+  if (slash === -1) throw new Error(`Invalid model "${ref}" — expected "provider/model"`)
+  return { providerId: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+}
+
+function normalizeProviderModels(
+  providerId: string,
+  models: Record<string, ModelInfo>,
+): Record<string, ModelInfo> {
+  if (providerId !== "groq") return models
+
+  const normalized: Record<string, ModelInfo> = { ...models }
+  for (const [legacyRef, canonicalRef] of Object.entries(LEGACY_MODEL_REFS)) {
+    const legacyModelId = parseRawModelRef(legacyRef).modelId
+    const canonicalModelId = parseRawModelRef(canonicalRef).modelId
+    const legacyInfo = normalized[legacyModelId]
+
+    if (legacyInfo && !normalized[canonicalModelId]) {
+      normalized[canonicalModelId] = { ...legacyInfo, id: canonicalModelId }
+    }
+    delete normalized[legacyModelId]
+  }
+  return normalized
+}
+
 // models.dev omits provider-level fields like `api` (baseURL) and `env` that the FALLBACK_CATALOG
 // carries. Overlay the fallback values so built-in providers are always resolvable.
 function mergeCatalog(fetched: Catalog): Catalog {
@@ -442,7 +477,7 @@ function mergeCatalog(fetched: Catalog): Catalog {
         api: existing.api ?? fallback.api,
         env: existing.env ?? fallback.env,
         npm: existing.npm ?? fallback.npm,
-        models: { ...fallback.models, ...existing.models },
+        models: normalizeProviderModels(id, { ...fallback.models, ...existing.models }),
       }
     }
   }
@@ -472,9 +507,7 @@ export async function loadCatalog(opts: { refresh?: boolean } = {}): Promise<Cat
 
 /** "anthropic/claude-opus-4-8" → { providerId, modelId } */
 export function parseModelRef(ref: string): { providerId: string; modelId: string } {
-  const slash = ref.indexOf("/")
-  if (slash === -1) throw new Error(`Invalid model "${ref}" — expected "provider/model"`)
-  return { providerId: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  return parseRawModelRef(normalizeModelRef(ref))
 }
 
 export function getModelInfo(catalog: Catalog, ref: string): ModelInfo | undefined {
