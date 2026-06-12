@@ -2,6 +2,7 @@ export type { ModelMessage } from "ai"
 export { type AgentOptions, DawnAgent } from "./agent/agent"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
+export { resetDawnData } from "./reset"
 export {
   type DeviceFlowStart,
   GITHUB_CLIENT_ID,

@@ -10,7 +10,7 @@ import type {
   SessionStore,
   UsageTotals,
 } from "@dawn/core"
-import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit, toolTitle } from "@dawn/core"
+import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit, resetDawnData, toolTitle } from "@dawn/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { dawnSyntaxStyle } from "./markdown"
@@ -152,6 +152,7 @@ const HELP = `Commands:
   /usage   token + cost breakdown for this session
   /new     start a fresh session
   /clear   clear the screen (keeps the conversation)
+  /reset   wipe all Dawn data and return to setup wizard
   /help    this help
   /quit    exit
 Keys: Esc interrupts a running turn · Ctrl+C quits`
@@ -431,6 +432,11 @@ export function App(props: AppProps) {
         case "clear":
           dispatch({ type: "reset", items: [] })
           break
+        case "reset":
+          resetDawnData()
+          dispatch({ type: "reset", items: [] })
+          setNeedsSetup(true)
+          break
         case "quit":
         case "exit":
           quit()
@@ -439,7 +445,7 @@ export function App(props: AppProps) {
           dispatch({ type: "push", item: { kind: "error", text: `unknown command ${cmd} — try /help` } })
       }
     },
-    [agent, catalog, quit, session, store],
+    [agent, catalog, quit, session, setNeedsSetup, store],
   )
 
   const submit = useCallback(
