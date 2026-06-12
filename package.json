@@ -7,7 +7,9 @@
   "bin": {
     "dawn": "./index.ts"
   },
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dawn": "bun run index.ts",
     "setup": "bun install && bun link",

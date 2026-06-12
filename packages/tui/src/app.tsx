@@ -10,9 +10,10 @@ import type {
   SessionStore,
   UsageTotals,
 } from "@dawn/core"
-import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit } from "@dawn/core"
+import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit, toolTitle } from "@dawn/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
+import { dawnSyntaxStyle } from "./markdown"
 import { Logo } from "./components/Logo"
 import { Setup } from "./components/Setup"
 import { formatContextReport, formatUsageReport, statusFooterParts } from "./status"
@@ -22,7 +23,7 @@ import { theme } from "./theme"
 
 export type Item =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
+  | { kind: "assistant"; text: string; done?: boolean }
   | {
       kind: "tool"
       id: string
@@ -32,6 +33,7 @@ export type Item =
       isError?: boolean
       done: boolean
     }
+  | { kind: "reasoning"; text: string; done?: boolean }
   | { kind: "info"; text: string }
   | { kind: "error"; text: string }
 
@@ -54,10 +56,40 @@ function reduceItems(items: Item[], action: Action): Item[] {
           if (last?.kind === "assistant") {
             return [...items.slice(0, -1), { ...last, text: last.text + ev.text }]
           }
+          // A text-delta after reasoning marks the reasoning done
+          const prevReasoning = last?.kind === "reasoning" ? last : undefined
+          if (prevReasoning) {
+            return [
+              ...items.slice(0, -1),
+              { ...prevReasoning, done: true },
+              { kind: "assistant", text: ev.text },
+            ]
+          }
           return [...items, { kind: "assistant", text: ev.text }]
         }
-        case "tool-start":
-          return [...items, { kind: "tool", id: ev.id, name: ev.name, title: ev.title, done: false }]
+        case "text-end": {
+          const last = items[items.length - 1]
+          if (last?.kind === "assistant") {
+            return [...items.slice(0, -1), { ...last, done: true }]
+          }
+          return items
+        }
+        case "reasoning-delta": {
+          const last = items[items.length - 1]
+          if (last?.kind === "reasoning" && !last.done) {
+            return [...items.slice(0, -1), { ...last, text: last.text + ev.text }]
+          }
+          return [...items, { kind: "reasoning", text: ev.text }]
+        }
+        case "tool-start": {
+          // A tool-start after reasoning marks the reasoning done
+          const last = items[items.length - 1]
+          const base =
+            last?.kind === "reasoning" && !last.done
+              ? [...items.slice(0, -1), { ...last, done: true }]
+              : items
+          return [...base, { kind: "tool", id: ev.id, name: ev.name, title: ev.title, done: false }]
+        }
         case "tool-end":
           return items.map((it) =>
             it.kind === "tool" && it.id === ev.id
@@ -66,8 +98,16 @@ function reduceItems(items: Item[], action: Action): Item[] {
           )
         case "error":
           return [...items, { kind: "error", text: ev.message }]
-        case "turn-end":
-          return ev.aborted ? [...items, { kind: "info", text: "(interrupted)" }] : items
+        case "turn-end": {
+          // Sweep any not-yet-done assistant or reasoning items
+          const swept = items.map((it) => {
+            if ((it.kind === "assistant" || it.kind === "reasoning") && !it.done) {
+              return { ...it, done: true }
+            }
+            return it
+          })
+          return ev.aborted ? [...swept, { kind: "info", text: "(interrupted)" }] : swept
+        }
         default:
           return items
       }
@@ -86,15 +126,17 @@ export function itemsFromMessages(messages: ModelMessage[]): Item[] {
       const parts = typeof content === "string" ? [{ type: "text", text: content }] : content
       for (const part of parts as any[]) {
         if (part.type === "text" && part.text.trim()) {
-          items.push({ kind: "assistant", text: part.text })
+          items.push({ kind: "assistant", text: part.text, done: true })
         } else if (part.type === "tool-call") {
           items.push({
             kind: "tool",
             id: part.toolCallId,
             name: part.toolName,
-            title: "",
+            title: toolTitle(part.toolName, part.input ?? {}),
             done: true,
           })
+        } else if (part.type === "reasoning" && part.text?.trim()) {
+          items.push({ kind: "reasoning", text: part.text, done: true })
         }
       }
     }
@@ -114,9 +156,42 @@ const HELP = `Commands:
   /quit    exit
 Keys: Esc interrupts a running turn · Ctrl+C quits`
 
+function firstLine(s: string): string {
+  const line = s.split("\n")[0] ?? ""
+  return line.length > 80 ? `${line.slice(0, 80)}…` : line
+}
+
+function firstLines(s: string, n: number): string {
+  return s
+    .split("\n")
+    .slice(0, n)
+    .map((l) => (l.length > 120 ? `${l.slice(0, 120)}…` : l))
+    .join("\n")
+}
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+function useSpinner(active: boolean): string {
+  const [frame, setFrame] = useState(0)
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 90)
+    return () => clearInterval(id)
+  }, [active])
+  return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0]!
+}
+
 // ---------- subviews ----------
 
-function ItemView({ item }: { item: Item }) {
+function ItemView({
+  item,
+  spinnerFrame,
+  isLastRunningTool,
+}: {
+  item: Item
+  spinnerFrame: string
+  isLastRunningTool: boolean
+}) {
   switch (item.kind) {
     case "user":
       return (
@@ -126,17 +201,36 @@ function ItemView({ item }: { item: Item }) {
         </text>
       )
     case "assistant":
-      return <text fg={theme.text}>{item.text}</text>
+      return <markdown content={item.text} streaming={!item.done} syntaxStyle={dawnSyntaxStyle()} />
+    case "reasoning": {
+      if (!item.done) {
+        return (
+          <text fg={theme.dim}>
+            <i>{`✦ thinking… (${item.text.length} chars)`}</i>
+          </text>
+        )
+      }
+      return <text fg={theme.dim}>{"✦ thought for a moment"}</text>
+    }
     case "tool": {
       const color = !item.done ? theme.accent : item.isError ? theme.toolErr : theme.toolOk
-      const mark = !item.done ? "⚒" : item.isError ? "✗" : "✓"
+      const mark = !item.done ? (isLastRunningTool ? spinnerFrame : "⚒") : item.isError ? "✗" : "✓"
+      if (item.done && item.isError && item.summary) {
+        return (
+          <text>
+            <text>
+              <span fg={color}>{`${mark} ${item.name}`}</span>
+              <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
+            </text>
+            <text fg={theme.toolErr}>{`  ${firstLines(item.summary, 3)}`}</text>
+          </text>
+        )
+      }
       return (
         <text>
           <span fg={color}>{`${mark} ${item.name}`}</span>
           <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
-          <span fg={item.isError ? theme.toolErr : theme.dim}>
-            {item.done && item.summary ? ` — ${firstLine(item.summary)}` : ""}
-          </span>
+          <span fg={theme.dim}>{item.done && item.summary ? ` — ${firstLine(item.summary)}` : ""}</span>
         </text>
       )
     }
@@ -145,11 +239,6 @@ function ItemView({ item }: { item: Item }) {
     case "error":
       return <text fg={theme.error}>{`error: ${item.text}`}</text>
   }
-}
-
-function firstLine(s: string): string {
-  const line = s.split("\n")[0] ?? ""
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
 }
 
 interface PendingPermission {
@@ -219,6 +308,19 @@ export function App(props: AppProps) {
   const [inputEpoch, setInputEpoch] = useState(0)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const abortRef = useRef<AbortController | null>(null)
+  const spinnerFrame = useSpinner(busy)
+
+  // Index of the last not-yet-done tool item (for spinner placement)
+  const lastRunningToolId = (() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]
+      if (it?.kind === "tool" && !it.done) return it.id
+    }
+    return null
+  })()
+
+  // Show a "thinking" row when busy but no in-flight tool is in progress
+  const showThinking = busy && lastRunningToolId === null
 
   const handleSetupDone = useCallback(
     (ref: string) => {
@@ -227,7 +329,6 @@ export function App(props: AppProps) {
         setModelRef(ref)
         setNeedsSetup(false)
       } catch {
-        // Key saved but setModel threw — shouldn't happen; proceed anyway
         setNeedsSetup(false)
       }
     },
@@ -384,8 +485,6 @@ export function App(props: AppProps) {
       setPickerOpen(false)
       const [providerId, modelId] = ref.split("/")
       const sizeBytes = providerId && modelId ? catalog[providerId]?.models?.[modelId]?.sizeBytes : undefined
-      // Guard local models that won't fit in RAM — running them can swap-storm
-      // the machine into a freeze. Make the user confirm before switching.
       if (localModelFit(sizeBytes).status === "oversized") {
         setConfirmModel({ ref, sizeBytes })
         return
@@ -414,9 +513,20 @@ export function App(props: AppProps) {
           {items.map((item, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: append-mostly list
             <box key={i} style={{ marginTop: i === 0 ? 0 : 1, flexShrink: 0 }}>
-              <ItemView item={item} />
+              <ItemView
+                item={item}
+                spinnerFrame={spinnerFrame}
+                isLastRunningTool={item.kind === "tool" && !item.done && item.id === lastRunningToolId}
+              />
             </box>
           ))}
+          {showThinking ? (
+            <box style={{ marginTop: 1, flexShrink: 0 }}>
+              <text fg={theme.dim}>
+                <i>{`${spinnerFrame} thinking…`}</i>
+              </text>
+            </box>
+          ) : null}
         </scrollbox>
       )}
 
@@ -476,7 +586,6 @@ function ModelPicker({ catalog, config, current, onPick }: PickerProps) {
         ? `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
         : "free/unknown"
       const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
-      // Local models carry a size; flag those that won't fit in RAM.
       const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
       const ram = fit
         ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " · tight on RAM" : ""}`

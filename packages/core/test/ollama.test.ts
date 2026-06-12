@@ -78,7 +78,13 @@ describe("withOllama", () => {
   test("removes a stale ollama entry when the probe fails", async () => {
     mockFetch(() => Promise.reject(new Error("ECONNREFUSED")))
     const catalog: Catalog = {
-      ollama: { id: "ollama", name: "stale", env: [], api: "http://x/v1", models: { old: { id: "old", name: "old" } } },
+      ollama: {
+        id: "ollama",
+        name: "stale",
+        env: [],
+        api: "http://x/v1",
+        models: { old: { id: "old", name: "old" } },
+      },
     }
     await withOllama(catalog)
     expect(catalog.ollama).toBeUndefined()

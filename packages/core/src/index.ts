@@ -2,6 +2,12 @@ export type { ModelMessage } from "ai"
 export { type AgentOptions, DawnAgent } from "./agent/agent"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
+export {
+  type DeviceFlowStart,
+  GITHUB_CLIENT_ID,
+  pollForToken,
+  startDeviceFlow,
+} from "./auth/github-oauth"
 export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage } from "./bus/bus"
 export {
   type CustomProvider,

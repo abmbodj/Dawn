@@ -7,6 +7,7 @@ import {
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
   estimateTokens,
+  stripReasoningParts,
   ttlForKind,
 } from "../context/budget"
 import { ContextStore } from "../context/store"
@@ -21,6 +22,8 @@ import type { SessionStore } from "../session/store"
 import { createTools, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
+import { makeRepairToolCall } from "./repair"
+import { isRetryableToolFailure } from "./retry"
 import { buildSystemPrompt } from "./system"
 
 export interface AgentOptions {
@@ -128,7 +131,10 @@ export class DawnAgent {
     }
   }
 
-  private requestMessages(isAnthropic: boolean): ModelMessage[] {
+  private requestMessages(isAnthropic: boolean): {
+    system: string | import("../context/budget").SystemModelMessage
+    messages: ModelMessage[]
+  } {
     const latest = this.messages[this.messages.length - 1]
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
@@ -150,7 +156,7 @@ export class DawnAgent {
     this.estimatedSavedTokens += built.plan.savingsEstimate
     this.inputTokenEstimates.push(built.plan.totalEstimatedTokens)
     this.contextStore.recordContextPlan(this.opts.sessionId, built.plan)
-    return built.messages
+    return { system: built.system, messages: built.messages }
   }
 
   async send(text: string, signal?: AbortSignal): Promise<void> {
@@ -167,99 +173,148 @@ export class DawnAgent {
       const { providerId } = parseModelRef(this.modelRef)
       const forceRepoOverview = isRepoOverviewQuestion(text)
 
-      const result = streamText({
-        model: resolved.model,
-        messages: this.requestMessages(providerId === "anthropic"),
-        tools: this.tools,
-        prepareStep: forceRepoOverview
-          ? ({ stepNumber }) =>
-              stepNumber === 0
-                ? {
-                    activeTools: [REPO_OVERVIEW_TOOL],
-                    toolChoice: { type: "tool", toolName: REPO_OVERVIEW_TOOL },
-                  }
-                : undefined
-          : undefined,
-        stopWhen: stepCountIs(MAX_STEPS),
-        abortSignal: signal,
-      })
+      const isAnthropic = providerId === "anthropic"
+      // Non-Anthropic providers (e.g. Groq) reject reasoning_content in messages
+      // even when their own models produced it in a previous step.  prepareStep
+      // lets us strip those parts from the SDK's internally-accumulated messages
+      // before each subsequent step — the same filter applied to inter-turn history
+      // in buildRequestMessages, but applied intra-turn here.
+      const needsReasoningStrip = !isAnthropic
+      const buildRequest = () => this.requestMessages(isAnthropic)
 
-      for await (const part of result.fullStream) {
-        switch (part.type) {
-          case "text-delta":
-            bus.emit({ type: "text-delta", text: part.text })
-            break
-          case "text-end":
-            bus.emit({ type: "text-end" })
-            break
-          case "reasoning-delta":
-            bus.emit({ type: "reasoning-delta", text: part.text })
-            break
-          case "tool-call":
-            bus.emit({
-              type: "tool-start",
-              id: part.toolCallId,
-              name: part.toolName,
-              title: toolTitle(part.toolName, part.input),
-            })
-            break
-          case "tool-result":
-            this.workingSet.add({
-              kind: "tool-result",
-              content: truncateMiddle(String(part.output ?? ""), 4000),
-              reason: `${part.toolName} output`,
-              ttl: ttlForKind(this.contextMode, "tool-result"),
-              estimatedTokens: estimateTokens(part.output),
-            })
-            bus.emit({
-              type: "tool-end",
-              id: part.toolCallId,
-              name: part.toolName,
-              title: toolTitle(part.toolName, part.input),
-              summary: truncateMiddle(String(part.output ?? ""), 200),
-              isError: false,
-            })
-            break
-          case "tool-error":
-            bus.emit({
-              type: "tool-end",
-              id: part.toolCallId,
-              name: part.toolName,
-              title: toolTitle(part.toolName, part.input),
-              summary: part.error instanceof Error ? part.error.message : String(part.error),
-              isError: true,
-            })
-            break
-          case "finish-step": {
-            const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
-            this.ledger.record(usage)
-            if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
-              this.highestCostTurn = {
-                providerId: usage.providerId,
-                modelId: usage.modelId,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                cost: usage.cost,
+      // One-shot retry on provider tool-call 400s (e.g. Groq failed_generation).
+      // We attempt the stream twice at most; only the completing attempt persists messages.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { system, messages: requestMsgs } = buildRequest()
+
+        const result = streamText({
+          model: resolved.model,
+          system: system as any,
+          messages: requestMsgs,
+          tools: this.tools,
+          experimental_repairToolCall: makeRepairToolCall(),
+          prepareStep:
+            needsReasoningStrip || forceRepoOverview
+              ? ({ stepNumber, messages }) => {
+                  const overrides: {
+                    activeTools?: string[]
+                    toolChoice?: { type: "tool"; toolName: string }
+                    messages?: ModelMessage[]
+                  } = {}
+
+                  if (forceRepoOverview && stepNumber === 0) {
+                    overrides.activeTools = [REPO_OVERVIEW_TOOL]
+                    overrides.toolChoice = { type: "tool", toolName: REPO_OVERVIEW_TOOL }
+                  }
+
+                  if (needsReasoningStrip && stepNumber > 0) {
+                    const stripped = stripReasoningParts(messages)
+                    if (stripped !== messages) overrides.messages = stripped
+                  }
+
+                  return Object.keys(overrides).length > 0 ? overrides : undefined
+                }
+              : undefined,
+          stopWhen: stepCountIs(MAX_STEPS),
+          abortSignal: signal,
+        })
+
+        let retryableFailure: unknown
+        let emittedText = false
+
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case "text-delta":
+              emittedText = true
+              bus.emit({ type: "text-delta", text: part.text })
+              break
+            case "text-end":
+              bus.emit({ type: "text-end" })
+              break
+            case "reasoning-delta":
+              bus.emit({ type: "reasoning-delta", text: part.text })
+              break
+            case "tool-call":
+              bus.emit({
+                type: "tool-start",
+                id: part.toolCallId,
+                name: part.toolName,
+                title: toolTitle(part.toolName, part.input),
+              })
+              break
+            case "tool-result":
+              this.workingSet.add({
+                kind: "tool-result",
+                content: truncateMiddle(String(part.output ?? ""), 4000),
+                reason: `${part.toolName} output`,
+                ttl: ttlForKind(this.contextMode, "tool-result"),
+                estimatedTokens: estimateTokens(part.output),
+              })
+              bus.emit({
+                type: "tool-end",
+                id: part.toolCallId,
+                name: part.toolName,
+                title: toolTitle(part.toolName, part.input),
+                summary: truncateMiddle(String(part.output ?? ""), 200),
+                isError: false,
+              })
+              break
+            case "tool-error":
+              bus.emit({
+                type: "tool-end",
+                id: part.toolCallId,
+                name: part.toolName,
+                title: toolTitle(part.toolName, part.input),
+                summary: part.error instanceof Error ? part.error.message : String(part.error),
+                isError: true,
+              })
+              break
+            case "finish-step": {
+              const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
+              this.ledger.record(usage)
+              if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
+                this.highestCostTurn = {
+                  providerId: usage.providerId,
+                  modelId: usage.modelId,
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                  cost: usage.cost,
+                }
               }
+              if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, usage)
+              bus.emit({ type: "step-finish", usage })
+              break
             }
-            if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, usage)
-            bus.emit({ type: "step-finish", usage })
-            break
+            case "error": {
+              if (attempt === 0 && !emittedText && isRetryableToolFailure(part.error)) {
+                retryableFailure = part.error
+              } else {
+                bus.emit({
+                  type: "error",
+                  message: part.error instanceof Error ? part.error.message : String(part.error),
+                })
+              }
+              break
+            }
+            default:
+              break
           }
-          case "error":
-            bus.emit({
-              type: "error",
-              message: part.error instanceof Error ? part.error.message : String(part.error),
-            })
-            break
-          default:
-            break
         }
+
+        if (retryableFailure !== undefined) {
+          bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
+          continue
+        }
+
+        const response = await result.response
+        this.messages.push(...response.messages)
+        this.persist()
+        this.workingSet.decrementLeases()
+        bus.emit({ type: "turn-end" })
+        return
       }
 
-      const response = await result.response
-      this.messages.push(...response.messages)
-      this.persist()
+      // Both attempts exhausted without completing — turn ends without response messages
       this.workingSet.decrementLeases()
       bus.emit({ type: "turn-end" })
     } catch (err) {

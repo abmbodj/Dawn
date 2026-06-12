@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { buildRequestMessages } from "../src/context/budget"
+import type { ModelMessage } from "ai"
+import { buildRequestMessages, groupHistory, trimHistory } from "../src/context/budget"
 import { buildRepoIndex } from "../src/context/indexer"
 import { ContextStore } from "../src/context/store"
 import { getFileSummary } from "../src/context/summarize"
@@ -53,6 +54,119 @@ describe("repo index", () => {
   })
 })
 
+describe("groupHistory", () => {
+  test("singleton groups for plain messages", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+      { role: "user", content: "thanks" },
+    ]
+    const groups = groupHistory(messages)
+    expect(groups).toHaveLength(3)
+    expect(groups.every((g) => g.length === 1)).toBe(true)
+  })
+
+  test("assistant with tool-calls + tool messages form one atomic group", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "q1" },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "ok" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "c2", toolName: "grep", output: { type: "text", value: "ok2" } },
+        ],
+      },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "q2" },
+    ]
+    const groups = groupHistory(messages)
+    // user, [assistant+2xtools], assistant, user
+    expect(groups).toHaveLength(4)
+    expect(groups[1]).toHaveLength(3) // the tool-call group
+  })
+
+  test("drops leading orphaned tool messages", () => {
+    const messages: ModelMessage[] = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "read",
+            output: { type: "text", value: "stale" },
+          },
+        ],
+      },
+      { role: "user", content: "hello" },
+    ]
+    const groups = groupHistory(messages)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]![0]!.role).toBe("user")
+  })
+})
+
+describe("trimHistory", () => {
+  test("never orphans a tool-result without its assistant tool-call group", () => {
+    // Construct a history where keeping only the tail would leave tool messages
+    // without their parent assistant message
+    const messages: ModelMessage[] = [
+      { role: "user", content: "a" },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "read",
+            output: { type: "text", value: "x".repeat(200) },
+          },
+        ],
+      },
+      { role: "assistant", content: "summary" },
+      { role: "user", content: "final question" },
+    ]
+    // Tight budget: only fits the last group, not the tool-call pair
+    const result = trimHistory(messages, 50)
+
+    const roles = result.kept.map((m) => m.role)
+    // Ensure no tool message appears without a preceding assistant tool-call message
+    for (let i = 0; i < roles.length; i++) {
+      if (roles[i] === "tool") {
+        expect(roles[i - 1]).toBe("assistant")
+        const prevContent = result.kept[i - 1]!.content
+        const hasCalls =
+          Array.isArray(prevContent) && (prevContent as any[]).some((p: any) => p.type === "tool-call")
+        expect(hasCalls).toBe(true)
+      }
+    }
+    // Latest user message must always be kept
+    expect(JSON.stringify(result.kept.at(-1))).toContain("final question")
+  })
+
+  test("keeps latest message even when budget is tiny", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "x".repeat(500) },
+      { role: "user", content: "tiny" },
+    ]
+    const result = trimHistory(messages, 1)
+    expect(JSON.stringify(result.kept.at(-1))).toContain("tiny")
+  })
+})
+
 describe("context budget", () => {
   test("trims expired working-set context before current context", () => {
     const built = buildRequestMessages({
@@ -91,7 +205,7 @@ describe("context budget", () => {
     expect(JSON.stringify(built.messages)).toContain("latest request")
   })
 
-  test("keeps system prompt first and latest user request intact", () => {
+  test("system is returned separately, not inside messages", () => {
     const built = buildRequestMessages({
       system: "stable system",
       messages: [
@@ -104,9 +218,63 @@ describe("context budget", () => {
       budget: { mode: "minimal", budget: 80 },
     })
 
-    expect(built.messages[0]?.role).toBe("system")
-    expect(built.messages[0]?.content).toBe("stable system")
+    // System is a separate field, not inside messages
+    expect(built.system.role).toBe("system")
+    expect(built.system.content).toBe("stable system")
+    expect(built.messages.every((m) => m.role !== "system")).toBe(true)
+    // Latest user message preserved
     expect(JSON.stringify(built.messages.at(-1))).toContain("fix login bug")
+  })
+
+  test("context message sits immediately before latest user message", () => {
+    const built = buildRequestMessages({
+      system: "sys",
+      messages: [
+        { role: "user", content: "prev" },
+        { role: "assistant", content: "answer" },
+        { role: "user", content: "current question" },
+      ],
+      summaries: [
+        {
+          path: "foo.ts",
+          hash: "abc",
+          summary: "does foo things",
+          symbols: ["foo"],
+          dependencies: [],
+          lastSummarizedAt: 0,
+          tokenEstimate: 10,
+        },
+      ],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 2000 },
+    })
+
+    const msgs = built.messages
+    const contextIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("compact repository context"),
+    )
+    const latestIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("current question"),
+    )
+    // Context message (if present) must be right before latest user message
+    if (contextIdx !== -1) {
+      expect(latestIdx).toBe(contextIdx + 1)
+    }
+  })
+
+  test("Anthropic: system carries providerOptions, last message carries cache breakpoint", () => {
+    const built = buildRequestMessages({
+      system: "sys",
+      messages: [{ role: "user", content: "q" }],
+      summaries: [],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 2000 },
+      isAnthropic: true,
+    })
+
+    expect((built.system as any).providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
+    const last = built.messages.at(-1)
+    expect((last as any)?.providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
   })
 })
 

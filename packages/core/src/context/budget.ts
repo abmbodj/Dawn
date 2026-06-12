@@ -50,6 +50,55 @@ export function workingSetItemText(item: WorkingSetItem): string {
   }
 }
 
+/**
+ * Groups messages so that an assistant message containing tool-call parts is
+ * always bundled with the tool-result messages that follow it.  Dropping or
+ * keeping any group is then atomic, which prevents orphaned tool pairs that
+ * cause OpenAI-compatible providers to return a 400.
+ *
+ * Leading orphaned role:"tool" messages (corrupt persisted sessions) are
+ * silently dropped (returned as empty group) so callers can filter(g => g.length > 0).
+ */
+export function groupHistory(messages: ModelMessage[]): ModelMessage[][] {
+  const groups: ModelMessage[][] = []
+  let i = 0
+
+  while (i < messages.length) {
+    const msg = messages[i]
+    if (!msg) {
+      i++
+      continue
+    }
+
+    if (msg.role === "tool") {
+      // Orphaned tool message — drop it
+      i++
+      continue
+    }
+
+    const isToolCallAssistant =
+      msg.role === "assistant" &&
+      Array.isArray(msg.content) &&
+      (msg.content as any[]).some((p: any) => p.type === "tool-call")
+
+    if (isToolCallAssistant) {
+      const group: ModelMessage[] = [msg]
+      i++
+      // Absorb all immediately-following tool messages
+      while (i < messages.length && messages[i]?.role === "tool") {
+        group.push(messages[i]!)
+        i++
+      }
+      groups.push(group)
+    } else {
+      groups.push([msg])
+      i++
+    }
+  }
+
+  return groups
+}
+
 export function trimWorkingSet(
   items: WorkingSetItem[],
   budgetLeft: number,
@@ -92,28 +141,34 @@ export function trimHistory(
 } {
   if (messages.length === 0) return { kept: [], trimmed: [], tokens: 0, savedTokens: 0 }
 
-  const latest = messages[messages.length - 1]
-  if (!latest) return { kept: [], trimmed: [], tokens: 0, savedTokens: 0 }
-  const latestTokens = messageTokens(latest)
-  let used = latestTokens
-  const kept: ModelMessage[] = [latest]
+  const groups = groupHistory(messages)
+  if (groups.length === 0) return { kept: [], trimmed: [], tokens: 0, savedTokens: 0 }
+
+  // Always keep the last group (latest user message)
+  const lastGroup = groups[groups.length - 1]!
+  const lastTokens = lastGroup.reduce((sum, m) => sum + messageTokens(m), 0)
+  let used = lastTokens
+  const keptGroups: ModelMessage[][] = [lastGroup]
   const trimmed: string[] = []
   let savedTokens = 0
 
-  for (let i = messages.length - 2; i >= 0; i--) {
-    const msg = messages[i]
-    if (!msg) continue
-    const tokens = messageTokens(msg)
-    if (used + tokens <= budgetLeft) {
-      kept.unshift(msg)
-      used += tokens
+  for (let i = groups.length - 2; i >= 0; i--) {
+    const group = groups[i]!
+    const groupTokens = group.reduce((sum, m) => sum + messageTokens(m), 0)
+    if (used + groupTokens <= budgetLeft) {
+      keptGroups.unshift(group)
+      used += groupTokens
     } else {
-      trimmed.push(`${msg.role} message`)
-      savedTokens += tokens
+      const label =
+        group.length > 1
+          ? `${group[0]!.role}+tool group (${group.length} messages)`
+          : `${group[0]!.role} message`
+      trimmed.push(label)
+      savedTokens += groupTokens
     }
   }
 
-  return { kept, trimmed, tokens: used, savedTokens }
+  return { kept: keptGroups.flat(), trimmed, tokens: used, savedTokens }
 }
 
 export function buildContextPlan(args: {
@@ -142,6 +197,16 @@ export function buildContextPlan(args: {
   }
 }
 
+const ANTHROPIC_CACHE = {
+  anthropic: { cacheControl: { type: "ephemeral" as const } },
+}
+
+export type SystemModelMessage = {
+  role: "system"
+  content: string
+  providerOptions?: Record<string, unknown>
+}
+
 export function buildRequestMessages(args: {
   system: string
   messages: ModelMessage[]
@@ -150,6 +215,7 @@ export function buildRequestMessages(args: {
   budget: ContextBudget
   isAnthropic?: boolean
 }): {
+  system: SystemModelMessage
   messages: ModelMessage[]
   plan: ContextPlan
   workingSetKept: WorkingSetItem[]
@@ -195,11 +261,8 @@ export function buildRequestMessages(args: {
     savingsEstimate,
   })
 
-  const systemMessage: ModelMessage = {
-    role: "system",
-    content: args.system,
-    ...(args.isAnthropic ? { providerOptions: ANTHROPIC_CACHE } : {}),
-  }
+  // Context message placed immediately before the latest user message so it
+  // doesn't invalidate the Anthropic history-cache prefix on every turn.
   const contextMessages: ModelMessage[] = contextParts.length
     ? [
         {
@@ -210,13 +273,45 @@ export function buildRequestMessages(args: {
         },
       ]
     : []
-  const request = [systemMessage, ...contextMessages, ...history.kept]
+
+  // Strip reasoning parts from assistant messages before sending to non-Anthropic
+  // providers — e.g. Groq's OpenAI-compatible API rejects 'reasoning_content' in
+  // request messages even though its own models emit it.
+  const kept = args.isAnthropic ? history.kept : stripReasoningParts(history.kept)
+  const historyInit = kept.slice(0, -1)
+  const historyLatest = kept[kept.length - 1]
+  const requestMessages: ModelMessage[] = historyLatest
+    ? [...historyInit, ...contextMessages, historyLatest]
+    : [...contextMessages]
+
+  const systemMessage: SystemModelMessage = {
+    role: "system",
+    content: args.system,
+    ...(args.isAnthropic ? { providerOptions: ANTHROPIC_CACHE } : {}),
+  }
 
   return {
-    messages: args.isAnthropic ? withMovingAnthropicBreakpoint(request) : request,
+    system: systemMessage,
+    messages: args.isAnthropic ? withMovingAnthropicBreakpoint(requestMessages) : requestMessages,
     plan,
     workingSetKept: working.kept,
   }
+}
+
+/**
+ * Removes reasoning content parts from assistant messages.  Required for
+ * OpenAI-compatible providers (e.g. Groq) that reject reasoning_content in
+ * the request body even when their own models produced it.  Exported so
+ * agent.ts can apply the same strip inside prepareStep for intra-turn steps.
+ */
+export function stripReasoningParts(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((msg) => {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) return msg
+    const filtered = (msg.content as any[]).filter((p: any) => p.type !== "reasoning")
+    if (filtered.length === (msg.content as any[]).length) return msg
+    // Ensure assistant message is never completely empty (some providers reject that)
+    return { ...msg, content: filtered.length > 0 ? filtered : " " }
+  })
 }
 
 function trimSummaries(
@@ -242,10 +337,6 @@ function trimSummaries(
     }
   }
   return { kept, trimmed, savedTokens }
-}
-
-const ANTHROPIC_CACHE = {
-  anthropic: { cacheControl: { type: "ephemeral" as const } },
 }
 
 function withMovingAnthropicBreakpoint(messages: ModelMessage[]): ModelMessage[] {

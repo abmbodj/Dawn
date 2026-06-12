@@ -6,7 +6,8 @@ export type TuiOptions = Omit<AppProps, "animate"> & { animate?: boolean }
 
 export async function launchTui(opts: TuiOptions): Promise<void> {
   const animate =
-    opts.animate ?? (process.stdout.isTTY === true && !process.env.DAWN_NO_ANIM && process.env.TERM !== "dumb")
+    opts.animate ??
+    (process.stdout.isTTY === true && !process.env.DAWN_NO_ANIM && process.env.TERM !== "dumb")
   const renderer = await createCliRenderer({ exitOnCtrlC: false })
   createRoot(renderer).render(<App {...opts} animate={animate} />)
 }

@@ -31,6 +31,12 @@ export function buildSystemPrompt(cwd: string): string {
 - If a tool returns "Permission denied by user", do not retry the same call; ask or adjust.
 - Use the same language, framework, and style conventions the project already uses.
 
+# Multi-step discipline
+- When a task needs tools, gather all evidence first and write ONE answer at the end of the turn.
+- Do not narrate tool use ("I'll start by reading…", "Let me check…") and do not summarize partial findings between tool calls. Emit no prose between tool calls unless asking the user a question.
+- Never restate or re-answer the question after additional tool results; refine silently and answer once when done.
+- Call tools only through the tool-call mechanism. Never print raw JSON or code fences that describe a tool call.
+
 # Environment
 - cwd: ${cwd}
 - platform: ${process.platform} (${os.release()})

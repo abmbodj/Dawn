@@ -150,13 +150,81 @@ export const FALLBACK_CATALOG: Catalog = {
     },
   },
 
-  // ── Groq — free tier, recommended for first-run ───────────────────────────
+  // ── GitHub Copilot — default login via OAuth device flow ─────────────────
+  "github-copilot": {
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    env: ["GITHUB_COPILOT_TOKEN"],
+    api: "https://api.githubcopilot.com",
+    models: {
+      "gpt-4o": {
+        id: "gpt-4o",
+        name: "GPT-4o",
+        cost: { input: 0, output: 0 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+      "gpt-4o-mini": {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        cost: { input: 0, output: 0 },
+        limit: { context: 128_000, output: 16_384 },
+        tool_call: true,
+      },
+      "o3-mini": {
+        id: "o3-mini",
+        name: "o3 Mini",
+        cost: { input: 0, output: 0 },
+        limit: { context: 200_000, output: 100_000 },
+        tool_call: true,
+        reasoning: true,
+      },
+      "claude-3.5-sonnet": {
+        id: "claude-3.5-sonnet",
+        name: "Claude 3.5 Sonnet",
+        cost: { input: 0, output: 0 },
+        limit: { context: 200_000, output: 8_096 },
+        tool_call: true,
+      },
+      "gemini-2.0-flash": {
+        id: "gemini-2.0-flash",
+        name: "Gemini 2.0 Flash",
+        cost: { input: 0, output: 0 },
+        limit: { context: 1_000_000, output: 8_192 },
+        tool_call: true,
+      },
+      "claude-opus-4": {
+        id: "claude-opus-4",
+        name: "Claude Opus 4",
+        cost: { input: 0, output: 0 },
+        limit: { context: 200_000, output: 32_000 },
+        tool_call: true,
+      },
+    },
+  },
+
+  // ── Groq — free tier ──────────────────────────────────────────────────────
   groq: {
     id: "groq",
     name: "Groq",
     env: ["GROQ_API_KEY"],
     api: "https://api.groq.com/openai/v1",
     models: {
+      "llama-3.3-70b-versatile": {
+        id: "llama-3.3-70b-versatile",
+        name: "Llama 3.3 70B Versatile",
+        cost: { input: 0.59, output: 0.79 },
+        limit: { context: 128_000, output: 32_768 },
+        tool_call: true,
+      },
+      "openai/gpt-oss-120b": {
+        id: "openai/gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        cost: { input: 0.15, output: 0.6 },
+        limit: { context: 131_072, output: 32_768 },
+        tool_call: true,
+        reasoning: true,
+      },
       "meta-llama/llama-4-scout-17b-16e-instruct": {
         id: "meta-llama/llama-4-scout-17b-16e-instruct",
         name: "Llama 4 Scout",
@@ -170,6 +238,14 @@ export const FALLBACK_CATALOG: Catalog = {
         cost: { input: 0.2, output: 0.6 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
+      },
+      "qwen/qwen3-32b": {
+        id: "qwen/qwen3-32b",
+        name: "Qwen3 32B",
+        cost: { input: 0.29, output: 0.39 },
+        limit: { context: 131_072, output: 32_768 },
+        tool_call: true,
+        reasoning: true,
       },
       "qwen-qwq-32b": {
         id: "qwen-qwq-32b",

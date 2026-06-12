@@ -10,13 +10,16 @@ import {
   type DawnConfig,
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
+  GITHUB_CLIENT_ID,
   listAuthProviders,
   loadCatalog,
   loadConfig,
   PermissionGate,
+  pollForToken,
   removeApiKey,
   SessionStore,
   setApiKey,
+  startDeviceFlow,
   withOllama,
 } from "@dawn/core"
 
@@ -119,10 +122,11 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
   if (config.model) return config.model
   const connected = new Set(connectedProviders(catalog, config).map((p) => p.id))
   const preferred: Array<[string, string]> = [
+    ["github-copilot", "github-copilot/gpt-4o"],
     ["anthropic", "anthropic/claude-opus-4-8"],
     ["openai", "openai/gpt-5.5"],
     ["google", "google/gemini-3.5-flash"],
-    ["groq", "groq/meta-llama/llama-4-scout-17b-16e-instruct"],
+    ["groq", "groq/qwen/qwen3-32b"],
     ["xai", "xai/grok-3"],
     ["mistral", "mistral/mistral-large-latest"],
     ["deepseek", "deepseek/deepseek-chat"],
@@ -134,9 +138,8 @@ function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
     const models = Object.keys(catalog[id]?.models ?? {})
     if (models[0]) return `${id}/${models[0]}`
   }
-  // Nothing usable yet (e.g. only Ollama reachable) — placeholder; the Setup
-  // wizard runs first and overrides this with an explicit, persisted choice.
-  return "groq/meta-llama/llama-4-scout-17b-16e-instruct"
+  // Nothing usable yet — placeholder; the Setup wizard runs first and overrides this.
+  return "github-copilot/gpt-4o"
 }
 
 async function promptHidden(label: string): Promise<string> {
@@ -180,6 +183,20 @@ async function authCommand(args: string[]): Promise<void> {
       if (!provider) {
         console.error("usage: dawn auth login <provider>")
         process.exit(1)
+      }
+      if (provider === "github-copilot") {
+        if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID === "REPLACE_WITH_REGISTERED_CLIENT_ID") {
+          console.error("OAuth app not configured — replace GITHUB_CLIENT_ID in packages/core/src/auth/github-oauth.ts")
+          process.exit(1)
+        }
+        const flow = await startDeviceFlow(GITHUB_CLIENT_ID)
+        console.log(`Open: ${flow.verificationUri}`)
+        console.log(`Code: ${flow.userCode}`)
+        console.log("Waiting for authorization…")
+        const token = await pollForToken(GITHUB_CLIENT_ID, flow.deviceCode, flow.interval)
+        setApiKey("github-copilot", token)
+        console.log("GitHub Copilot connected.")
+        return
       }
       const key = await promptHidden(`API key for ${provider} (input hidden): `)
       if (!key.trim()) {

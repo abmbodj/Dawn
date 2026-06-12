@@ -1,10 +1,5 @@
 /** Pure string-replace logic for the edit tool, separated for testability. */
-export function applyEdit(
-  content: string,
-  oldString: string,
-  newString: string,
-  replaceAll = false,
-): string {
+export function applyEdit(content: string, oldString: string, newString: string, replaceAll = false): string {
   if (oldString === newString) throw new Error("oldString and newString are identical")
   if (oldString === "") throw new Error("oldString must not be empty")
   const count = content.split(oldString).length - 1

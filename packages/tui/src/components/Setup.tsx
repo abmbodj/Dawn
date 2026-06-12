@@ -1,6 +1,16 @@
-import { type Catalog, formatBytes, localModelFit, saveConfig, setApiKey } from "@dawn/core"
+import {
+  type Catalog,
+  type DeviceFlowStart,
+  GITHUB_CLIENT_ID,
+  formatBytes,
+  localModelFit,
+  pollForToken,
+  saveConfig,
+  setApiKey,
+  startDeviceFlow,
+} from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { theme } from "../theme"
 import { Logo } from "./Logo"
 
@@ -13,6 +23,13 @@ interface ProviderOption {
 }
 
 const SETUP_PROVIDERS: [ProviderOption, ...ProviderOption[]] = [
+  {
+    id: "github-copilot",
+    label: "GitHub Copilot  (login with GitHub)",
+    url: "github.com/settings/copilot",
+    defaultModel: "github-copilot/gpt-4o",
+    envVar: "GITHUB_COPILOT_TOKEN",
+  },
   {
     id: "groq",
     label: "Groq  (free — no credit card)",
@@ -70,10 +87,13 @@ export interface SetupProps {
 }
 
 export function Setup({ onDone, catalog, animate }: SetupProps) {
-  const [phase, setPhase] = useState<"pick" | "key" | "localConfirm">("pick")
+  const [phase, setPhase] = useState<"pick" | "key" | "localConfirm" | "oauth">("pick")
   const [selected, setSelected] = useState<ProviderOption>(SETUP_PROVIDERS[0])
   const [localPick, setLocalPick] = useState<LocalOption | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [oauthData, setOauthData] = useState<DeviceFlowStart | null>(null)
+  const [oauthError, setOauthError] = useState<string | null>(null)
+  const oauthAbortRef = useRef<AbortController | null>(null)
 
   const localModels: LocalOption[] = Object.values(catalog.ollama?.models ?? {}).map((m) => ({
     ref: `ollama/${m.id}`,
@@ -88,7 +108,13 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") process.exit(0)
-    if (key.name === "escape" && (phase === "key" || phase === "localConfirm")) {
+    if (key.name === "escape" && (phase === "key" || phase === "localConfirm" || phase === "oauth")) {
+      if (phase === "oauth") {
+        oauthAbortRef.current?.abort()
+        oauthAbortRef.current = null
+        setOauthData(null)
+        setOauthError(null)
+      }
       setPhase("pick")
       setLocalPick(null)
       setError(null)
@@ -119,8 +145,37 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
     const provider = SETUP_PROVIDERS.find((p) => p.id === value)
     if (!provider) return
     setSelected(provider)
-    setPhase("key")
     setError(null)
+
+    if (value === "github-copilot") {
+      if (!GITHUB_CLIENT_ID || GITHUB_CLIENT_ID === "REPLACE_WITH_REGISTERED_CLIENT_ID") {
+        setOauthError("OAuth app not configured — replace GITHUB_CLIENT_ID in github-oauth.ts")
+        setPhase("oauth")
+        return
+      }
+      setOauthData(null)
+      setOauthError(null)
+      setPhase("oauth")
+      const abort = new AbortController()
+      oauthAbortRef.current = abort
+      ;(async () => {
+        try {
+          const flow = await startDeviceFlow(GITHUB_CLIENT_ID)
+          setOauthData(flow)
+          const token = await pollForToken(GITHUB_CLIENT_ID, flow.deviceCode, flow.interval, abort.signal)
+          setApiKey("github-copilot", token)
+          saveConfig({ model: provider.defaultModel })
+          onDone(provider.defaultModel)
+        } catch (err: unknown) {
+          if (!abort.signal.aborted) {
+            setOauthError(err instanceof Error ? err.message : String(err))
+          }
+        }
+      })()
+      return
+    }
+
+    setPhase("key")
   }
 
   const handleKeySubmit = (raw: unknown) => {
@@ -213,6 +268,44 @@ export function Setup({ onDone, catalog, animate }: SetupProps) {
               </text>
             </box>
             <text fg={theme.dim}>{"[y] use it anyway · [n/Esc] pick another"}</text>
+          </>
+        ) : phase === "oauth" ? (
+          <>
+            <text fg={theme.text} style={{ marginBottom: 1 }}>
+              {"Connect your GitHub Copilot subscription"}
+            </text>
+            <box
+              style={{
+                border: true,
+                borderColor: theme.accent,
+                padding: 1,
+                flexDirection: "column",
+                marginBottom: 1,
+              }}
+              title="GitHub device authorization"
+            >
+              {oauthData ? (
+                <>
+                  <text fg={theme.dim}>{"1. Open this URL in your browser:"}</text>
+                  <text fg={theme.accent} style={{ marginBottom: 1 }}>
+                    {"   github.com/login/device"}
+                  </text>
+                  <text fg={theme.dim}>{"2. Enter this code:"}</text>
+                  <text fg={theme.text} style={{ marginBottom: 1 }}>
+                    {`   ${oauthData.userCode}`}
+                  </text>
+                  <text fg={theme.dim}>{"Waiting for authorization…"}</text>
+                </>
+              ) : oauthError ? null : (
+                <text fg={theme.dim}>{"Starting GitHub authorization…"}</text>
+              )}
+            </box>
+            {oauthError ? (
+              <text fg={theme.error} style={{ marginBottom: 1 }}>
+                {oauthError}
+              </text>
+            ) : null}
+            <text fg={theme.dim}>{"Esc to go back"}</text>
           </>
         ) : (
           <>
