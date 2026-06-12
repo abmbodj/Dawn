@@ -98,12 +98,17 @@ Inside the TUI, submit these slash commands in the prompt:
 
 ```text
 /model   Switch model across connected providers.
+/context Show context budget, working set, and savings.
 /usage   Show token and cost breakdown for the session.
 /new     Start a fresh session.
 /clear   Clear the visible transcript while keeping the conversation.
+/reset   Wipe all Dawn data and return to setup wizard.
 /help    Show TUI help.
 /quit    Exit Dawn.
 ```
+
+Type `/` in the prompt to open command autocomplete. Use Up/Down to navigate, Tab to complete, Enter
+to run the highlighted command, and Esc to close suggestions.
 
 Keyboard shortcuts:
 

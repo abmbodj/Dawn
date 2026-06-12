@@ -10,12 +10,25 @@ import type {
   SessionStore,
   UsageTotals,
 } from "@dawn/core"
-import { connectedProviders, formatBytes, hasConfiguredModel, localModelFit, resetDawnData, toolTitle } from "@dawn/core"
+import {
+  connectedProviders,
+  formatBytes,
+  hasConfiguredModel,
+  localModelFit,
+  resetDawnData,
+  toolTitle,
+} from "@dawn/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
-import { dawnSyntaxStyle } from "./markdown"
 import { Logo } from "./components/Logo"
 import { Setup } from "./components/Setup"
+import { dawnSyntaxStyle } from "./markdown"
+import {
+  formatSlashCommandHelp,
+  getSlashCommandSuggestions,
+  resolveSlashCommand,
+  type SlashCommand,
+} from "./slashCommands"
 import { formatContextReport, formatUsageReport, statusFooterParts } from "./status"
 import { theme } from "./theme"
 
@@ -146,16 +159,7 @@ export function itemsFromMessages(messages: ModelMessage[]): Item[] {
 
 // ---------- helpers ----------
 
-const HELP = `Commands:
-  /model   switch model (multi-provider)
-  /context show context budget, working set, and savings
-  /usage   token + cost breakdown for this session
-  /new     start a fresh session
-  /clear   clear the screen (keeps the conversation)
-  /reset   wipe all Dawn data and return to setup wizard
-  /help    this help
-  /quit    exit
-Keys: Esc interrupts a running turn · Ctrl+C quits`
+const HELP = formatSlashCommandHelp()
 
 function firstLine(s: string): string {
   const line = s.split("\n")[0] ?? ""
@@ -170,6 +174,10 @@ function firstLines(s: string, n: number): string {
     .join("\n")
 }
 
+function isEnterKey(name: string): boolean {
+  return name === "return" || name === "enter" || name === "kpenter" || name === "linefeed"
+}
+
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 function useSpinner(active: boolean): string {
@@ -179,7 +187,7 @@ function useSpinner(active: boolean): string {
     const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 90)
     return () => clearInterval(id)
   }, [active])
-  return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0]!
+  return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0] ?? ""
 }
 
 // ---------- subviews ----------
@@ -283,6 +291,40 @@ function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?
   )
 }
 
+function SlashCommandSuggestionsView({
+  suggestions,
+  selectedIndex,
+}: {
+  suggestions: SlashCommand[]
+  selectedIndex: number
+}) {
+  const visible = suggestions.slice(0, 8)
+  return (
+    <box
+      style={{
+        border: true,
+        borderColor: theme.accent,
+        flexDirection: "column",
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+      title="commands"
+    >
+      {visible.map((command, index) => {
+        const selected = index === selectedIndex
+        return (
+          <text key={command.name}>
+            <span fg={selected ? theme.accent : theme.dim}>{selected ? "› " : "  "}</span>
+            <span fg={selected ? theme.accent : theme.text}>{`/${command.name}`}</span>
+            <span fg={theme.dim}>{`  ${command.description}`}</span>
+          </text>
+        )
+      })}
+      <text fg={theme.dim}>Up/Down navigate · Tab complete · Enter run · Esc close</text>
+    </box>
+  )
+}
+
 // ---------- main app ----------
 
 export interface AppProps {
@@ -306,9 +348,12 @@ export function App(props: AppProps) {
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmModel, setConfirmModel] = useState<{ ref: string; sizeBytes?: number } | null>(null)
-  const [inputEpoch, setInputEpoch] = useState(0)
+  const [promptValue, setPromptValue] = useState("")
+  const [selectedSuggestion, setSelectedSuggestion] = useState(0)
+  const [dismissedCompletionValue, setDismissedCompletionValue] = useState<string | null>(null)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const abortRef = useRef<AbortController | null>(null)
+  const programmaticPromptValueRef = useRef<string | null>(null)
   const spinnerFrame = useSpinner(busy)
 
   // Index of the last not-yet-done tool item (for spinner placement)
@@ -367,34 +412,14 @@ export function App(props: AppProps) {
     process.exit(0)
   }, [agent, store])
 
-  useKeyboard((key) => {
-    if (key.ctrl && key.name === "c") quit()
-    if (permission) {
-      if (key.name === "y") permission.resolve("allow")
-      else if (key.name === "a") permission.resolve("always")
-      else if (key.name === "n" || key.name === "escape") permission.resolve("deny")
-      return
-    }
-    if (confirmModel) {
-      if (key.name === "y") {
-        const { ref } = confirmModel
-        setConfirmModel(null)
-        applyModel(ref)
-      } else if (key.name === "n" || key.name === "escape") {
-        setConfirmModel(null)
-      }
-      return
-    }
-    if (key.name === "escape") {
-      if (pickerOpen) setPickerOpen(false)
-      else if (busy) abortRef.current?.abort()
-    }
-  })
-
   const runCommand = useCallback(
     (cmd: string) => {
-      const name = cmd.slice(1).trim().toLowerCase()
-      switch (name) {
+      const command = resolveSlashCommand(cmd)
+      if (!command) {
+        dispatch({ type: "push", item: { kind: "error", text: `unknown command ${cmd} — try /help` } })
+        return
+      }
+      switch (command.name) {
         case "help":
           dispatch({ type: "push", item: { kind: "info", text: HELP } })
           break
@@ -438,21 +463,20 @@ export function App(props: AppProps) {
           setNeedsSetup(true)
           break
         case "quit":
-        case "exit":
           quit()
           break
-        default:
-          dispatch({ type: "push", item: { kind: "error", text: `unknown command ${cmd} — try /help` } })
       }
     },
-    [agent, catalog, quit, session, setNeedsSetup, store],
+    [agent, catalog, quit, session, store],
   )
 
   const submit = useCallback(
     (raw: string) => {
       const text = raw.trim()
-      setInputEpoch((e) => e + 1)
       if (!text) return
+      setPromptValue("")
+      setSelectedSuggestion(0)
+      setDismissedCompletionValue(null)
       if (text.startsWith("/")) {
         runCommand(text)
         return
@@ -469,6 +493,16 @@ export function App(props: AppProps) {
     },
     [agent, busy, runCommand, session.id, store],
   )
+
+  const handlePromptInput = useCallback((value: string) => {
+    setPromptValue(value)
+    setSelectedSuggestion(0)
+    if (programmaticPromptValueRef.current === value) {
+      programmaticPromptValueRef.current = null
+      return
+    }
+    setDismissedCompletionValue(null)
+  }, [])
 
   const applyModel = useCallback(
     (ref: string) => {
@@ -502,7 +536,87 @@ export function App(props: AppProps) {
 
   const empty = items.length === 0
   const focusInput = !pickerOpen && !permission && !confirmModel
+  const commandSuggestions = getSlashCommandSuggestions(promptValue)
+  const completionOpen =
+    focusInput && dismissedCompletionValue !== promptValue && commandSuggestions.length > 0
+  const selectedSuggestionIndex =
+    commandSuggestions.length > 0 ? Math.min(selectedSuggestion, commandSuggestions.length - 1) : 0
+  const selectedCommand = commandSuggestions[selectedSuggestionIndex]
   const footer = statusFooterParts({ busy, catalog, modelRef, usage, width })
+
+  const fillSuggestion = useCallback((command: SlashCommand) => {
+    const value = `/${command.name}`
+    programmaticPromptValueRef.current = value
+    setPromptValue(value)
+    setSelectedSuggestion(0)
+    setDismissedCompletionValue(value)
+  }, [])
+
+  const runSuggestion = useCallback(
+    (command: SlashCommand) => {
+      setPromptValue("")
+      setSelectedSuggestion(0)
+      setDismissedCompletionValue(null)
+      runCommand(`/${command.name}`)
+    },
+    [runCommand],
+  )
+
+  useKeyboard((key) => {
+    if (key.ctrl && key.name === "c") quit()
+    if (permission) {
+      if (key.name === "y") permission.resolve("allow")
+      else if (key.name === "a") permission.resolve("always")
+      else if (key.name === "n" || key.name === "escape") permission.resolve("deny")
+      return
+    }
+    if (confirmModel) {
+      if (key.name === "y") {
+        const { ref } = confirmModel
+        setConfirmModel(null)
+        applyModel(ref)
+      } else if (key.name === "n" || key.name === "escape") {
+        setConfirmModel(null)
+      }
+      return
+    }
+    if (completionOpen && selectedCommand) {
+      if (key.name === "down") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSuggestion((index) => (index + 1) % commandSuggestions.length)
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedSuggestion((index) => (index - 1 + commandSuggestions.length) % commandSuggestions.length)
+        return
+      }
+      if (key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        fillSuggestion(selectedCommand)
+        return
+      }
+      if (isEnterKey(key.name)) {
+        key.preventDefault()
+        key.stopPropagation()
+        runSuggestion(selectedCommand)
+        return
+      }
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setDismissedCompletionValue(promptValue)
+        return
+      }
+    }
+    if (key.name === "escape") {
+      if (pickerOpen) setPickerOpen(false)
+      else if (busy) abortRef.current?.abort()
+    }
+  })
 
   if (needsSetup) {
     return <Setup onDone={handleSetupDone} catalog={catalog} animate={props.animate} />
@@ -543,12 +657,19 @@ export function App(props: AppProps) {
       {pickerOpen ? (
         <ModelPicker catalog={catalog} config={config} current={modelRef} onPick={pickModel} />
       ) : null}
+      {completionOpen ? (
+        <SlashCommandSuggestionsView
+          suggestions={commandSuggestions}
+          selectedIndex={selectedSuggestionIndex}
+        />
+      ) : null}
 
       <box style={{ border: true, borderColor: theme.border, height: 3 }}>
         <input
-          key={inputEpoch}
           focused={focusInput}
+          value={promptValue}
           placeholder={empty ? "Ask Dawn anything… (/help for commands)" : ""}
+          onInput={handlePromptInput}
           onSubmit={(raw: unknown) =>
             submit(typeof raw === "string" ? raw : String((raw as any)?.value ?? ""))
           }
