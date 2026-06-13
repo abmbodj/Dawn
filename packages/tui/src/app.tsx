@@ -44,6 +44,7 @@ import {
   formatSavingsReport,
   formatUsageReport,
   type ModeChip,
+  modelLabel,
   savingsBoxRows,
   statusFooterParts,
   type UsageBoxRow,
@@ -888,11 +889,24 @@ export function App(props: AppProps) {
     [runCommand],
   )
 
-  const applyPlanApproval = useCallback((index: number) => {
-    if (index === 0) setPermMode("acceptEdits")
-    else if (index === 1) setPermMode("normal")
-    // index 2 or -1: stay in plan mode
-  }, [])
+  const applyPlanApproval = useCallback(
+    (index: number) => {
+      // index 0/1 approve the plan and leave plan mode; index 2/-1 keep planning.
+      const approved = index === 0 || index === 1
+      if (index === 0) setPermMode("acceptEdits")
+      else if (index === 1) setPermMode("normal")
+      // Model selection is bound to the permission mode, so leaving plan mode
+      // already hands the next turn to the edit model. Surface that swap so the
+      // dev knows execution won't run on their (often pricier) plan model.
+      if (approved && planModelRef && planModelRef !== modelRef) {
+        dispatch({
+          type: "push",
+          item: { kind: "info", text: `plan approved → editing with ${modelLabel(catalog, modelRef)}` },
+        })
+      }
+    },
+    [catalog, modelRef, planModelRef],
+  )
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") quit()
