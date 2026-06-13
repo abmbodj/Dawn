@@ -478,8 +478,7 @@ function SlashCommandSuggestionsView({
         border: true,
         borderColor: theme.accent,
         flexDirection: "column",
-        flexShrink: 1,
-        minHeight: 0,
+        flexShrink: 0,
         overflow: "hidden",
         paddingLeft: 1,
         paddingRight: 1,
@@ -497,7 +496,6 @@ function SlashCommandSuggestionsView({
           </text>
         )
       })}
-      <text fg={theme.dim}>Up/Down navigate · Tab complete · Enter run · Esc close</text>
     </box>
   )
 }
@@ -1410,7 +1408,7 @@ export function App(props: AppProps) {
         )}
       </box>
 
-      {!busy && !completionOpen ? (
+      {!busy ? (
         <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
           <box style={{ flexGrow: 1, overflow: "hidden" }}>
             <text fg={theme.dim}>{inputHint}</text>
