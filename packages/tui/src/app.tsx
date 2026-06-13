@@ -460,24 +460,34 @@ function QuestionView({
 function SlashCommandSuggestionsView({
   suggestions,
   selectedIndex,
+  maxRows,
 }: {
   suggestions: SlashCommand[]
   selectedIndex: number
+  maxRows: number
 }) {
-  const visible = suggestions.slice(0, 8)
+  // On a short terminal we can only show a few rows; slide a window around the
+  // selected command so the highlight stays visible as the user arrows past the
+  // fold. Bounding the box (flexShrink/overflow) guarantees it never overdraws.
+  const count = Math.max(1, Math.min(maxRows, suggestions.length))
+  const start = Math.max(0, Math.min(selectedIndex - Math.floor(count / 2), suggestions.length - count))
+  const visible = suggestions.slice(start, start + count)
   return (
     <box
       style={{
         border: true,
         borderColor: theme.accent,
         flexDirection: "column",
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: "hidden",
         paddingLeft: 1,
         paddingRight: 1,
       }}
       title="commands"
     >
       {visible.map((command, index) => {
-        const selected = index === selectedIndex
+        const selected = start + index === selectedIndex
         return (
           <text key={command.name}>
             <span fg={selected ? theme.accent : theme.dim}>{selected ? "› " : "  "}</span>
@@ -609,7 +619,7 @@ function cycleMode(current: PermissionMode): PermissionMode {
 
 export function App(props: AppProps) {
   const { agent, store, catalog, config, gate, asker } = props
-  const { width } = useTerminalDimensions()
+  const { width, height } = useTerminalDimensions()
   const [needsSetup, setNeedsSetup] = useState(() => !hasConfiguredModel(catalog, config))
   const [catalogVersion, setCatalogVersion] = useState(0)
   const [session, setSession] = useState(props.session)
@@ -987,6 +997,12 @@ export function App(props: AppProps) {
     : []
   // Auto-grow the input box with the draft (1 content line → height 3, incl. border).
   const inputBoxHeight = Math.min(INPUT_MAX_LINES, Math.max(1, inputLines)) + 2
+  // How many command rows the suggestion box can show without crowding the bottom
+  // chrome off-screen. The transcript (flexGrow) absorbs whatever's left, so we
+  // only reserve for the chip, input box, footer line, the box's own border +
+  // hint, and a safety row.
+  const chipRows = footer.modeChip ? 1 : 0
+  const maxSuggestionRows = Math.max(1, Math.min(8, height - chipRows - inputBoxHeight - 1 - 2 - 1 - 1))
   const inputHint = busy
     ? "Esc to stop"
     : completionOpen
@@ -1293,6 +1309,7 @@ export function App(props: AppProps) {
         <SlashCommandSuggestionsView
           suggestions={commandSuggestions}
           selectedIndex={selectedSuggestionIndex}
+          maxRows={maxSuggestionRows}
         />
       ) : null}
 
@@ -1303,6 +1320,7 @@ export function App(props: AppProps) {
           border: true,
           borderColor: focusInput ? theme.accent : theme.border,
           height: inputBoxHeight,
+          flexShrink: 0,
         }}
       >
         <textarea
@@ -1323,7 +1341,7 @@ export function App(props: AppProps) {
         />
       </box>
 
-      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
+      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1, flexShrink: 0 }}>
         {footer.mode === "narrow" ? (
           <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
         ) : (
@@ -1340,9 +1358,9 @@ export function App(props: AppProps) {
         )}
       </box>
 
-      {!busy ? (
+      {!busy && !completionOpen ? (
         <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
-          <box style={{ flexGrow: 1 }}>
+          <box style={{ flexGrow: 1, overflow: "hidden" }}>
             <text fg={theme.dim}>{inputHint}</text>
           </box>
           {promptValue.length > 0 ? <text fg={theme.dim}>{`${promptValue.length} chars`}</text> : null}
