@@ -25,9 +25,9 @@ import {
   toolTitle,
   withOpenRouter,
 } from "@dawn/core"
-import type { TextareaOptions, TextareaRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TextareaOptions, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
-import { useCallback, useEffect, useReducer, useRef, useState } from "react"
+import { type RefObject, useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
 import { ModelPicker } from "./components/ModelPicker"
 import { ProviderConnect, type ProviderOption, SETUP_PROVIDERS } from "./components/ProviderConnect"
@@ -343,10 +343,24 @@ interface PendingPermission {
   resolve: (d: "allow" | "always" | "deny") => void
 }
 
-function PermissionView({ pending }: { pending: PendingPermission }) {
+function PermissionView({
+  pending,
+  scrollRef,
+}: {
+  pending: PendingPermission
+  scrollRef?: RefObject<ScrollBoxRenderable | null>
+}) {
   return (
     <box
-      style={{ border: true, borderColor: theme.accent, padding: 1, flexDirection: "column" }}
+      style={{
+        border: true,
+        borderColor: theme.accent,
+        padding: 1,
+        flexDirection: "column",
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: "hidden",
+      }}
       title="allow this action?"
     >
       <text>
@@ -354,9 +368,11 @@ function PermissionView({ pending }: { pending: PendingPermission }) {
         <span fg={theme.text}>{pending.req.title}</span>
       </text>
       {pending.req.detail ? (
-        <text fg={theme.dim} wrapMode="word">
-          {pending.req.detail}
-        </text>
+        <scrollbox ref={scrollRef} style={{ flexShrink: 1, minHeight: 0 }} stickyStart="top">
+          <text fg={theme.dim} wrapMode="word">
+            {pending.req.detail}
+          </text>
+        </scrollbox>
       ) : null}
       <text fg={theme.dim}>{"─".repeat(30)}</text>
       <text>
@@ -365,7 +381,7 @@ function PermissionView({ pending }: { pending: PendingPermission }) {
         <span fg={theme.accent}>a</span>
         <span fg={theme.dim}> always </span>
         <span fg={theme.accent}>n</span>
-        <span fg={theme.dim}>/Esc deny</span>
+        <span fg={theme.dim}>/Esc deny · PgUp/PgDn scroll</span>
       </text>
     </box>
   )
@@ -391,18 +407,36 @@ function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?
   )
 }
 
-function QuestionView({ pending, selectedIndex }: { pending: PendingQuestion; selectedIndex: number }) {
+function QuestionView({
+  pending,
+  selectedIndex,
+  scrollRef,
+}: {
+  pending: PendingQuestion
+  selectedIndex: number
+  scrollRef?: RefObject<ScrollBoxRenderable | null>
+}) {
   const { q } = pending
   return (
     <box
-      style={{ border: true, borderColor: theme.accent, padding: 1, flexDirection: "column" }}
+      style={{
+        border: true,
+        borderColor: theme.accent,
+        padding: 1,
+        flexDirection: "column",
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: "hidden",
+      }}
       title={q.kind === "plan-approval" ? "plan ready for review" : "question"}
     >
       <text fg={theme.text}>{q.question}</text>
       {q.detail ? (
-        <text fg={theme.dim} wrapMode="word">
-          {q.detail}
-        </text>
+        <scrollbox ref={scrollRef} style={{ flexShrink: 1, minHeight: 0 }} stickyStart="top">
+          <text fg={theme.dim} wrapMode="word">
+            {q.detail}
+          </text>
+        </scrollbox>
       ) : null}
       <text fg={theme.dim}>{"─".repeat(30)}</text>
       {q.options.map((opt, i) => {
@@ -416,7 +450,9 @@ function QuestionView({ pending, selectedIndex }: { pending: PendingQuestion; se
         )
       })}
       <text fg={theme.dim}>{"─".repeat(30)}</text>
-      <text fg={theme.dim}>{"↑↓ navigate · 1–9 quick-pick · Enter select · Esc cancel"}</text>
+      <text fg={theme.dim}>
+        {"↑↓ navigate · 1–9 quick-pick · Enter select · Esc cancel · PgUp/PgDn scroll"}
+      </text>
     </box>
   )
 }
@@ -601,6 +637,7 @@ export function App(props: AppProps) {
   const historyIndexRef = useRef<number | null>(null)
   const draftRef = useRef("")
   const caretRef = useRef<{ line: number; lineCount: number }>({ line: 0, lineCount: 1 })
+  const detailScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
   const [permMode, setPermMode] = useState<PermissionMode>("normal")
@@ -1015,6 +1052,18 @@ export function App(props: AppProps) {
     }
 
     if (permission) {
+      if (key.name === "pageup" || (key.name === "up" && key.shift)) {
+        key.preventDefault()
+        key.stopPropagation()
+        detailScrollRef.current?.scrollBy(-10)
+        return
+      }
+      if (key.name === "pagedown" || (key.name === "down" && key.shift)) {
+        key.preventDefault()
+        key.stopPropagation()
+        detailScrollRef.current?.scrollBy(10)
+        return
+      }
       if (key.name === "y") permission.resolve("allow")
       else if (key.name === "a") permission.resolve("always")
       else if (key.name === "n" || key.name === "escape") permission.resolve("deny")
@@ -1032,6 +1081,18 @@ export function App(props: AppProps) {
     }
     if (question) {
       const optCount = question.q.options.length
+      if (key.name === "pageup" || (key.name === "up" && key.shift)) {
+        key.preventDefault()
+        key.stopPropagation()
+        detailScrollRef.current?.scrollBy(-10)
+        return
+      }
+      if (key.name === "pagedown" || (key.name === "down" && key.shift)) {
+        key.preventDefault()
+        key.stopPropagation()
+        detailScrollRef.current?.scrollBy(10)
+        return
+      }
       if (key.name === "down") {
         key.preventDefault()
         key.stopPropagation()
@@ -1145,7 +1206,7 @@ export function App(props: AppProps) {
   }
 
   return (
-    <box style={{ position: "relative", flexDirection: "column", flexGrow: 1 }}>
+    <box style={{ position: "relative", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
       {empty ? (
         <box style={{ flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
           <Logo animate={props.animate} />
@@ -1187,8 +1248,10 @@ export function App(props: AppProps) {
         </>
       ) : null}
 
-      {question ? <QuestionView pending={question} selectedIndex={questionSel} /> : null}
-      {permission ? <PermissionView pending={permission} /> : null}
+      {question ? (
+        <QuestionView pending={question} selectedIndex={questionSel} scrollRef={detailScrollRef} />
+      ) : null}
+      {permission ? <PermissionView pending={permission} scrollRef={detailScrollRef} /> : null}
       {confirmModel ? (
         <ModelFitWarning modelRef={confirmModel.ref} sizeBytes={confirmModel.sizeBytes} />
       ) : null}
@@ -1277,12 +1340,14 @@ export function App(props: AppProps) {
         )}
       </box>
 
-      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
-        <box style={{ flexGrow: 1 }}>
-          <text fg={busy ? theme.accent : theme.dim}>{inputHint}</text>
+      {!busy ? (
+        <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
+          <box style={{ flexGrow: 1 }}>
+            <text fg={theme.dim}>{inputHint}</text>
+          </box>
+          {promptValue.length > 0 ? <text fg={theme.dim}>{`${promptValue.length} chars`}</text> : null}
         </box>
-        {promptValue.length > 0 ? <text fg={theme.dim}>{`${promptValue.length} chars`}</text> : null}
-      </box>
+      ) : null}
     </box>
   )
 }
