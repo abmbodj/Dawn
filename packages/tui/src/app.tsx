@@ -10,6 +10,7 @@ import type {
   PermissionRequest,
   SessionMeta,
   SessionStore,
+  TodoItem,
   UsageTotals,
   UserQuestion,
 } from "@dawn/core"
@@ -58,12 +59,14 @@ export type Item =
       name: string
       title: string
       summary?: string
+      preview?: string
       isError?: boolean
       done: boolean
     }
   | { kind: "reasoning"; text: string; done?: boolean }
   | { kind: "info"; text: string }
   | { kind: "error"; text: string }
+  | { kind: "todos"; items: TodoItem[] }
 
 type Action =
   | { type: "push"; item: Item }
@@ -122,7 +125,10 @@ export function reduceItems(items: Item[], action: Action): Item[] {
             last?.kind === "reasoning" && !last.done
               ? [...items.slice(0, -1), { ...last, done: true }]
               : items
-          return [...base, { kind: "tool", id: ev.id, name: ev.name, title: ev.title, done: false }]
+          return [
+            ...base,
+            { kind: "tool", id: ev.id, name: ev.name, title: ev.title, preview: ev.preview, done: false },
+          ]
         }
         case "tool-end":
           return items.map((it) =>
@@ -134,6 +140,11 @@ export function reduceItems(items: Item[], action: Action): Item[] {
           return [...items, { kind: "info", text: ev.message }]
         case "error":
           return [...items, { kind: "error", text: ev.message }]
+        case "todos": {
+          // Keep one evolving checklist, floated to the current point of activity.
+          const withoutTodos = items.filter((it) => it.kind !== "todos")
+          return [...withoutTodos, { kind: "todos", items: ev.items }]
+        }
         case "turn-end": {
           // Sweep any not-yet-done assistant or reasoning items
           const swept = items.map((it) => {
@@ -215,6 +226,19 @@ function useSpinner(active: boolean): string {
 
 // ---------- subviews ----------
 
+function DiffLines({ preview }: { preview: string }) {
+  return (
+    <box style={{ flexDirection: "column" }}>
+      {preview.split("\n").map((line, i) => {
+        const color = line.startsWith("+") ? theme.toolOk : line.startsWith("-") ? theme.toolErr : theme.dim
+        return (
+          <text key={i} fg={color}>{`  ${line}`}</text>
+        )
+      })}
+    </box>
+  )
+}
+
 export function ItemView({
   item,
   spinnerFrame,
@@ -258,18 +282,53 @@ export function ItemView({
           </box>
         )
       }
-      return (
+      const toolLine = (
         <text>
           <span fg={color}>{`${mark} ${item.name}`}</span>
           <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
           <span fg={theme.dim}>{item.done && item.summary ? ` — ${firstLine(item.summary)}` : ""}</span>
         </text>
       )
+      if (!item.preview) return toolLine
+      return (
+        <box style={{ flexDirection: "column" }}>
+          {toolLine}
+          <DiffLines preview={item.preview} />
+        </box>
+      )
     }
     case "info":
       return <text fg={theme.dim}>{item.text}</text>
     case "error":
       return <text fg={theme.error}>{`error: ${item.text}`}</text>
+    case "todos":
+      return (
+        <box style={{ flexDirection: "column" }}>
+          {item.items.map((todo) => {
+            if (todo.status === "completed") {
+              return (
+                <text key={todo.content}>
+                  <span fg={theme.toolOk}>{"✓ "}</span>
+                  <span fg={theme.dim}>{todo.content}</span>
+                </text>
+              )
+            }
+            if (todo.status === "in_progress") {
+              return (
+                <text key={todo.content}>
+                  <span fg={theme.accent}>{"▶ "}</span>
+                  <span fg={theme.text}>{todo.activeForm}</span>
+                </text>
+              )
+            }
+            return (
+              <text key={todo.content}>
+                <span fg={theme.dim}>{`○ ${todo.content}`}</span>
+              </text>
+            )
+          })}
+        </box>
+      )
   }
 }
 

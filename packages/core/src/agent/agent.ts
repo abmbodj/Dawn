@@ -20,7 +20,7 @@ import type { Catalog } from "../provider/catalog"
 import { normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
-import { createTools, toolTitle } from "../tools/index"
+import { createTools, toolPreview, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { buildAnswerStyleGuidance } from "./answer-style"
@@ -265,6 +265,7 @@ export class DawnAgent {
                 id: part.toolCallId,
                 name: part.toolName,
                 title: toolTitle(part.toolName, part.input),
+                preview: toolPreview(part.toolName, part.input),
               })
               break
             case "tool-result":

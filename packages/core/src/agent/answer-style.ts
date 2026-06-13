@@ -18,20 +18,19 @@ export function buildAnswerStyleGuidance(text: string): string | undefined {
   switch (classifyAnswerStyle(text)) {
     case "question":
       return (
-        "Answer this as a codebase question.\n" +
-        "- First sentence: give the direct answer in plain English.\n" +
-        "- Then add one short paragraph explaining why or how.\n" +
+        "This is a codebase question — answer it like a colleague who just looked.\n" +
+        "- Lead with the direct answer in plain English, then one short paragraph on why or how.\n" +
         "- Mention at most 1-2 file or function references, and only after the direct answer.\n" +
-        "- Do not lead with type names, interfaces, or placeholder pseudo-code.\n" +
-        '- Do not invent commands, modes, files, or behavior. If you infer something, label it as "inference" or "likely".'
+        "- Don't lead with type names, interfaces, or placeholder pseudo-code.\n" +
+        '- Don\'t invent commands, modes, files, or behavior. If you infer something, label it "inference" or "likely".'
       )
     case "change-summary":
       return (
-        "Answer this as a completion summary.\n" +
+        "You've been narrating as you worked, so close the turn — don't re-report every step.\n" +
         "- Start with the outcome in one sentence.\n" +
-        "- Then briefly mention the most important behavior or code changed.\n" +
-        '- End with verification, or clearly say "not run" if you did not verify.\n' +
-        "- Avoid file-by-file dumps and changelog-style recaps."
+        "- Add a line on the most important behavior or code that changed.\n" +
+        '- End with what you ran to verify, or clearly say "not run" if you didn\'t.\n' +
+        "- No file-by-file dumps or changelog-style recaps."
       )
     case "other":
       return undefined

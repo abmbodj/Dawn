@@ -11,7 +11,7 @@ export {
   startDeviceFlow,
   tryGhCliToken,
 } from "./auth/github-oauth"
-export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage } from "./bus/bus"
+export { type AgentEvent, type AgentEventHandler, Bus, type StepUsage, type TodoItem } from "./bus/bus"
 export {
   type CustomProvider,
   type DawnConfig,
@@ -92,6 +92,7 @@ export {
   createTools,
   type RepoOverviewOptions,
   type ToolContext,
+  toolPreview,
   toolTitle,
 } from "./tools/index"
 export { capLine, truncateMiddle } from "./tools/truncate"

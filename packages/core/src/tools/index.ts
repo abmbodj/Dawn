@@ -101,8 +101,36 @@ export function toolTitle(toolName: string, input: any): string {
       return String(input?.pattern ?? "")
     case "ls":
       return String(input?.path ?? ".")
+    case "todo_write": {
+      const active = Array.isArray(input?.todos)
+        ? input.todos.find((t: any) => t?.status === "in_progress")
+        : undefined
+      return active?.content ?? "task list"
+    }
     default:
       return ""
+  }
+}
+
+/**
+ * Capped diff/content preview for a tool call — shared by the permission dialog
+ * and the TUI activity feed so both show the same thing.
+ */
+export function toolPreview(toolName: string, input: any): string | undefined {
+  switch (toolName) {
+    case "edit":
+      return `${capLines(`- ${input?.oldString ?? ""}`, 6, 80)}\n${capLines(`+ ${input?.newString ?? ""}`, 6, 80)}`
+    case "write":
+      return capLines(
+        String(input?.content ?? "")
+          .split("\n")
+          .map((l) => `+ ${l}`)
+          .join("\n"),
+        8,
+        80,
+      )
+    default:
+      return undefined
   }
 }
 
@@ -186,7 +214,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       const ok = await gate.ask({
         tool: "write",
         title: `${exists ? "Overwrite" : "Create"} ${relative(cwd, abs)}`,
-        detail: capLines(content, 6, 80),
+        detail: toolPreview("write", { content }),
       })
       if (!ok) return DENIED
       fs.mkdirSync(path.dirname(abs), { recursive: true })
@@ -211,7 +239,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       const ok = await gate.ask({
         tool: "edit",
         title: `Edit ${relative(cwd, abs)}`,
-        detail: capLines(`- ${oldString}`, 4, 80) + "\n" + capLines(`+ ${newString}`, 4, 80),
+        detail: toolPreview("edit", { oldString, newString }),
       })
       if (!ok) return DENIED
       fs.writeFileSync(abs, updated)
@@ -363,7 +391,33 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
-  return { repo_overview, read, write, edit, bash, grep, glob, ls, ask_user, exit_plan_mode }
+  const todo_write = tool({
+    description:
+      "Record or update the task checklist for the current multi-step work. Pass the FULL list every call (it replaces the previous one). " +
+      "content = short imperative ('Add --json flag'); activeForm = its present-continuous form ('Adding --json flag'); keep exactly one item in_progress. " +
+      "Use this for tasks with 3+ distinct steps and update it as you finish each step. Skip it for trivial or single-step work.",
+    inputSchema: z.object({
+      todos: z
+        .array(
+          z.object({
+            content: z.string(),
+            activeForm: z.string(),
+            status: z.enum(["pending", "in_progress", "completed"]),
+          }),
+        )
+        .min(1),
+    }),
+    execute: async ({ todos }) => {
+      ctx.bus.emit({ type: "todos", items: todos })
+      const done = todos.filter((t) => t.status === "completed").length
+      const active = todos.find((t) => t.status === "in_progress")
+      return active
+        ? `Tracking ${todos.length} tasks (${done} done). Now: ${active.content}`
+        : `Tracking ${todos.length} tasks (${done} done).`
+    },
+  })
+
+  return { repo_overview, read, write, edit, bash, grep, glob, ls, ask_user, exit_plan_mode, todo_write }
 }
 
 function topLevelEntries(cwd: string, maxEntries: number): string {
