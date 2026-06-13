@@ -10,7 +10,7 @@ import type { ContextMode } from "../context/types"
 import type { ContextWorkingSet } from "../context/working-set"
 import type { PermissionGate } from "../permission/permission"
 import { applyEdit } from "./edit"
-import { capLine, truncateMiddle } from "./truncate"
+import { capLine, capLines, truncateMiddle } from "./truncate"
 
 export interface ToolContext {
   cwd: string
@@ -184,7 +184,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       const ok = await gate.ask({
         tool: "write",
         title: `${exists ? "Overwrite" : "Create"} ${relative(cwd, abs)}`,
-        detail: truncateMiddle(content, 2000),
+        detail: capLines(content, 6, 80),
       })
       if (!ok) return DENIED
       fs.mkdirSync(path.dirname(abs), { recursive: true })
@@ -209,7 +209,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       const ok = await gate.ask({
         tool: "edit",
         title: `Edit ${relative(cwd, abs)}`,
-        detail: `- ${truncateMiddle(oldString, 600)}\n+ ${truncateMiddle(newString, 600)}`,
+        detail: capLines(`- ${oldString}`, 4, 80) + "\n" + capLines(`+ ${newString}`, 4, 80),
       })
       if (!ok) return DENIED
       fs.writeFileSync(abs, updated)

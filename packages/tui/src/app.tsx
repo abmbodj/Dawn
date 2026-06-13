@@ -278,14 +278,26 @@ function PermissionView({ pending }: { pending: PendingPermission }) {
   return (
     <box
       style={{ border: true, borderColor: theme.accent, padding: 1, flexDirection: "column" }}
-      title="permission"
+      title="allow this action?"
     >
       <text>
-        <span fg={theme.accent}>{`${pending.req.tool}: `}</span>
+        <span fg={theme.accent}>{`${pending.req.tool} `}</span>
         <span fg={theme.text}>{pending.req.title}</span>
       </text>
-      {pending.req.detail ? <text fg={theme.dim}>{pending.req.detail}</text> : null}
-      <text fg={theme.dim}>[y] allow once · [a] always for this tool · [n/Esc] deny</text>
+      {pending.req.detail ? (
+        <text fg={theme.dim} wrapMode="word">
+          {pending.req.detail}
+        </text>
+      ) : null}
+      <text fg={theme.dim}>{"─".repeat(30)}</text>
+      <text>
+        <span fg={theme.accent}>y</span>
+        <span fg={theme.dim}> allow once  </span>
+        <span fg={theme.accent}>a</span>
+        <span fg={theme.dim}> always  </span>
+        <span fg={theme.accent}>n</span>
+        <span fg={theme.dim}>/Esc deny</span>
+      </text>
     </box>
   )
 }

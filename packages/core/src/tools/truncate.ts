@@ -29,3 +29,14 @@ export function truncateMiddle(text: string, maxChars = 30_000): string {
 export function capLine(line: string, max = 2000): string {
   return line.length > max ? `${line.slice(0, max)}…` : line
 }
+
+/**
+ * Keep at most `maxLines` lines from `text`, each capped at `maxWidth` chars.
+ * Appends a summary if lines were omitted. Used for permission-dialog previews.
+ */
+export function capLines(text: string, maxLines = 6, maxWidth = 80): string {
+  const lines = text.split("\n")
+  const kept = lines.slice(0, maxLines).map((l) => (l.length > maxWidth ? `${l.slice(0, maxWidth)}…` : l))
+  if (lines.length > maxLines) kept.push(`[… ${lines.length - maxLines} more lines]`)
+  return kept.join("\n")
+}
