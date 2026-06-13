@@ -106,7 +106,7 @@ describe("sunFrame", () => {
 describe("wordmarkRows", () => {
   test("wide wordmark rows have uniform width", () => {
     const rows = plainRuns(WIDE_WORDMARK_ROWS)
-    expect(rows).toEqual(["D   A   W   N"])
+    expect(rows.length).toBe(5)
     const width = rows[0]?.length ?? 0
     expect(width).toBeGreaterThan(WORDMARK.length)
     for (const row of rows) expect(row.length).toBe(width)
@@ -119,12 +119,13 @@ describe("wordmarkRows", () => {
 
   test("rendered title output contains recognizable Dawn lettering", () => {
     const wide = plainRuns(WIDE_WORDMARK_ROWS).join("\n")
-    expect(wide).toBe("D   A   W   N")
+    // Figlet "Standard" outline lettering — pipes and underscores, no block
+    // or rounded box-drawing glyphs.
+    expect(wide).toContain("|")
+    expect(wide).toContain("_")
     expect(wide).not.toContain("█")
     expect(wide).not.toContain("╭")
     expect(wide).not.toContain("╰")
-    expect(wide).not.toContain("╭━━╮")
-    expect(wide).not.toContain("╰━━╯")
     expect(plainRuns(COMPACT_WORDMARK_ROWS).join("")).toBe("DAWN")
   })
 

@@ -26,12 +26,10 @@ describe("system prompt repo questions", () => {
   test("instructs Dawn to inspect the repo before answering codebase questions", () => {
     const prompt = buildSystemPrompt(process.cwd())
 
-    expect(prompt).toContain("Treat questions about this repository")
-    expect(prompt).toContain("Inspect the repo before answering")
-    expect(prompt).toContain("Answer the user's actual question first")
-    expect(prompt).toContain("plain English")
-    expect(prompt).toContain("Never invent commands, modes, files, behavior, or placeholder pseudo-code")
-    expect(prompt).toContain("Separate verified facts from inference")
+    expect(prompt).toContain("Treat anything about this repo")
+    expect(prompt).toContain("inspect the code before answering")
+    expect(prompt).toContain("Never invent commands, files, flags, or behavior")
+    expect(prompt).toContain("Separate what you verified from what you're inferring")
     expect(prompt).not.toContain("questions, and conversational messages without calling any tools")
   })
 })

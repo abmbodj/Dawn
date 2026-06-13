@@ -25,9 +25,9 @@ describe("buildAnswerStyleGuidance", () => {
   test("builds compact guidance for question answers", () => {
     const guidance = buildAnswerStyleGuidance("How does the savings box change as we work?")
 
-    expect(guidance).toContain("First sentence: give the direct answer in plain English.")
-    expect(guidance).toContain("Do not lead with type names, interfaces, or placeholder pseudo-code.")
-    expect(guidance).toContain("Do not invent commands, modes, files, or behavior.")
+    expect(guidance).toContain("Lead with the direct answer in plain English")
+    expect(guidance).toContain("Don't lead with type names, interfaces, or placeholder pseudo-code.")
+    expect(guidance).toContain("Don't invent commands, modes, files, or behavior.")
     expect(guidance?.length ?? 0).toBeLessThan(500)
   })
 
@@ -35,8 +35,8 @@ describe("buildAnswerStyleGuidance", () => {
     const guidance = buildAnswerStyleGuidance("fix the savings color bug")
 
     expect(guidance).toContain("Start with the outcome in one sentence.")
-    expect(guidance).toContain('End with verification, or clearly say "not run"')
-    expect(guidance).toContain("Avoid file-by-file dumps")
+    expect(guidance).toContain('End with what you ran to verify, or clearly say "not run"')
+    expect(guidance).toContain("No file-by-file dumps")
     expect(guidance?.length ?? 0).toBeLessThan(400)
   })
 

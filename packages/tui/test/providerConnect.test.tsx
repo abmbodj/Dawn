@@ -17,8 +17,27 @@ const deviceFlow: DeviceFlowStart = {
   interval: 5,
 }
 
+// The github-copilot flow is async (detect gh CLI → start device flow → open
+// browser), so pump microtasks and re-render until the expected text lands,
+// instead of guessing a fixed number of flushes.
+async function flushUntil(
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  predicate: (frame: string) => boolean,
+  tries = 50,
+): Promise<string> {
+  let frame = setup.captureCharFrame()
+  for (let i = 0; i < tries && !predicate(frame); i++) {
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await setup.flush()
+    frame = setup.captureCharFrame()
+  }
+  return frame
+}
+
 describe("ProviderConnect", () => {
-  test("shows GitHub token fallback when OAuth client id is not configured", async () => {
+  test("falls back to token paste when no OAuth client id is configured", async () => {
     reactActEnv.IS_REACT_ACT_ENVIRONMENT = true
     const setup = await createTestRenderer({ width: 90, height: 10 })
     const root = createRoot(setup.renderer)
@@ -29,17 +48,15 @@ describe("ProviderConnect", () => {
           createElement(ProviderConnect, {
             provider: SETUP_PROVIDERS[0],
             config: { providers: {} },
+            tryGhCliTokenFn: async () => undefined,
             onConnected: () => {},
             onCancel: () => {},
           }),
         )
       })
 
-      await setup.flush()
-
-      const frame = setup.captureCharFrame()
-      expect(frame).toContain("GitHub OAuth client id is not configured.")
-      expect(frame).toContain("DAWN_GITHUB_CLIENT_ID")
+      const frame = await flushUntil(setup, (f) => f.includes("GitHub Copilot token"))
+      expect(frame).toContain("Or paste an existing GitHub Copilot token below.")
       expect(frame).toContain("GITHUB_COPILOT_TOKEN")
     } finally {
       act(() => {
@@ -52,7 +69,7 @@ describe("ProviderConnect", () => {
 
   test("starts GitHub OAuth when a client id is configured", async () => {
     reactActEnv.IS_REACT_ACT_ENVIRONMENT = true
-    const setup = await createTestRenderer({ width: 90, height: 12 })
+    const setup = await createTestRenderer({ width: 90, height: 16 })
     const root = createRoot(setup.renderer)
 
     try {
@@ -64,22 +81,19 @@ describe("ProviderConnect", () => {
             openUrl: async () => true,
             startDeviceFlowFn: async () => deviceFlow,
             pollForTokenFn: async () => new Promise<string>(() => {}),
+            tryGhCliTokenFn: async () => undefined,
+            copyToClipboardFn: async () => true,
             onConnected: () => {},
             onCancel: () => {},
           }),
         )
       })
 
-      await act(async () => {
-        await Promise.resolve()
-        await Promise.resolve()
-      })
-      await setup.flush()
-
-      const frame = setup.captureCharFrame()
+      const frame = await flushUntil(setup, (f) => f.includes("Your browser is open"))
       expect(frame).toContain("ABCD-1234")
-      expect(frame).toContain("Browser opened automatically.")
-      expect(frame).not.toContain("GitHub OAuth client id is not configured.")
+      expect(frame).toContain("Your browser is open. Enter the code below when prompted:")
+      // Auto-open path: don't ask the user to open the URL themselves.
+      expect(frame).not.toContain("Then enter this code:")
     } finally {
       act(() => {
         root.unmount()
@@ -91,7 +105,7 @@ describe("ProviderConnect", () => {
 
   test("shows manual browser guidance when opening GitHub fails", async () => {
     reactActEnv.IS_REACT_ACT_ENVIRONMENT = true
-    const setup = await createTestRenderer({ width: 90, height: 12 })
+    const setup = await createTestRenderer({ width: 90, height: 16 })
     const root = createRoot(setup.renderer)
 
     try {
@@ -103,22 +117,20 @@ describe("ProviderConnect", () => {
             openUrl: async () => false,
             startDeviceFlowFn: async () => deviceFlow,
             pollForTokenFn: async () => new Promise<string>(() => {}),
+            tryGhCliTokenFn: async () => undefined,
+            copyToClipboardFn: async () => true,
             onConnected: () => {},
             onCancel: () => {},
           }),
         )
       })
 
-      await act(async () => {
-        await Promise.resolve()
-        await Promise.resolve()
-      })
-      await setup.flush()
-
-      const frame = setup.captureCharFrame()
+      const frame = await flushUntil(setup, (f) => f.includes("Then enter this code:"))
+      // Manual path: surface the URL and the code, and don't claim the browser opened.
       expect(frame).toContain("github.com/login/device")
       expect(frame).toContain("ABCD-1234")
-      expect(frame).toContain("Open the URL manually")
+      expect(frame).toContain("Then enter this code:")
+      expect(frame).not.toContain("Your browser is open")
     } finally {
       act(() => {
         root.unmount()

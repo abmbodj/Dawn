@@ -232,6 +232,7 @@ function DiffLines({ preview }: { preview: string }) {
       {preview.split("\n").map((line, i) => {
         const color = line.startsWith("+") ? theme.toolOk : line.startsWith("-") ? theme.toolErr : theme.dim
         return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: preview lines are positional by nature
           <text key={i} fg={color}>{`  ${line}`}</text>
         )
       })}
@@ -355,9 +356,9 @@ function PermissionView({ pending }: { pending: PendingPermission }) {
       <text fg={theme.dim}>{"─".repeat(30)}</text>
       <text>
         <span fg={theme.accent}>y</span>
-        <span fg={theme.dim}> allow once  </span>
+        <span fg={theme.dim}> allow once </span>
         <span fg={theme.accent}>a</span>
-        <span fg={theme.dim}> always  </span>
+        <span fg={theme.dim}> always </span>
         <span fg={theme.accent}>n</span>
         <span fg={theme.dim}>/Esc deny</span>
       </text>
@@ -385,13 +386,7 @@ function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?
   )
 }
 
-function QuestionView({
-  pending,
-  selectedIndex,
-}: {
-  pending: PendingQuestion
-  selectedIndex: number
-}) {
+function QuestionView({ pending, selectedIndex }: { pending: PendingQuestion; selectedIndex: number }) {
   const { q } = pending
   return (
     <box
@@ -849,14 +844,11 @@ export function App(props: AppProps) {
     [runCommand],
   )
 
-  const applyPlanApproval = useCallback(
-    (index: number) => {
-      if (index === 0) setPermMode("acceptEdits")
-      else if (index === 1) setPermMode("normal")
-      // index 2 or -1: stay in plan mode
-    },
-    [],
-  )
+  const applyPlanApproval = useCallback((index: number) => {
+    if (index === 0) setPermMode("acceptEdits")
+    else if (index === 1) setPermMode("normal")
+    // index 2 or -1: stay in plan mode
+  }, [])
 
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") quit()
@@ -1072,9 +1064,7 @@ export function App(props: AppProps) {
       </box>
 
       <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
-        {footer.modeChip ? (
-          <text fg={theme.accent}>{`[${footer.modeChip.text}] `}</text>
-        ) : null}
+        {footer.modeChip ? <text fg={theme.accent}>{`[${footer.modeChip.text}] `}</text> : null}
         {footer.mode === "narrow" ? (
           <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
         ) : (

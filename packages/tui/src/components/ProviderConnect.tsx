@@ -1,7 +1,7 @@
 import {
+  copyToClipboard,
   type DawnConfig,
   type DeviceFlowStart,
-  copyToClipboard,
   openExternalUrl,
   pollForToken,
   resolveGithubClientId,

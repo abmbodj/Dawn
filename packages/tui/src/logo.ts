@@ -177,17 +177,22 @@ export const RISE_DURATION_MS = 1200
 export const WORDMARK = "DAWN"
 export const TAGLINE = "reasoning, not memory"
 
-export const WIDE_WORDMARK_ROWS: Run[][] = [
-  [
-    { text: "D", color: "#FFF3C4" },
-    { text: "   ", color: "#FFF3C4" },
-    { text: "A", color: "#FFF3C4" },
-    { text: "   ", color: "#FFF3C4" },
-    { text: "W", color: "#FFB45C" },
-    { text: "   ", color: "#FFB45C" },
-    { text: "N", color: "#FF8C42" },
-  ],
+// Classic figlet "Standard" lettering for DAWN, colored top→bottom with the
+// sun gradient (light core → warm rim). Rows are padded to a uniform width so
+// the centered column in <Logo /> stays aligned.
+const DAWN_FIGLET: Array<[string, string]> = [
+  [" ____    _    __        __ _   _", "#FFF3C4"],
+  ["|  _ \\  / \\   \\ \\  /\\  / /| \\ | |", "#FFC36B"],
+  ["| | | |/ _ \\   \\ \\/  \\/ / |  \\| |", "#FFB45C"],
+  ["| |_| / ___ \\   \\  /\\  /  | |\\  |", "#FF8C42"],
+  ["|____/_/   \\_\\   \\/  \\/   |_| \\_|", "#E8501A"],
 ]
+
+const DAWN_FIGLET_WIDTH = Math.max(...DAWN_FIGLET.map(([text]) => text.length))
+
+export const WIDE_WORDMARK_ROWS: Run[][] = DAWN_FIGLET.map(([text, color]) => [
+  { text: text.padEnd(DAWN_FIGLET_WIDTH), color },
+])
 
 export const COMPACT_WORDMARK_ROWS: Run[][] = [
   [
