@@ -30,6 +30,13 @@ export const SETUP_PROVIDERS: [ProviderOption, ...ProviderOption[]] = [
     envVar: "GITHUB_COPILOT_TOKEN",
   },
   {
+    id: "openrouter",
+    label: "OpenRouter  (free models · one key, 300+ models)",
+    url: "openrouter.ai/keys",
+    defaultModel: "openrouter/deepseek/deepseek-chat-v3-0324:free",
+    envVar: "OPENROUTER_API_KEY",
+  },
+  {
     id: "groq",
     label: "Groq  (free — no credit card)",
     url: "console.groq.com",

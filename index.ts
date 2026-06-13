@@ -24,6 +24,7 @@ import {
   startDeviceFlow,
   tryGhCliToken,
   withOllama,
+  withOpenRouter,
 } from "@dawn/core"
 
 const VERSION = "0.1.0"
@@ -250,7 +251,7 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
 async function modelsCommand(filter: string | undefined, cwd: string): Promise<void> {
   const config = loadConfig(cwd)
   const catalog = await loadCatalog()
-  await withOllama(catalog)
+  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
   for (const provider of connectedProviders(catalog, config)) {
     if (filter && provider.id !== filter) continue
     for (const model of Object.values(catalog[provider.id]?.models ?? {})) {
@@ -269,7 +270,7 @@ async function oneShot(flags: Flags): Promise<void> {
   }
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
-  await withOllama(catalog)
+  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
   const bus = new Bus()
   const gate = new PermissionGate()
   gate.preAllow("read")
@@ -327,7 +328,7 @@ async function oneShot(flags: Flags): Promise<void> {
 async function interactive(flags: Flags): Promise<void> {
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
-  await withOllama(catalog)
+  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
 
   const store = new SessionStore()
   const contextStore = new ContextStore()

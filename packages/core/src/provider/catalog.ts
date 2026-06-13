@@ -465,12 +465,20 @@ export const FALLBACK_CATALOG: Catalog = {
   },
 
   // ── OpenRouter ────────────────────────────────────────────────────────────
+  // Minimal fallback — withOpenRouter() replaces this at runtime with the full 300+ model list.
   openrouter: {
     id: "openrouter",
     name: "OpenRouter",
     env: ["OPENROUTER_API_KEY"],
     api: "https://openrouter.ai/api/v1",
     models: {
+      "deepseek/deepseek-chat-v3-0324:free": {
+        id: "deepseek/deepseek-chat-v3-0324:free",
+        name: "DeepSeek Chat V3 (free)",
+        cost: { input: 0, output: 0 },
+        limit: { context: 131_072, output: 16_384 },
+        tool_call: true,
+      },
       "meta-llama/llama-4-maverick": {
         id: "meta-llama/llama-4-maverick",
         name: "Llama 4 Maverick",

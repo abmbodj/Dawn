@@ -78,6 +78,7 @@ export {
   localModelFit,
 } from "./provider/local-fit"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
+export { withOpenRouter } from "./provider/openrouter"
 export {
   connectedProviders,
   type ProviderStatus,

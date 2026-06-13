@@ -19,8 +19,10 @@ import {
   formatBytes,
   hasConfiguredModel,
   localModelFit,
+  parseModelRef,
   resetDawnData,
   toolTitle,
+  withOpenRouter,
 } from "@dawn/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
@@ -537,6 +539,7 @@ export function App(props: AppProps) {
   const { agent, store, catalog, config, gate, asker } = props
   const { width } = useTerminalDimensions()
   const [needsSetup, setNeedsSetup] = useState(() => !hasConfiguredModel(catalog, config))
+  const [catalogVersion, setCatalogVersion] = useState(0)
   const [session, setSession] = useState(props.session)
   const [items, dispatch] = useReducer(reduceItems, undefined, () => itemsFromMessages(agent.messages))
   const [busy, setBusy] = useState(false)
@@ -579,8 +582,11 @@ export function App(props: AppProps) {
       } catch {
         setNeedsSetup(false)
       }
+      if (parseModelRef(ref).providerId === "openrouter") {
+        withOpenRouter(catalog).then(() => setCatalogVersion((v) => v + 1))
+      }
     },
-    [agent],
+    [agent, catalog],
   )
 
   useEffect(() => {
@@ -785,13 +791,19 @@ export function App(props: AppProps) {
     setConnect({ provider })
   }, [])
 
-  const handleConnected = useCallback((provider: ProviderOption) => {
-    setConnect(null)
-    setConnectEpoch((e) => e + 1)
-    dispatch({ type: "push", item: { kind: "info", text: `connected ${provider.id}` } })
-    setPickerProvider(provider.id)
-    setPickerOpen(true)
-  }, [])
+  const handleConnected = useCallback(
+    (provider: ProviderOption) => {
+      setConnect(null)
+      setConnectEpoch((e) => e + 1)
+      dispatch({ type: "push", item: { kind: "info", text: `connected ${provider.id}` } })
+      setPickerProvider(provider.id)
+      setPickerOpen(true)
+      if (provider.id === "openrouter") {
+        withOpenRouter(catalog).then(() => setCatalogVersion((v) => v + 1))
+      }
+    },
+    [catalog],
+  )
 
   const handleConnectCancel = useCallback(() => {
     setConnect(null)
@@ -1031,6 +1043,7 @@ export function App(props: AppProps) {
       ) : null}
       {pickerOpen ? (
         <ModelPicker
+          key={catalogVersion}
           catalog={catalog}
           config={config}
           current={modelRef}
