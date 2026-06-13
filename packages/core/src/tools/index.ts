@@ -8,6 +8,7 @@ import type { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
 import type { ContextMode } from "../context/types"
 import type { ContextWorkingSet } from "../context/working-set"
+import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
 import { applyEdit } from "./edit"
 import { capLine, capLines, truncateMiddle } from "./truncate"
@@ -16,6 +17,7 @@ export interface ToolContext {
   cwd: string
   gate: PermissionGate
   bus: Bus
+  asker?: Asker
   contextStore?: ContextStore
   workingSet?: ContextWorkingSet
   contextMode?: ContextMode
@@ -319,7 +321,49 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
-  return { repo_overview, read, write, edit, bash, grep, glob, ls }
+  const ask_user = tool({
+    description:
+      "Ask the user a multiple-choice question to resolve a decision only they can make. " +
+      "Use sparingly — only when the right path is genuinely ambiguous and acting without input would be risky.",
+    inputSchema: z.object({
+      question: z.string().describe("The question to ask the user"),
+      options: z.array(z.string()).min(2).max(9).describe("The choices to present (2–9 items)"),
+    }),
+    execute: async ({ question, options }) => {
+      const index = await ctx.asker?.ask({
+        kind: "ask",
+        question,
+        options: options.map((label) => ({ label })),
+      })
+      if (index === undefined || index === -1) return "User dismissed the question."
+      return options[index] ?? "User dismissed the question."
+    },
+  })
+
+  const exit_plan_mode = tool({
+    description:
+      "Call this tool only while in plan mode, after you have researched the task and presented a complete plan. " +
+      "It shows the plan to the user for approval before any files are modified.",
+    inputSchema: z.object({
+      plan: z.string().describe("The complete plan to present for user approval"),
+    }),
+    execute: async ({ plan }) => {
+      const index = await ctx.asker?.ask({
+        kind: "plan-approval",
+        question: "Ready to proceed with this plan?",
+        detail: plan,
+        options: [
+          { label: "Yes — auto-accept edits", description: "Proceed and auto-approve all file edits" },
+          { label: "Yes — approve each edit", description: "Proceed but prompt before each file change" },
+          { label: "No — keep planning", description: "Stay in plan mode and refine the plan" },
+        ],
+      })
+      if (index === 0 || index === 1) return "Approved. You may now make changes."
+      return "Stay in plan mode and refine the plan."
+    },
+  })
+
+  return { repo_overview, read, write, edit, bash, grep, glob, ls, ask_user, exit_plan_mode }
 }
 
 function topLevelEntries(cwd: string, maxEntries: number): string {

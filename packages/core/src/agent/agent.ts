@@ -14,6 +14,7 @@ import { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
 import type { ContextMode, ContextPlan, ContextPlanTotals, ContextStats, FileSummary } from "../context/types"
 import { ContextWorkingSet } from "../context/working-set"
+import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
 import type { Catalog } from "../provider/catalog"
 import { normalizeModelRef, parseModelRef } from "../provider/catalog"
@@ -32,6 +33,7 @@ export interface AgentOptions {
   modelRef: string
   bus: Bus
   gate: PermissionGate
+  asker?: Asker
   catalog: Catalog
   config: DawnConfig
   store?: SessionStore
@@ -92,6 +94,7 @@ export class DawnAgent {
       cwd: opts.cwd,
       gate: opts.gate,
       bus: opts.bus,
+      asker: opts.asker,
       contextStore: this.contextStore,
       workingSet: this.workingSet,
       contextMode: this.contextMode,
@@ -184,7 +187,11 @@ export class DawnAgent {
     this.busy = true
     const { bus, opts } = this
 
-    this.messages.push({ role: "user", content: text })
+    const effectiveText =
+      opts.gate.mode === "plan"
+        ? `${text}\n\n<system-reminder>Plan mode is active. Do not edit files or run side-effecting commands. Research the task thoroughly, present a complete plan, then call exit_plan_mode for user approval.</system-reminder>`
+        : text
+    this.messages.push({ role: "user", content: effectiveText })
     this.persist()
     bus.emit({ type: "turn-start" })
 

@@ -378,11 +378,13 @@ describe("statusFooterParts", () => {
         modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
         usage,
         width: 140,
+        permMode: "normal",
       }),
     ).toEqual({
       mode: "wide",
       left: "Model: Groq · Llama 4 Scout",
       right: "Usage: 1.6k in / 28 out · Cache: 0 · Cost: $0.001",
+      modeChip: undefined,
     })
   })
 
@@ -395,10 +397,12 @@ describe("statusFooterParts", () => {
         usage,
         width: 140,
         showUsageBox: true,
+        permMode: "normal",
       }),
     ).toEqual({
       mode: "wide",
       left: "Model: Groq · Llama 4 Scout",
+      modeChip: undefined,
     })
   })
 
@@ -411,11 +415,13 @@ describe("statusFooterParts", () => {
         usage,
         width: 90,
         showUsageBox: true,
+        permMode: "normal",
       }),
     ).toEqual({
       mode: "medium",
       left: "Model: Groq · Llama 4 Scout",
       right: "1.6k in / 28 out · $0.001",
+      modeChip: undefined,
     })
   })
 
@@ -426,6 +432,7 @@ describe("statusFooterParts", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
       usage,
       width: 48,
+      permMode: "normal",
     })
 
     expect(footer.mode).toBe("narrow")
@@ -443,7 +450,44 @@ describe("statusFooterParts", () => {
         modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
         usage,
         width: 48,
+        permMode: "normal",
       }),
-    ).toEqual({ mode: "narrow", left: "Working... Esc to stop" })
+    ).toEqual({ mode: "narrow", left: "Working... Esc to stop", modeChip: undefined })
+  })
+
+  test("plan mode produces a PLAN modeChip", () => {
+    const footer = statusFooterParts({
+      busy: false,
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+      usage,
+      width: 140,
+      permMode: "plan",
+    })
+    expect(footer.modeChip).toEqual({ text: "PLAN", accent: true })
+  })
+
+  test("acceptEdits mode produces an AUTO-EDIT modeChip", () => {
+    const footer = statusFooterParts({
+      busy: false,
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+      usage,
+      width: 140,
+      permMode: "acceptEdits",
+    })
+    expect(footer.modeChip).toEqual({ text: "AUTO-EDIT", accent: true })
+  })
+
+  test("normal mode produces no modeChip", () => {
+    const footer = statusFooterParts({
+      busy: false,
+      catalog,
+      modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+      usage,
+      width: 140,
+      permMode: "normal",
+    })
+    expect(footer.modeChip).toBeUndefined()
   })
 })

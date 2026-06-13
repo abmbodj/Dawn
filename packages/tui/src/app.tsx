@@ -1,14 +1,17 @@
 import type {
   AgentEvent,
+  Asker,
   Catalog,
   DawnAgent,
   DawnConfig,
   ModelMessage,
   PermissionGate,
+  PermissionMode,
   PermissionRequest,
   SessionMeta,
   SessionStore,
   UsageTotals,
+  UserQuestion,
 } from "@dawn/core"
 import {
   connectedProviders,
@@ -36,6 +39,7 @@ import {
   formatContextReport,
   formatSavingsReport,
   formatUsageReport,
+  type ModeChip,
   savingsBoxRows,
   statusFooterParts,
   type UsageBoxRow,
@@ -322,6 +326,42 @@ function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?
   )
 }
 
+function QuestionView({
+  pending,
+  selectedIndex,
+}: {
+  pending: PendingQuestion
+  selectedIndex: number
+}) {
+  const { q } = pending
+  return (
+    <box
+      style={{ border: true, borderColor: theme.accent, padding: 1, flexDirection: "column" }}
+      title={q.kind === "plan-approval" ? "plan ready for review" : "question"}
+    >
+      <text fg={theme.text}>{q.question}</text>
+      {q.detail ? (
+        <text fg={theme.dim} wrapMode="word">
+          {q.detail}
+        </text>
+      ) : null}
+      <text fg={theme.dim}>{"─".repeat(30)}</text>
+      {q.options.map((opt, i) => {
+        const selected = i === selectedIndex
+        return (
+          <text key={opt.label}>
+            <span fg={selected ? theme.accent : theme.dim}>{`${i + 1} `}</span>
+            <span fg={selected ? theme.accent : theme.text}>{opt.label}</span>
+            {opt.description ? <span fg={theme.dim}>{`  ${opt.description}`}</span> : null}
+          </text>
+        )
+      })}
+      <text fg={theme.dim}>{"─".repeat(30)}</text>
+      <text fg={theme.dim}>{"↑↓ navigate · 1–9 quick-pick · Enter select · Esc cancel"}</text>
+    </box>
+  )
+}
+
 function SlashCommandSuggestionsView({
   suggestions,
   selectedIndex,
@@ -424,11 +464,23 @@ export interface AppProps {
   catalog: Catalog
   config: DawnConfig
   gate: PermissionGate
+  asker: Asker
   animate: boolean
 }
 
+interface PendingQuestion {
+  q: UserQuestion
+  resolve: (index: number) => void
+}
+
+function cycleMode(current: PermissionMode): PermissionMode {
+  if (current === "normal") return "acceptEdits"
+  if (current === "acceptEdits") return "plan"
+  return "normal"
+}
+
 export function App(props: AppProps) {
-  const { agent, store, catalog, config, gate } = props
+  const { agent, store, catalog, config, gate, asker } = props
   const { width } = useTerminalDimensions()
   const [needsSetup, setNeedsSetup] = useState(() => !hasConfiguredModel(catalog, config))
   const [session, setSession] = useState(props.session)
@@ -445,6 +497,9 @@ export function App(props: AppProps) {
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
   const [dismissedCompletionValue, setDismissedCompletionValue] = useState<string | null>(null)
   const [modelRef, setModelRef] = useState(agent.modelRef)
+  const [permMode, setPermMode] = useState<PermissionMode>("normal")
+  const [question, setQuestion] = useState<PendingQuestion | null>(null)
+  const [questionSel, setQuestionSel] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
   const programmaticPromptValueRef = useRef<string | null>(null)
   const spinnerFrame = useSpinner(busy)
@@ -475,6 +530,10 @@ export function App(props: AppProps) {
   )
 
   useEffect(() => {
+    gate.setMode(permMode)
+  }, [gate, permMode])
+
+  useEffect(() => {
     const unsubscribe = agent.bus.subscribe((event) => {
       dispatch({ type: "agent", event })
       if (event.type === "turn-start") setBusy(true)
@@ -493,11 +552,25 @@ export function App(props: AppProps) {
           })
         }),
     )
+    asker.setHandler(
+      (q) =>
+        new Promise((resolve) => {
+          setQuestion({
+            q,
+            resolve: (index) => {
+              setQuestion(null)
+              setQuestionSel(0)
+              resolve(index)
+            },
+          })
+        }),
+    )
     return () => {
       unsubscribe()
       gate.setHandler(undefined)
+      asker.setHandler(undefined)
     }
-  }, [agent, gate, session.id, store])
+  }, [agent, asker, gate, session.id, store])
 
   const quit = useCallback(() => {
     agent.close()
@@ -685,7 +758,7 @@ export function App(props: AppProps) {
   )
 
   const empty = items.length === 0
-  const focusInput = !pickerOpen && !permission && !confirmModel && !connect
+  const focusInput = !pickerOpen && !permission && !confirmModel && !connect && !question
   const commandSuggestions = getSlashCommandSuggestions(promptValue)
   const completionOpen =
     focusInput && dismissedCompletionValue !== promptValue && commandSuggestions.length > 0
@@ -693,7 +766,7 @@ export function App(props: AppProps) {
     commandSuggestions.length > 0 ? Math.min(selectedSuggestion, commandSuggestions.length - 1) : 0
   const selectedCommand = commandSuggestions[selectedSuggestionIndex]
   const showUsageBox = footerMode(width) === "wide"
-  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width, showUsageBox })
+  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width, permMode, showUsageBox })
   const usageRows = showUsageBox ? usageBoxRows({ usage, context: agent.contextStats() }) : []
   const savingsRows = showUsageBox
     ? savingsBoxRows({ usage, context: agent.contextStats(), catalog, modelRef })
@@ -717,8 +790,32 @@ export function App(props: AppProps) {
     [runCommand],
   )
 
+  const applyPlanApproval = useCallback(
+    (index: number) => {
+      if (index === 0) setPermMode("acceptEdits")
+      else if (index === 1) setPermMode("normal")
+      // index 2 or -1: stay in plan mode
+    },
+    [],
+  )
+
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") quit()
+
+    // Shift+Tab cycles mode (no overlays open)
+    if ((key.name === "tab" && key.shift) || key.name === "backtab") {
+      if (!permission && !confirmModel && !question && !pickerOpen && !connect) {
+        key.preventDefault()
+        key.stopPropagation()
+        setPermMode((m) => {
+          const next = cycleMode(m)
+          gate.setMode(next)
+          return next
+        })
+        return
+      }
+    }
+
     if (permission) {
       if (key.name === "y") permission.resolve("allow")
       else if (key.name === "a") permission.resolve("always")
@@ -735,6 +832,45 @@ export function App(props: AppProps) {
       }
       return
     }
+    if (question) {
+      const optCount = question.q.options.length
+      if (key.name === "down") {
+        key.preventDefault()
+        key.stopPropagation()
+        setQuestionSel((s) => (s + 1) % optCount)
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setQuestionSel((s) => (s - 1 + optCount) % optCount)
+        return
+      }
+      // Number quick-pick (1–9)
+      const num = Number(key.name)
+      if (!Number.isNaN(num) && num >= 1 && num <= optCount) {
+        key.preventDefault()
+        key.stopPropagation()
+        const chosen = num - 1
+        if (question.q.kind === "plan-approval") applyPlanApproval(chosen)
+        question.resolve(chosen)
+        return
+      }
+      if (isEnterKey(key.name)) {
+        key.preventDefault()
+        key.stopPropagation()
+        if (question.q.kind === "plan-approval") applyPlanApproval(questionSel)
+        question.resolve(questionSel)
+        return
+      }
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        question.resolve(-1)
+        return
+      }
+      return
+    }
     if (completionOpen && selectedCommand) {
       if (key.name === "down") {
         key.preventDefault()
@@ -748,7 +884,7 @@ export function App(props: AppProps) {
         setSelectedSuggestion((index) => (index - 1 + commandSuggestions.length) % commandSuggestions.length)
         return
       }
-      if (key.name === "tab") {
+      if (key.name === "tab" && !key.shift) {
         key.preventDefault()
         key.stopPropagation()
         fillSuggestion(selectedCommand)
@@ -820,6 +956,7 @@ export function App(props: AppProps) {
         </>
       ) : null}
 
+      {question ? <QuestionView pending={question} selectedIndex={questionSel} /> : null}
       {permission ? <PermissionView pending={permission} /> : null}
       {confirmModel ? (
         <ModelFitWarning modelRef={confirmModel.ref} sizeBytes={confirmModel.sizeBytes} />
@@ -876,6 +1013,9 @@ export function App(props: AppProps) {
       </box>
 
       <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
+        {footer.modeChip ? (
+          <text fg={theme.accent}>{`[${footer.modeChip.text}] `}</text>
+        ) : null}
         {footer.mode === "narrow" ? (
           <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
         ) : (

@@ -46,5 +46,5 @@ export function formatSlashCommandHelp(): string {
   return `Commands:
 ${commands}
 Autocomplete: type /, Up/Down navigate, Tab complete, Enter run
-Keys: Esc interrupts a running turn or closes a picker · Ctrl+C quits`
+Keys: Shift+Tab cycles mode (normal / auto-edit / plan) · Esc interrupts a running turn or closes a picker · Ctrl+C quits`
 }

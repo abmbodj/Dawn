@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import {
+  Asker,
   Bus,
   buildRepoIndex,
   type Catalog,
@@ -336,11 +337,13 @@ async function interactive(flags: Flags): Promise<void> {
 
   const bus = new Bus()
   const gate = new PermissionGate()
+  const asker = new Asker()
   const agent = new DawnAgent({
     cwd: flags.cwd,
     modelRef: flags.model ?? pickDefaultModel(catalog, config),
     bus,
     gate,
+    asker,
     catalog,
     config,
     store,
@@ -352,7 +355,7 @@ async function interactive(flags: Flags): Promise<void> {
   })
 
   const { launchTui } = await import("@dawn/tui")
-  await launchTui({ agent, store, session, catalog, config, gate })
+  await launchTui({ agent, store, session, catalog, config, gate, asker })
 }
 
 async function main(): Promise<void> {

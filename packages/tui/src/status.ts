@@ -4,15 +4,28 @@ import {
   type ContextPlanTotals,
   type ContextStats,
   parseModelRef,
+  type PermissionMode,
   type UsageTotals,
 } from "@dawn/core"
 
 export type FooterMode = "wide" | "medium" | "narrow"
 
+export interface ModeChip {
+  text: string
+  accent: boolean
+}
+
 export interface FooterParts {
   mode: FooterMode
   left: string
   right?: string
+  modeChip?: ModeChip
+}
+
+function buildModeChip(permMode: PermissionMode): ModeChip | undefined {
+  if (permMode === "plan") return { text: "PLAN", accent: true }
+  if (permMode === "acceptEdits") return { text: "AUTO-EDIT", accent: true }
+  return undefined
 }
 
 export interface UsageBoxRow {
@@ -234,27 +247,28 @@ export function savingsBoxRows(args: {
   ]
 }
 
-export function // todo: implement plan mode toggle with tab
-statusFooterParts(args: {
+export function statusFooterParts(args: {
   busy: boolean
   catalog: Catalog
   modelRef: string
   usage: UsageTotals
   width: number
+  permMode: PermissionMode
   showUsageBox?: boolean
 }): FooterParts {
   const mode = footerMode(args.width)
   const cost = formatCost(args.usage.cost)
   const showUsageInFooter = !(args.showUsageBox && mode === "wide")
+  const modeChip = buildModeChip(args.permMode)
 
   if (args.busy) {
     if (mode === "narrow") {
-      return { mode, left: "Working... Esc to stop" }
+      return { mode, left: "Working... Esc to stop", modeChip }
     }
     if (showUsageInFooter) {
-      return { mode, left: "Working... Esc to stop", right: formatStatusUsage(args.usage, mode) }
+      return { mode, left: "Working... Esc to stop", right: formatStatusUsage(args.usage, mode), modeChip }
     }
-    return { mode, left: "Working... Esc to stop" }
+    return { mode, left: "Working... Esc to stop", modeChip }
   }
 
   if (mode === "narrow") {
@@ -264,6 +278,7 @@ statusFooterParts(args: {
         `Model: ${modelLabel(args.catalog, args.modelRef, { includeProvider: false })} · ${cost}`,
         args.width - 2,
       ),
+      modeChip,
     }
   }
 
@@ -271,6 +286,7 @@ statusFooterParts(args: {
     return {
       mode,
       left: truncateEnd(`Model: ${modelLabel(args.catalog, args.modelRef)}`, args.width - 2),
+      modeChip,
     }
   }
 
@@ -280,6 +296,7 @@ statusFooterParts(args: {
     mode,
     left: truncateEnd(`Model: ${modelLabel(args.catalog, args.modelRef)}`, maxLeft),
     right,
+    modeChip,
   }
 }
 

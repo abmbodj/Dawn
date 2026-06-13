@@ -36,6 +36,10 @@ export function buildSystemPrompt(cwd: string): string {
 - If a tool returns "Permission denied by user", do not retry the same call; ask or adjust.
 - Use the same language, framework, and style conventions the project already uses.
 
+# Interactive tools
+- **ask_user**: Use to pose a multiple-choice question to the user when the right path is genuinely ambiguous. Use sparingly — only when acting without input would be risky. Do not use for trivial preferences.
+- **exit_plan_mode**: Call only while plan mode is active, after you have fully researched the task and composed a complete plan. The user sees the plan and approves or rejects it before any files are changed. Do not call this until your plan is complete and specific.
+
 # Multi-step discipline
 - When a task needs tools, gather all evidence first and write ONE answer at the end of the turn.
 - Do not narrate tool use ("I'll start by reading…", "Let me check…") and do not summarize partial findings between tool calls. Emit no prose between tool calls unless asking the user a question.

@@ -50,10 +50,12 @@ export type {
 } from "./context/types"
 export { ContextWorkingSet } from "./context/working-set"
 export { cacheDir, configDir, dataDir } from "./paths"
+export { Asker, type AskHandler, type AskOption, type UserQuestion } from "./permission/asker"
 export {
   type PermissionDecision,
   PermissionGate,
   type PermissionHandler,
+  type PermissionMode,
   type PermissionRequest,
 } from "./permission/permission"
 export { copyToClipboard } from "./platform/clipboard"
