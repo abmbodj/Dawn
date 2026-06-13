@@ -157,23 +157,33 @@ export function formatSavingsReport(args: {
   modelRef: string
 }): string {
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
+  const cacheReadPrice = modelCacheReadPrice(args.catalog, args.modelRef)
   const lines = [
     "Savings",
-    "Compared to: without Dawn context planning",
+    "Compared to: reading full files, no prompt caching",
     inputPrice === undefined
       ? "Pricing: unknown for current model"
-      : `Pricing: current model input at ${formatCost(inputPrice)} / 1M tokens`,
+      : `Pricing: input ${formatCost(inputPrice)} / 1M tokens` +
+          (cacheReadPrice !== undefined ? `, cache read ${formatCost(cacheReadPrice)} / 1M tokens` : ""),
   ]
 
   for (const scope of args.scopes) {
     const metrics = savingsMetrics(scope.usage.inputTokens, scope.context.estimatedSavedTokens, inputPrice)
+    const cacheDollarsSaved =
+      inputPrice !== undefined && cacheReadPrice !== undefined
+        ? (scope.usage.cachedInputTokens * (inputPrice - cacheReadPrice)) / 1_000_000
+        : undefined
     lines.push("")
     lines.push(`${scope.label}:`)
-    lines.push(`  saved: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
+    lines.push(`  saved: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens (summaries + trim)`)
     lines.push(`  input cut: ${metrics.savedPercent}%`)
     lines.push(`  Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
     lines.push(`  would send: ${formatTokens(metrics.wouldSendTokens)} input`)
     lines.push(`  est $ saved: ${metrics.estimatedCostSaved}`)
+    lines.push(
+      `  cache $ saved: ${cacheDollarsSaved === undefined ? "unknown" : formatCost(cacheDollarsSaved)}` +
+        (cacheDollarsSaved !== undefined && cacheReadPrice === undefined ? " (est)" : ""),
+    )
     lines.push(`  context plans: ${formatWholeTokens(scope.context.plans)}`)
     lines.push(
       `  context items: ${formatWholeTokens(scope.context.includedItems)} included / ` +
@@ -222,8 +232,14 @@ export function savingsBoxRows(args: {
   const wouldSendTokens = args.usage.inputTokens + savedTokens
   const savedPercent = wouldSendTokens ? Math.round((savedTokens / wouldSendTokens) * 100) : 0
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
+  const cacheReadPrice = modelCacheReadPrice(args.catalog, args.modelRef)
   const estimatedCostSaved = inputPrice === undefined ? undefined : (savedTokens * inputPrice) / 1_000_000
+  const cacheDollarsSaved =
+    inputPrice !== undefined && cacheReadPrice !== undefined
+      ? (args.usage.cachedInputTokens * (inputPrice - cacheReadPrice)) / 1_000_000
+      : undefined
   const hasSavings = savedTokens > 0
+  const hasCacheSavings = cacheDollarsSaved !== undefined && cacheDollarsSaved > 0
 
   return [
     {
@@ -243,7 +259,12 @@ export function savingsBoxRows(args: {
       value: estimatedCostSaved === undefined ? "unknown" : formatCost(estimatedCostSaved),
       tone: estimatedCostSaved && estimatedCostSaved > 0 ? "accent" : "dim",
     },
-    { label: "vs", value: "no planning", tone: "dim" },
+    {
+      label: "cache $",
+      value: cacheDollarsSaved === undefined ? "unknown" : formatCost(cacheDollarsSaved),
+      tone: hasCacheSavings ? "accent" : "dim",
+    },
+    { label: "vs", value: "full files + no cache", tone: "dim" },
   ]
 }
 
@@ -339,6 +360,19 @@ function modelInputPrice(catalog: Catalog, modelRef: string): number | undefined
     const { providerId, modelId } = parseModelRef(modelRef)
     const input = catalog[providerId]?.models?.[modelId]?.cost?.input
     return typeof input === "number" ? input : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function modelCacheReadPrice(catalog: Catalog, modelRef: string): number | undefined {
+  try {
+    const { providerId, modelId } = parseModelRef(modelRef)
+    const cost = catalog[providerId]?.models?.[modelId]?.cost as any
+    if (typeof cost?.cache_read === "number") return cost.cache_read
+    // Approximate: cache reads typically cost ~10% of input
+    if (typeof cost?.input === "number") return cost.input * 0.1
+    return undefined
   } catch {
     return undefined
   }

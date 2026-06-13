@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ModelMessage } from "ai"
 import { buildRequestMessages } from "../src/context/budget"
-import type { WorkingSetItem } from "../src/context/types"
+import type { FileSummary, WorkingSetItem } from "../src/context/types"
 
 interface ContextEvalFixture {
   name: string
@@ -44,6 +44,75 @@ describe("context planning eval fixtures", () => {
       expect(built.plan.skippedItems.length).toBeGreaterThan(0)
     })
   }
+})
+
+describe("substitution savings", () => {
+  test("summary standing in for a large file produces positive substitutionSavings", () => {
+    const largeFileContent = "x".repeat(8000) // ~2000 tokens
+    const summaryText = "TypeScript file, 8000 bytes. Defines foo, bar. Imports baz." // ~20 tokens
+
+    const summary: FileSummary = {
+      path: "src/large.ts",
+      hash: "abc123",
+      summary: summaryText,
+      symbols: ["foo", "bar"],
+      dependencies: ["baz"],
+      lastSummarizedAt: Date.now(),
+      tokenEstimate: Math.ceil(summaryText.length / 4),
+      sourceTokens: Math.ceil(largeFileContent.length / 4),
+    }
+
+    const messages: ModelMessage[] = [{ role: "user", content: "update the large file" }]
+
+    const built = buildRequestMessages({
+      system: "You are Dawn.",
+      messages,
+      summaries: [summary],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 8000 },
+    })
+
+    expect(built.plan.substitutionSavings).toBeGreaterThan(0)
+    expect(built.plan.substitutionSavings).toBe(summary.sourceTokens - summary.tokenEstimate)
+    // would-send = sent + savings; summary makes sent much smaller than naive full-file send
+    const wouldSendTokens = built.plan.totalEstimatedTokens + built.plan.savingsEstimate + built.plan.substitutionSavings
+    expect(wouldSendTokens).toBeGreaterThan(built.plan.totalEstimatedTokens)
+  })
+
+  test("substitutionSavings is zero when no summaries are included", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "hello" }]
+    const built = buildRequestMessages({
+      system: "You are Dawn.",
+      messages,
+      summaries: [],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 8000 },
+    })
+    expect(built.plan.substitutionSavings).toBe(0)
+  })
+
+  test("summary with sourceTokens <= tokenEstimate contributes zero substitutionSavings", () => {
+    const tinyFile = "x".repeat(40)
+    const summary: FileSummary = {
+      path: "src/tiny.ts",
+      hash: "xyz",
+      summary: tinyFile,
+      symbols: [],
+      dependencies: [],
+      lastSummarizedAt: Date.now(),
+      tokenEstimate: Math.ceil(tinyFile.length / 4),
+      sourceTokens: Math.ceil(tinyFile.length / 4), // same — no substitution benefit
+    }
+    const messages: ModelMessage[] = [{ role: "user", content: "check tiny" }]
+    const built = buildRequestMessages({
+      system: "You are Dawn.",
+      messages,
+      summaries: [summary],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 8000 },
+    })
+    expect(built.plan.substitutionSavings).toBe(0)
+  })
 })
 
 function fixture(name: string, query: string, mustKeep: string): ContextEvalFixture {

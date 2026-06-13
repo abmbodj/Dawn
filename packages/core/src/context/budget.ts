@@ -201,6 +201,7 @@ export function buildContextPlan(args: {
   includedItems?: ContextPlanItem[]
   skippedItems?: ContextPlanItem[]
   savingsEstimate: number
+  substitutionSavings: number
 }): ContextPlan {
   const totalEstimatedTokens =
     args.systemTokens + args.historyTokens + args.summaryTokens + args.fileTokens + args.toolResultTokens
@@ -217,6 +218,7 @@ export function buildContextPlan(args: {
     includedItems: args.includedItems ?? [],
     skippedItems: args.skippedItems ?? [],
     savingsEstimate: args.savingsEstimate,
+    substitutionSavings: args.substitutionSavings,
   }
 }
 
@@ -289,6 +291,8 @@ export function buildRequestMessages(args: {
   ]
   const skippedItems = [...summaries.trimmedDetails, ...history.trimmedDetails, ...working.trimmedDetails]
   const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens
+  // Tokens saved by sending a summary instead of reading the full source file
+  const substitutionSavings = summaries.kept.reduce((sum, s) => sum + Math.max(0, s.sourceTokens - s.tokenEstimate), 0)
   const plan = buildContextPlan({
     systemTokens,
     historyTokens: history.tokens,
@@ -300,6 +304,7 @@ export function buildRequestMessages(args: {
     includedItems,
     skippedItems,
     savingsEstimate,
+    substitutionSavings,
   })
 
   // Context message placed immediately before the latest user message so it

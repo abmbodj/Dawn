@@ -44,6 +44,7 @@ export class ContextStore {
         dependencies_json TEXT NOT NULL,
         last_summarized_at INTEGER NOT NULL,
         token_estimate INTEGER NOT NULL,
+        source_tokens INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (cwd, path)
       );
       CREATE TABLE IF NOT EXISTS context_plans (
@@ -53,6 +54,8 @@ export class ContextStore {
         json TEXT NOT NULL
       );
     `)
+    // Migrate existing DBs that pre-date source_tokens column
+    try { this.db.exec("ALTER TABLE file_summaries ADD COLUMN source_tokens INTEGER NOT NULL DEFAULT 0") } catch {}
   }
 
   replaceRepoIndex(cwd: string, entries: RepoIndexEntry[]): void {
@@ -145,8 +148,8 @@ export class ContextStore {
     this.db
       .query(
         `INSERT OR REPLACE INTO file_summaries
-         (cwd, path, hash, summary, symbols_json, dependencies_json, last_summarized_at, token_estimate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (cwd, path, hash, summary, symbols_json, dependencies_json, last_summarized_at, token_estimate, source_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         cwd,
@@ -157,6 +160,7 @@ export class ContextStore {
         JSON.stringify(summary.dependencies),
         summary.lastSummarizedAt,
         summary.tokenEstimate,
+        summary.sourceTokens,
       )
   }
 
@@ -197,16 +201,17 @@ export class ContextStore {
       if (!recorded) continue
       const plan = recorded.plan
       totals.plans += 1
-      totals.estimatedSavedTokens += plan.savingsEstimate
+      totals.estimatedSavedTokens += plan.savingsEstimate + (plan.substitutionSavings ?? 0)
       totals.plannedInputTokens += plan.totalEstimatedTokens
       totals.includedItems += plan.includedItems?.length ?? 0
       totals.skippedItems += plan.skippedItems?.length ?? plan.trimmedItems.length
 
-      if (!totals.highestSavingsPlan || plan.savingsEstimate > totals.highestSavingsPlan.savedTokens) {
+      const planTotalSavings = plan.savingsEstimate + (plan.substitutionSavings ?? 0)
+      if (!totals.highestSavingsPlan || planTotalSavings > totals.highestSavingsPlan.savedTokens) {
         totals.highestSavingsPlan = {
           sessionId: recorded.sessionId,
           ts: recorded.ts,
-          savedTokens: plan.savingsEstimate,
+          savedTokens: planTotalSavings,
           totalEstimatedTokens: plan.totalEstimatedTokens,
           budget: plan.budget,
           mode: plan.mode,
@@ -267,6 +272,8 @@ function rowToSummary(row: any): FileSummary {
     dependencies: JSON.parse(row.dependencies_json),
     lastSummarizedAt: row.last_summarized_at,
     tokenEstimate: row.token_estimate,
+    // source_tokens column added in migration; old rows default to 0
+    sourceTokens: row.source_tokens ?? 0,
   }
 }
 

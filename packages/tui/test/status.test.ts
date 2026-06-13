@@ -103,6 +103,7 @@ describe("formatContextReport", () => {
         ],
         skippedItems: [{ kind: "history", label: "history message", tokens: 1200, reason: "history budget" }],
         savingsEstimate: 1200,
+        substitutionSavings: 0,
       },
     }
 
@@ -227,7 +228,7 @@ describe("formatSavingsReport", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(report).toContain("Compared to: without Dawn context planning")
+    expect(report).toContain("Compared to: reading full files, no prompt caching")
     expect(report).toContain("session:")
     expect(report).toContain("saved: 1,200 tokens")
     expect(report).toContain("input cut: 29%")
@@ -330,7 +331,8 @@ describe("savingsBoxRows", () => {
       { label: "would send", value: "0 tokens" },
       { label: "sent", value: "0 tokens" },
       { label: "$ saved", value: "$0.000", tone: "dim" },
-      { label: "vs", value: "no planning", tone: "dim" },
+      { label: "cache $", value: "$0.000", tone: "dim" },
+      { label: "vs", value: "full files + no cache", tone: "dim" },
     ])
   })
 
@@ -354,7 +356,7 @@ describe("savingsBoxRows", () => {
     expect(rows).toContainEqual({ label: "would send", value: "4.2k tokens" })
     expect(rows).toContainEqual({ label: "sent", value: "3.0k tokens" })
     expect(rows).toContainEqual({ label: "$ saved", value: "$0.001", tone: "accent" })
-    expect(rows).toContainEqual({ label: "vs", value: "no planning", tone: "dim" })
+    expect(rows).toContainEqual({ label: "vs", value: "full files + no cache", tone: "dim" })
   })
 
   test("shows unknown estimated dollar savings without pricing", () => {

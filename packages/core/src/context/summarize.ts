@@ -43,6 +43,7 @@ export function summarizeEntry(absPath: string, entry: RepoIndexEntry): FileSumm
     dependencies: entry.imports,
     lastSummarizedAt: Date.now(),
     tokenEstimate: estimateTokens(summary),
+    sourceTokens: estimateTokens(content),
   }
 }
 

@@ -33,6 +33,7 @@ export interface FileSummary {
   dependencies: string[]
   lastSummarizedAt: number
   tokenEstimate: number
+  sourceTokens: number
 }
 
 export type WorkingSetKind = "file" | "file-range" | "summary" | "tool-result"
@@ -72,6 +73,7 @@ export interface ContextPlan {
   includedItems: ContextPlanItem[]
   skippedItems: ContextPlanItem[]
   savingsEstimate: number
+  substitutionSavings: number
 }
 
 export interface RecordedContextPlan {

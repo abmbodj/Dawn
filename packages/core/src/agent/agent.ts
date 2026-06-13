@@ -176,7 +176,7 @@ export class DawnAgent {
           "Raise --budget or narrow the request.",
       )
     }
-    this.estimatedSavedTokens += built.plan.savingsEstimate
+    this.estimatedSavedTokens += built.plan.savingsEstimate + built.plan.substitutionSavings
     this.inputTokenEstimates.push(built.plan.totalEstimatedTokens)
     this.contextStore.recordContextPlan(this.opts.sessionId, built.plan)
     return { system: built.system, messages: built.messages }

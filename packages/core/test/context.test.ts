@@ -249,6 +249,7 @@ describe("context budget", () => {
           dependencies: [],
           lastSummarizedAt: 0,
           tokenEstimate: 10,
+          sourceTokens: 100,
         },
       ],
       workingSet: [],
@@ -316,6 +317,7 @@ describe("context budget", () => {
           dependencies: [],
           lastSummarizedAt: 0,
           tokenEstimate: 10,
+          sourceTokens: 100,
         },
       ],
       workingSet: [],
@@ -379,6 +381,7 @@ describe("context plan persistence", () => {
       ],
       skippedItems: [{ kind: "history", label: "history message", tokens: 50, reason: "history budget" }],
       savingsEstimate: 50,
+      substitutionSavings: 0,
     })
     const large = buildContextPlan({
       systemTokens: 10,
@@ -391,6 +394,7 @@ describe("context plan persistence", () => {
       includedItems: [{ kind: "summary", label: "summary app.ts", tokens: 30, reason: "relevant summary" }],
       skippedItems: [{ kind: "summary", label: "summary old.ts", tokens: 200, reason: "summary budget" }],
       savingsEstimate: 200,
+      substitutionSavings: 500,
     })
 
     store.recordContextPlan("session-a", small)
@@ -400,12 +404,14 @@ describe("context plan persistence", () => {
     const totals = store.contextPlanTotals(["session-a"])
 
     expect(totals.plans).toBe(2)
-    expect(totals.estimatedSavedTokens).toBe(250)
+    // small (savingsEstimate:50 + substitutionSavings:0) + large (savingsEstimate:200 + substitutionSavings:500)
+    expect(totals.estimatedSavedTokens).toBe(750)
     expect(totals.plannedInputTokens).toBe(130)
     expect(totals.includedItems).toBe(2)
     expect(totals.skippedItems).toBe(2)
+    // large plan wins (700 total savings > small's 50)
     expect(totals.highestSavingsPlan).toEqual(
-      expect.objectContaining({ sessionId: "session-a", savedTokens: 200, totalEstimatedTokens: 100 }),
+      expect.objectContaining({ sessionId: "session-a", savedTokens: 700, totalEstimatedTokens: 100 }),
     )
     expect(store.contextPlans(["session-a"], 1)).toHaveLength(1)
     expect(store.contextPlanTotals([]).plans).toBe(0)
