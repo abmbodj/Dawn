@@ -502,6 +502,49 @@ function SlashCommandSuggestionsView({
   )
 }
 
+// A short, subtle onboarding hint shown under the logo on the empty home screen.
+// Leads with the mode switch since it's otherwise undiscoverable until you cycle.
+function WelcomeTips() {
+  const sep = <span fg={theme.dim}>{"   ·   "}</span>
+  return (
+    <box
+      style={{
+        marginTop: 1,
+        border: true,
+        borderColor: theme.border,
+        flexDirection: "column",
+        flexShrink: 0,
+        overflow: "hidden",
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+      title="getting started"
+    >
+      <text>
+        <span fg={theme.accent}>Shift+Tab</span>
+        <span fg={theme.dim}>{"  cycle mode: normal · auto-edit · plan"}</span>
+      </text>
+      <text>
+        <span fg={theme.accent}>/</span>
+        <span fg={theme.dim}>{"  commands"}</span>
+        {sep}
+        <span fg={theme.accent}>↑ ↓</span>
+        <span fg={theme.dim}>{"  history"}</span>
+      </text>
+      <text>
+        <span fg={theme.accent}>Enter</span>
+        <span fg={theme.dim}>{"  send"}</span>
+        {sep}
+        <span fg={theme.accent}>Shift+Enter</span>
+        <span fg={theme.dim}>{"  newline"}</span>
+        {sep}
+        <span fg={theme.accent}>Esc</span>
+        <span fg={theme.dim}>{"  stop"}</span>
+      </text>
+    </box>
+  )
+}
+
 // Plan / auto-edit get their own row above the input so the chip can never
 // collide with the model + usage line in the footer.
 function modeChipColor(chip: ModeChip): string {
@@ -1224,8 +1267,17 @@ export function App(props: AppProps) {
   return (
     <box style={{ position: "relative", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
       {empty ? (
-        <box style={{ flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
+        <box
+          style={{
+            flexGrow: 1,
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+          }}
+        >
           <Logo animate={props.animate} />
+          <WelcomeTips />
         </box>
       ) : (
         <scrollbox
