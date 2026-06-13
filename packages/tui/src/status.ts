@@ -162,7 +162,7 @@ export function formatSavingsReport(args: {
     "Savings",
     "Compared to: reading full files, no prompt caching",
     inputPrice === undefined
-      ? "Pricing: unknown for current model"
+      ? "Pricing: — (no pricing data)"
       : `Pricing: input ${formatCost(inputPrice)} / 1M tokens` +
           (cacheReadPrice !== undefined ? `, cache read ${formatCost(cacheReadPrice)} / 1M tokens` : ""),
   ]
@@ -181,7 +181,7 @@ export function formatSavingsReport(args: {
     lines.push(`  would send: ${formatTokens(metrics.wouldSendTokens)} input`)
     lines.push(`  est $ saved: ${metrics.estimatedCostSaved}`)
     lines.push(
-      `  cache $ saved: ${cacheDollarsSaved === undefined ? "unknown" : formatCost(cacheDollarsSaved)}` +
+      `  cache $ saved: ${cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved)}` +
         (cacheDollarsSaved !== undefined && cacheReadPrice === undefined ? " (est)" : ""),
     )
     lines.push(`  context plans: ${formatWholeTokens(scope.context.plans)}`)
@@ -256,12 +256,12 @@ export function savingsBoxRows(args: {
     { label: "sent", value: `${formatTokens(args.usage.inputTokens)} tokens` },
     {
       label: "$ saved",
-      value: estimatedCostSaved === undefined ? "unknown" : formatCost(estimatedCostSaved),
+      value: estimatedCostSaved === undefined ? "—" : formatCost(estimatedCostSaved),
       tone: estimatedCostSaved && estimatedCostSaved > 0 ? "accent" : "dim",
     },
     {
       label: "cache $",
-      value: cacheDollarsSaved === undefined ? "unknown" : formatCost(cacheDollarsSaved),
+      value: cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved),
       tone: hasCacheSavings ? "accent" : "dim",
     },
     { label: "vs", value: "full files + no cache", tone: "dim" },
@@ -424,6 +424,6 @@ function savingsMetrics(
   const wouldSendTokens = inputTokens + savedTokens
   const savedPercent = wouldSendTokens ? Math.round((savedTokens / wouldSendTokens) * 100) : 0
   const estimatedCostSaved =
-    inputPrice === undefined ? "unknown" : formatCost((savedTokens * inputPrice) / 1_000_000)
+    inputPrice === undefined ? "—" : formatCost((savedTokens * inputPrice) / 1_000_000)
   return { wouldSendTokens, savedPercent, estimatedCostSaved }
 }

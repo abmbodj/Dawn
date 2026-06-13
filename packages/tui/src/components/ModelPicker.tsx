@@ -63,7 +63,7 @@ interface ModelEntry {
   isCurrent: boolean
 }
 
-/** Build right-pane model rows for a connected provider. */
+/** Build right-pane model rows for a connected provider. Sorted: current first, then by price asc, then name. */
 export function buildModelEntries(providerId: string, catalog: Catalog, current: string): ModelEntry[] {
   const models = catalog[providerId]?.models ?? {}
   const entries: ModelEntry[] = []
@@ -98,8 +98,21 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
       isCurrent,
     })
   }
+
+  entries.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
+    const aModel = models[a.id]
+    const bModel = models[b.id]
+    const aPrice = typeof aModel?.cost?.input === "number" ? aModel.cost.input : Infinity
+    const bPrice = typeof bModel?.cost?.input === "number" ? bModel.cost.input : Infinity
+    if (aPrice !== bPrice) return aPrice - bPrice
+    return a.name.localeCompare(b.name)
+  })
+
   return entries
 }
+
+const MODELS_LEGEND = "✦ reasoning · free $0 · price/Mtok in/out · type to search"
 
 export function ModelPicker({
   catalog,
@@ -126,29 +139,66 @@ export function ModelPicker({
   const [pane, setPane] = useState<"providers" | "models">("providers")
   const [highlightedIndex, setHighlightedIndex] = useState(initialLeftIndex)
   const [leftIndex] = useState(initialLeftIndex)
+  const [query, setQuery] = useState("")
+  const [modelIndex, setModelIndex] = useState(0)
 
   const highlighted = entries[highlightedIndex]
   const isConnectEntry = highlighted?.kind === "connect"
   const highlightedProviderId = highlighted?.kind === "connected" ? highlighted.id : null
 
   const modelEntries = highlightedProviderId ? buildModelEntries(highlightedProviderId, catalog, current) : []
-  const currentModelIndex = Math.max(
-    0,
-    modelEntries.findIndex((m) => m.isCurrent),
-  )
+
+  const filteredEntries = query
+    ? modelEntries.filter((m) => {
+        const q = query.toLowerCase()
+        return (
+          m.name.toLowerCase().includes(q) ||
+          m.id.toLowerCase().includes(q) ||
+          m.description.toLowerCase().includes(q)
+        )
+      })
+    : modelEntries
 
   useKeyboard((key) => {
     const name = key.name
+
+    if (pane === "models") {
+      if (name === "up") {
+        setModelIndex((i) => Math.max(0, i - 1))
+        return
+      }
+      if (name === "down") {
+        setModelIndex((i) => Math.min(filteredEntries.length - 1, i + 1))
+        return
+      }
+      if (name === "return") {
+        const entry = filteredEntries[modelIndex]
+        if (entry) onPick(entry.ref)
+        return
+      }
+      if (name === "escape") {
+        if (query) {
+          setQuery("")
+          setModelIndex(0)
+        } else {
+          setPane("providers")
+        }
+        return
+      }
+      if (name === "left" || (key.shift && name === "tab")) {
+        setPane("providers")
+        return
+      }
+      return
+    }
+
+    // providers pane
     if (name === "right" || name === "tab") {
-      if (!isConnectEntry && pane === "providers") setPane("models")
+      if (!isConnectEntry) setPane("models")
     } else if (name === "left" || (key.shift && name === "tab")) {
       setPane("providers")
     } else if (name === "escape") {
-      if (pane === "models") {
-        setPane("providers")
-      } else {
-        onClose()
-      }
+      onClose()
     }
   })
 
@@ -169,7 +219,7 @@ export function ModelPicker({
     }
   })
 
-  const rightOptions = modelEntries.map((m) => ({
+  const rightOptions = filteredEntries.map((m) => ({
     name: m.name,
     description: m.description,
     value: m.ref,
@@ -191,14 +241,52 @@ export function ModelPicker({
 
   const handleLeftChange = (i: number) => {
     setHighlightedIndex(i)
+    setQuery("")
+    setModelIndex(0)
     if (entries[i]?.kind === "connect") setPane("providers")
   }
 
-  const handleRightSelect = (_i: number, opt: any) => {
-    if (opt?.value) onPick(opt.value)
-  }
-
   const noConnected = entries.every((e) => e.kind === "connect")
+
+  const safeModelIndex = Math.min(modelIndex, Math.max(0, filteredEntries.length - 1))
+
+  const modelsRightPane = highlightedProviderId ? (
+    <>
+      <box style={{ height: 1 }}>
+        <input
+          focused={pane === "models"}
+          value={query}
+          placeholder="search models…"
+          onInput={(val: unknown) => {
+            const q = typeof val === "string" ? val : String((val as any)?.value ?? "")
+            setQuery(q)
+            setModelIndex(0)
+          }}
+        />
+      </box>
+      {filteredEntries.length === 0 ? (
+        <text fg={theme.dim} style={{ paddingLeft: 1, flexGrow: 1 }}>
+          {"no models match"}
+        </text>
+      ) : (
+        <select
+          key={`${highlightedProviderId}-${query}`}
+          focused={false}
+          showScrollIndicator
+          options={rightOptions}
+          selectedIndex={safeModelIndex}
+          style={{ flexGrow: 1 }}
+        />
+      )}
+      <text fg={theme.dim} style={{ paddingLeft: 1 }}>
+        {MODELS_LEGEND}
+      </text>
+    </>
+  ) : (
+    <text fg={theme.dim} style={{ padding: 1 }}>
+      {"← select a provider"}
+    </text>
+  )
 
   if (narrow) {
     return (
@@ -231,15 +319,7 @@ export function ModelPicker({
             </text>
           </>
         ) : (
-          <select
-            key={highlightedProviderId}
-            focused
-            showScrollIndicator
-            options={rightOptions}
-            selectedIndex={currentModelIndex}
-            onSelect={handleRightSelect}
-            style={{ flexGrow: 1 }}
-          />
+          modelsRightPane
         )}
       </box>
     )
@@ -290,20 +370,8 @@ export function ModelPicker({
               {"Enter to connect"}
             </text>
           </box>
-        ) : highlightedProviderId ? (
-          <select
-            key={highlightedProviderId}
-            focused={pane === "models"}
-            showScrollIndicator
-            options={rightOptions}
-            selectedIndex={currentModelIndex}
-            onSelect={handleRightSelect}
-            style={{ flexGrow: 1 }}
-          />
         ) : (
-          <text fg={theme.dim} style={{ padding: 1 }}>
-            {"← select a provider"}
-          </text>
+          modelsRightPane
         )}
         {noConnected ? (
           <text fg={theme.dim} style={{ paddingLeft: 1, paddingBottom: 1 }}>

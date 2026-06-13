@@ -260,8 +260,8 @@ describe("formatSavingsReport", () => {
       modelRef: "custom/some-model",
     })
 
-    expect(report).toContain("Pricing: unknown")
-    expect(report).toContain("est $ saved: unknown")
+    expect(report).toContain("Pricing: —")
+    expect(report).toContain("est $ saved: —")
   })
 })
 
@@ -367,7 +367,7 @@ describe("savingsBoxRows", () => {
       modelRef: "custom/some-model",
     })
 
-    expect(rows).toContainEqual({ label: "$ saved", value: "unknown", tone: "dim" })
+    expect(rows).toContainEqual({ label: "$ saved", value: "—", tone: "dim" })
   })
 })
 

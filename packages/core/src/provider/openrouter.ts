@@ -15,9 +15,9 @@ interface OpenRouterModel {
   supported_parameters?: string[]
 }
 
-function toPerMillion(raw: string | undefined): number {
+function toPerMillion(raw: string | undefined): number | undefined {
   const n = Number(raw)
-  return Number.isFinite(n) ? n * 1_000_000 : 0
+  return Number.isFinite(n) ? n * 1_000_000 : undefined
 }
 
 /**
@@ -44,10 +44,13 @@ export async function withOpenRouter(catalog: Catalog): Promise<Catalog> {
       const output = toPerMillion(m.pricing?.completion)
       const params = m.supported_parameters ?? []
 
+      const cost: ModelInfo["cost"] =
+        input !== undefined || output !== undefined ? { input: input ?? 0, output: output ?? 0 } : undefined
+
       const info: ModelInfo = {
         id: m.id,
         name: m.name,
-        cost: { input, output },
+        cost,
         tool_call: params.includes("tools"),
         reasoning: params.includes("reasoning") || params.includes("include_reasoning"),
       }
