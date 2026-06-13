@@ -26,8 +26,9 @@ describe("slash command suggestions", () => {
     expect(getSlashCommandSuggestions("/model ")).toEqual([])
   })
 
-  test("does not suggest aliases", () => {
-    expect(getSlashCommandSuggestions("/e")).toEqual([])
+  test("suggests commands by alias prefix", () => {
+    expect(getSlashCommandSuggestions("/e").map((command) => command.name)).toEqual(["quit"])
+    expect(getSlashCommandSuggestions("/exit").map((command) => command.name)).toEqual(["quit"])
   })
 
   test("unknown prefixes return no suggestions", () => {

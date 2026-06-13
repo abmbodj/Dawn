@@ -25,6 +25,7 @@ import {
   toolTitle,
   withOpenRouter,
 } from "@dawn/core"
+import type { TextareaOptions, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
@@ -445,6 +446,7 @@ function SlashCommandSuggestionsView({
           <text key={command.name}>
             <span fg={selected ? theme.accent : theme.dim}>{selected ? "› " : "  "}</span>
             <span fg={selected ? theme.accent : theme.text}>{`/${command.name}`}</span>
+            {command.args ? <span fg={theme.dim}>{` ${command.args}`}</span> : null}
             <span fg={theme.dim}>{`  ${command.description}`}</span>
           </text>
         )
@@ -454,10 +456,42 @@ function SlashCommandSuggestionsView({
   )
 }
 
+// Plan / auto-edit get their own row above the input so the chip can never
+// collide with the model + usage line in the footer.
+function modeChipColor(chip: ModeChip): string {
+  return chip.text === "AUTO-EDIT" ? theme.toolOk : theme.accent
+}
+
+function ModeChipRow({ chip }: { chip: ModeChip }) {
+  const color = modeChipColor(chip)
+  return (
+    <box style={{ height: 1, paddingLeft: 1 }}>
+      <text>
+        <span fg={color}>{`▌ ${chip.text} MODE`}</span>
+        <span fg={theme.dim}>{"  Shift+Tab to cycle"}</span>
+      </text>
+    </box>
+  )
+}
+
 const USAGE_BOX_WIDTH = 40
 const USAGE_BOX_HEIGHT = 8
 const SAVINGS_BOX_HEIGHT = 8
 const METRIC_LABEL_WIDTH = 12
+
+// Max content lines the chat input grows to before it starts scrolling internally.
+const INPUT_MAX_LINES = 8
+
+// Chat input keybindings: Enter sends, Shift+Enter (or Alt/Cmd+Enter) inserts a
+// newline. This overrides the textarea default (where Enter inserts a newline).
+const CHAT_INPUT_KEY_BINDINGS: NonNullable<TextareaOptions["keyBindings"]> = [
+  { name: "return", action: "submit" },
+  { name: "kpenter", action: "submit" },
+  { name: "linefeed", action: "submit" },
+  { name: "return", shift: true, action: "newline" },
+  { name: "kpenter", shift: true, action: "newline" },
+  { name: "return", meta: true, action: "newline" },
+]
 
 function MetricBox({
   title,
@@ -558,8 +592,15 @@ export function App(props: AppProps) {
     target: "edit" | "plan"
   } | null>(null)
   const [promptValue, setPromptValue] = useState("")
+  const [inputLines, setInputLines] = useState(1)
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
   const [dismissedCompletionValue, setDismissedCompletionValue] = useState<string | null>(null)
+  // Submitted prompts, oldest→newest, for Up/Down recall in the input.
+  const [history, setHistory] = useState<string[]>([])
+  const textareaRef = useRef<TextareaRenderable | null>(null)
+  const historyIndexRef = useRef<number | null>(null)
+  const draftRef = useRef("")
+  const caretRef = useRef<{ line: number; lineCount: number }>({ line: 0, lineCount: 1 })
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
   const [permMode, setPermMode] = useState<PermissionMode>("normal")
@@ -780,8 +821,45 @@ export function App(props: AppProps) {
       programmaticPromptValueRef.current = null
       return
     }
+    // A real keystroke ends history browsing and re-enables suggestions.
+    historyIndexRef.current = null
     setDismissedCompletionValue(null)
   }, [])
+
+  // The textarea is uncontrolled, so read its text on every content change.
+  const handleContentChange = useCallback(() => {
+    const value = textareaRef.current?.plainText ?? ""
+    setInputLines(textareaRef.current?.lineCount ?? 1)
+    handlePromptInput(value)
+  }, [handlePromptInput])
+
+  const handleCursorChange = useCallback((event: { line: number }) => {
+    caretRef.current = { line: event.line, lineCount: textareaRef.current?.lineCount ?? 1 }
+  }, [])
+
+  // Imperatively replace the input text (history recall, completion fill). Flags
+  // the value as programmatic so suggestions/dismissal aren't reset spuriously.
+  const setInputText = useCallback((value: string) => {
+    programmaticPromptValueRef.current = value
+    const area = textareaRef.current
+    if (area) {
+      area.setText(value)
+      area.cursorOffset = value.length
+    }
+    setPromptValue(value)
+    setInputLines(area?.lineCount ?? 1)
+  }, [])
+
+  const handleTextareaSubmit = useCallback(() => {
+    const value = textareaRef.current?.plainText ?? promptValue
+    textareaRef.current?.setText("")
+    setInputLines(1)
+    historyIndexRef.current = null
+    if (value.trim()) {
+      setHistory((prev) => (prev[prev.length - 1] === value ? prev : [...prev, value]))
+    }
+    submit(value)
+  }, [promptValue, submit])
 
   const applyModel = useCallback(
     (ref: string, target: "edit" | "plan" = "edit") => {
@@ -870,17 +948,28 @@ export function App(props: AppProps) {
   const savingsRows = showUsageBox
     ? savingsBoxRows({ usage, context: agent.contextStats(), catalog, modelRef })
     : []
+  // Auto-grow the input box with the draft (1 content line → height 3, incl. border).
+  const inputBoxHeight = Math.min(INPUT_MAX_LINES, Math.max(1, inputLines)) + 2
+  const inputHint = busy
+    ? "Esc to stop"
+    : completionOpen
+      ? "↑↓ navigate · Tab complete · Enter run · Esc close"
+      : "/ commands · ↑↓ history · Shift+Enter newline · Enter send"
 
-  const fillSuggestion = useCallback((command: SlashCommand) => {
-    const value = `/${command.name}`
-    programmaticPromptValueRef.current = value
-    setPromptValue(value)
-    setSelectedSuggestion(0)
-    setDismissedCompletionValue(value)
-  }, [])
+  const fillSuggestion = useCallback(
+    (command: SlashCommand) => {
+      const value = `/${command.name}`
+      setInputText(value)
+      setSelectedSuggestion(0)
+      setDismissedCompletionValue(value)
+    },
+    [setInputText],
+  )
 
   const runSuggestion = useCallback(
     (command: SlashCommand) => {
+      textareaRef.current?.setText("")
+      setInputLines(1)
       setPromptValue("")
       setSelectedSuggestion(0)
       setDismissedCompletionValue(null)
@@ -1012,6 +1101,39 @@ export function App(props: AppProps) {
         return
       }
     }
+    // Prompt history recall. Only intercept Up/Down at the buffer edges so the
+    // textarea keeps native cursor movement on interior lines of a draft.
+    if (focusInput && !completionOpen && (key.name === "up" || key.name === "down")) {
+      const { line, lineCount } = caretRef.current
+      if (key.name === "up" && line === 0 && history.length > 0) {
+        key.preventDefault()
+        key.stopPropagation()
+        if (historyIndexRef.current === null) {
+          draftRef.current = promptValue
+          historyIndexRef.current = history.length - 1
+        } else if (historyIndexRef.current > 0) {
+          historyIndexRef.current -= 1
+        }
+        const recalled = history[historyIndexRef.current] ?? ""
+        setInputText(recalled)
+        setDismissedCompletionValue(recalled)
+        return
+      }
+      if (key.name === "down" && line >= lineCount - 1 && historyIndexRef.current !== null) {
+        key.preventDefault()
+        key.stopPropagation()
+        if (historyIndexRef.current < history.length - 1) {
+          historyIndexRef.current += 1
+          const recalled = history[historyIndexRef.current] ?? ""
+          setInputText(recalled)
+          setDismissedCompletionValue(recalled)
+        } else {
+          historyIndexRef.current = null
+          setInputText(draftRef.current)
+        }
+        return
+      }
+    }
     if (key.name === "escape") {
       // Overlays own their own Esc; only handle abort here when nothing is open
       if (!pickerOpen && !connect && busy) abortRef.current?.abort()
@@ -1111,25 +1233,39 @@ export function App(props: AppProps) {
         />
       ) : null}
 
-      <box style={{ border: true, borderColor: theme.border, height: 3 }}>
-        <input
+      {footer.modeChip ? <ModeChipRow chip={footer.modeChip} /> : null}
+
+      <box
+        style={{
+          border: true,
+          borderColor: focusInput ? theme.accent : theme.border,
+          height: inputBoxHeight,
+        }}
+      >
+        <textarea
+          ref={(node: TextareaRenderable | null) => {
+            textareaRef.current = node
+          }}
           focused={focusInput}
-          value={promptValue}
           placeholder={empty ? "Ask Dawn anything… (/help for commands)" : ""}
-          onInput={handlePromptInput}
-          onSubmit={(raw: unknown) =>
-            submit(typeof raw === "string" ? raw : String((raw as any)?.value ?? ""))
-          }
+          placeholderColor={theme.dim}
+          textColor={theme.text}
+          focusedTextColor={theme.text}
+          wrapMode="word"
+          keyBindings={CHAT_INPUT_KEY_BINDINGS}
+          onContentChange={handleContentChange}
+          onCursorChange={handleCursorChange}
+          onSubmit={handleTextareaSubmit}
+          style={{ flexGrow: 1 }}
         />
       </box>
 
       <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
-        {footer.modeChip ? <text fg={theme.accent}>{`[${footer.modeChip.text}] `}</text> : null}
         {footer.mode === "narrow" ? (
           <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
         ) : (
           <>
-            <box style={{ width: Math.max(18, Math.floor(width * 0.45)), flexShrink: 0 }}>
+            <box style={{ width: Math.max(18, Math.floor(width * 0.45)), flexShrink: 1 }}>
               <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
             </box>
             {footer.right ? (
@@ -1139,6 +1275,13 @@ export function App(props: AppProps) {
             ) : null}
           </>
         )}
+      </box>
+
+      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1 }}>
+        <box style={{ flexGrow: 1 }}>
+          <text fg={busy ? theme.accent : theme.dim}>{inputHint}</text>
+        </box>
+        {promptValue.length > 0 ? <text fg={theme.dim}>{`${promptValue.length} chars`}</text> : null}
       </box>
     </box>
   )

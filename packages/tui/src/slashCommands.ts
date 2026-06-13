@@ -2,12 +2,14 @@ export interface SlashCommand {
   name: string
   description: string
   aliases?: string[]
+  /** Hint for expected arguments, shown dimmed in the suggestion list. */
+  args?: string
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "model", description: "Switch model across connected providers." },
-  { name: "plan-model", description: "Set the model used while in plan mode." },
-  { name: "connect", description: "Connect a model provider (API key or GitHub OAuth)." },
+  { name: "model", description: "Switch model across connected providers.", args: "[provider/model]" },
+  { name: "plan-model", description: "Set the model used while in plan mode.", args: "[provider/model]" },
+  { name: "connect", description: "Connect a model provider (API key or GitHub OAuth).", args: "[provider]" },
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },
   { name: "savings", description: "Show session, project, and lifetime token savings." },
@@ -35,8 +37,14 @@ export function resolveSlashCommand(input: string): SlashCommand | undefined {
 export function getSlashCommandSuggestions(input: string): SlashCommand[] {
   if (!input.startsWith("/")) return []
   const query = input.slice(1).toLowerCase()
+  // Once the user types a space they're entering args, not picking a command.
   if (/\s/.test(query)) return []
-  return SLASH_COMMANDS.filter((command) => command.name.startsWith(query))
+
+  // Prefix-match the canonical name OR any alias, so e.g. `/exit` and `/e`
+  // surface `quit`. Display order is preserved (filter keeps array order).
+  return SLASH_COMMANDS.filter((command) =>
+    [command.name, ...(command.aliases ?? [])].some((candidate) => candidate.startsWith(query)),
+  )
 }
 
 export function formatSlashCommandHelp(): string {
