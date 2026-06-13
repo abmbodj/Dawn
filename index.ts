@@ -282,6 +282,7 @@ async function oneShot(flags: Flags): Promise<void> {
   const agent = new DawnAgent({
     cwd: flags.cwd,
     modelRef: flags.model ?? pickDefaultModel(catalog, config),
+    planModelRef: config.planModel,
     bus,
     gate,
     catalog,
@@ -342,6 +343,7 @@ async function interactive(flags: Flags): Promise<void> {
   const agent = new DawnAgent({
     cwd: flags.cwd,
     modelRef: flags.model ?? pickDefaultModel(catalog, config),
+    planModelRef: config.planModel,
     bus,
     gate,
     asker,

@@ -6,6 +6,7 @@ export interface SlashCommand {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "model", description: "Switch model across connected providers." },
+  { name: "plan-model", description: "Set the model used while in plan mode." },
   { name: "connect", description: "Connect a model provider (API key or GitHub OAuth)." },
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },

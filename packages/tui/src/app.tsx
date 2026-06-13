@@ -21,6 +21,7 @@ import {
   localModelFit,
   parseModelRef,
   resetDawnData,
+  saveConfig,
   toolTitle,
   withOpenRouter,
 } from "@dawn/core"
@@ -547,13 +548,19 @@ export function App(props: AppProps) {
   const [permission, setPermission] = useState<PendingPermission | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerProvider, setPickerProvider] = useState<string | undefined>(undefined)
+  const [pickerTarget, setPickerTarget] = useState<"edit" | "plan">("edit")
   const [connect, setConnect] = useState<{ provider?: ProviderOption } | null>(null)
   const [connectEpoch, setConnectEpoch] = useState(0)
-  const [confirmModel, setConfirmModel] = useState<{ ref: string; sizeBytes?: number } | null>(null)
+  const [confirmModel, setConfirmModel] = useState<{
+    ref: string
+    sizeBytes?: number
+    target: "edit" | "plan"
+  } | null>(null)
   const [promptValue, setPromptValue] = useState("")
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
   const [dismissedCompletionValue, setDismissedCompletionValue] = useState<string | null>(null)
   const [modelRef, setModelRef] = useState(agent.modelRef)
+  const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
   const [permMode, setPermMode] = useState<PermissionMode>("normal")
   const [question, setQuestion] = useState<PendingQuestion | null>(null)
   const [questionSel, setQuestionSel] = useState(0)
@@ -650,6 +657,11 @@ export function App(props: AppProps) {
           dispatch({ type: "push", item: { kind: "info", text: HELP } })
           break
         case "model":
+          setPickerTarget("edit")
+          setPickerOpen(true)
+          break
+        case "plan-model":
+          setPickerTarget("plan")
           setPickerOpen(true)
           break
         case "connect":
@@ -771,11 +783,18 @@ export function App(props: AppProps) {
   }, [])
 
   const applyModel = useCallback(
-    (ref: string) => {
+    (ref: string, target: "edit" | "plan" = "edit") => {
       try {
-        agent.setModel(ref)
-        setModelRef(ref)
-        dispatch({ type: "push", item: { kind: "info", text: `model → ${ref}` } })
+        if (target === "plan") {
+          agent.setPlanModel(ref)
+          setPlanModelRef(ref)
+          saveConfig({ planModel: ref })
+          dispatch({ type: "push", item: { kind: "info", text: `plan model → ${ref}` } })
+        } else {
+          agent.setModel(ref)
+          setModelRef(ref)
+          dispatch({ type: "push", item: { kind: "info", text: `model → ${ref}` } })
+        }
       } catch (err) {
         dispatch({
           type: "push",
@@ -812,15 +831,17 @@ export function App(props: AppProps) {
   const pickModel = useCallback(
     (ref: string) => {
       setPickerOpen(false)
+      const target = pickerTarget
+      setPickerTarget("edit")
       const [providerId, modelId] = ref.split("/")
       const sizeBytes = providerId && modelId ? catalog[providerId]?.models?.[modelId]?.sizeBytes : undefined
       if (localModelFit(sizeBytes).status === "oversized") {
-        setConfirmModel({ ref, sizeBytes })
+        setConfirmModel({ ref, sizeBytes, target })
         return
       }
-      applyModel(ref)
+      applyModel(ref, target)
     },
-    [applyModel, catalog],
+    [applyModel, catalog, pickerTarget],
   )
 
   const empty = items.length === 0
@@ -832,7 +853,18 @@ export function App(props: AppProps) {
     commandSuggestions.length > 0 ? Math.min(selectedSuggestion, commandSuggestions.length - 1) : 0
   const selectedCommand = commandSuggestions[selectedSuggestionIndex]
   const showUsageBox = footerMode(width) === "wide"
-  const footer = statusFooterParts({ busy, catalog, modelRef, usage, width, permMode, showUsageBox })
+  // While in plan mode the dedicated plan model runs (if set); the footer reflects
+  // whichever model will actually handle the next turn.
+  const activeModelRef = permMode === "plan" && planModelRef ? planModelRef : modelRef
+  const footer = statusFooterParts({
+    busy,
+    catalog,
+    modelRef: activeModelRef,
+    usage,
+    width,
+    permMode,
+    showUsageBox,
+  })
   const usageRows = showUsageBox ? usageBoxRows({ usage, context: agent.contextStats() }) : []
   const savingsRows = showUsageBox
     ? savingsBoxRows({ usage, context: agent.contextStats(), catalog, modelRef })
@@ -887,9 +919,9 @@ export function App(props: AppProps) {
     }
     if (confirmModel) {
       if (key.name === "y") {
-        const { ref } = confirmModel
+        const { ref, target } = confirmModel
         setConfirmModel(null)
-        applyModel(ref)
+        applyModel(ref, target)
       } else if (key.name === "n" || key.name === "escape") {
         setConfirmModel(null)
       }
@@ -1046,7 +1078,7 @@ export function App(props: AppProps) {
           key={catalogVersion}
           catalog={catalog}
           config={config}
-          current={modelRef}
+          current={pickerTarget === "plan" ? (planModelRef ?? modelRef) : modelRef}
           width={width}
           initialProviderId={pickerProvider}
           onPick={pickModel}
@@ -1054,6 +1086,7 @@ export function App(props: AppProps) {
           onClose={() => {
             setPickerOpen(false)
             setPickerProvider(undefined)
+            setPickerTarget("edit")
           }}
         />
       ) : null}

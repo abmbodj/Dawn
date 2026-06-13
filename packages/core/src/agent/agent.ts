@@ -31,6 +31,8 @@ import { buildSystemPrompt } from "./system"
 export interface AgentOptions {
   cwd: string
   modelRef: string
+  /** Model used while in plan mode (gate.mode === "plan"); falls back to modelRef. */
+  planModelRef?: string
   bus: Bus
   gate: PermissionGate
   asker?: Asker
@@ -69,6 +71,8 @@ export function isRepoOverviewQuestion(text: string): boolean {
 export class DawnAgent {
   messages: ModelMessage[]
   modelRef: string
+  /** Model used while in plan mode; undefined falls back to modelRef. */
+  planModelRef: string | undefined
   readonly ledger = new UsageLedger()
   readonly bus: Bus
   private readonly tools: ToolSet
@@ -86,6 +90,7 @@ export class DawnAgent {
   constructor(private opts: AgentOptions) {
     this.bus = opts.bus
     this.modelRef = normalizeModelRef(opts.modelRef)
+    this.planModelRef = opts.planModelRef ? normalizeModelRef(opts.planModelRef) : undefined
     this.messages = opts.initialMessages ?? []
     this.contextMode = opts.contextMode ?? DEFAULT_CONTEXT_MODE
     this.tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET
@@ -117,6 +122,21 @@ export class DawnAgent {
     ref = normalizeModelRef(ref)
     resolveModel(ref, this.opts.catalog, this.opts.config)
     this.modelRef = ref
+  }
+
+  /**
+   * Sets the model used while in plan mode. Pass an empty string to clear it
+   * (plan mode then falls back to the edit model). Validates the ref resolves
+   * before switching, same as setModel.
+   */
+  setPlanModel(ref: string): void {
+    if (!ref) {
+      this.planModelRef = undefined
+      return
+    }
+    ref = normalizeModelRef(ref)
+    resolveModel(ref, this.opts.catalog, this.opts.config)
+    this.planModelRef = ref
   }
 
   startSession(sessionId: string, messages: ModelMessage[] = []): void {
@@ -196,8 +216,11 @@ export class DawnAgent {
     bus.emit({ type: "turn-start" })
 
     try {
-      const resolved = resolveModel(this.modelRef, opts.catalog, opts.config)
-      const { providerId } = parseModelRef(this.modelRef)
+      // Plan mode runs on the dedicated plan model when one is set; everything
+      // else (normal / acceptEdits) runs on the edit model.
+      const activeRef = opts.gate.mode === "plan" && this.planModelRef ? this.planModelRef : this.modelRef
+      const resolved = resolveModel(activeRef, opts.catalog, opts.config)
+      const { providerId } = parseModelRef(activeRef)
       const forceRepoOverview = isRepoOverviewQuestion(text)
 
       const isAnthropic = providerId === "anthropic"
