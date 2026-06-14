@@ -114,6 +114,11 @@ export function formatContextReport(stats: ContextStats, memorySources?: string[
       (stats.repoIndex.updatedAt ? `, updated ${new Date(stats.repoIndex.updatedAt).toLocaleString()}` : ""),
   )
   lines.push(`Estimated saved: ${formatWholeTokens(stats.estimatedSavedTokens)} tokens`)
+  if (stats.compactedOutputs > 0) {
+    lines.push(
+      `Compaction: ${formatWholeTokens(stats.compactedOutputs)} output${stats.compactedOutputs === 1 ? "" : "s"} · saved ${formatWholeTokens(stats.compactionSavedTokens)} tokens`,
+    )
+  }
   lines.push("")
   lines.push(...formatContextAudit(stats))
   return lines.join("\n")
@@ -151,6 +156,12 @@ export function formatUsageReport(args: {
     )
   }
   lines.push(`estimated context savings: ${formatWholeTokens(args.context.estimatedSavedTokens)} tokens`)
+  if (args.context.compactedOutputs > 0) {
+    lines.push(
+      `tool-output compaction: ${formatWholeTokens(args.context.compactionSavedTokens)} tokens ` +
+        `(${formatWholeTokens(args.context.compactedOutputs)} outputs)`,
+    )
+  }
   return lines.join("\n")
 }
 
@@ -171,14 +182,17 @@ export function formatSavingsReport(args: {
   ]
 
   for (const scope of args.scopes) {
-    const metrics = savingsMetrics(scope.usage.inputTokens, scope.context.estimatedSavedTokens, inputPrice)
+    const totalSaved = scope.context.estimatedSavedTokens + scope.context.compactionSavedTokens
+    const metrics = savingsMetrics(scope.usage.inputTokens, totalSaved, inputPrice)
     const cacheDollarsSaved =
       inputPrice !== undefined && cacheReadPrice !== undefined
         ? (scope.usage.cachedInputTokens * (inputPrice - cacheReadPrice)) / 1_000_000
         : undefined
     lines.push("")
     lines.push(`${scope.label}:`)
-    lines.push(`  saved: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens (summaries + trim)`)
+    lines.push(`  saved: ${formatWholeTokens(totalSaved)} tokens`)
+    lines.push(`    summaries + trim: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
+    lines.push(`    tool-output compaction: ${formatWholeTokens(scope.context.compactionSavedTokens)} tokens`)
     lines.push(`  input cut: ${metrics.savedPercent}%`)
     lines.push(`  Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
     lines.push(`  would send: ${formatTokens(metrics.wouldSendTokens)} input`)
@@ -231,7 +245,7 @@ export function savingsBoxRows(args: {
   catalog: Catalog
   modelRef: string
 }): UsageBoxRow[] {
-  const savedTokens = args.context.estimatedSavedTokens
+  const savedTokens = args.context.estimatedSavedTokens + args.context.compactionSavedTokens
   const wouldSendTokens = args.usage.inputTokens + savedTokens
   const savedPercent = wouldSendTokens ? Math.round((savedTokens / wouldSendTokens) * 100) : 0
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)

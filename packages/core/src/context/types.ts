@@ -7,6 +7,16 @@ export interface ContextBudget {
   budget: number
 }
 
+/** Mode-tuned aggressiveness for tool-output compaction. */
+export interface CompactBudget {
+  /** Outputs estimated below this many tokens are left untouched. */
+  threshold: number
+  /** Head/tail lines kept by the text/log compactors. */
+  keepLines: number
+  /** Head+tail items kept by the json/search compactors. */
+  keepItems: number
+}
+
 export interface RepoIndexEntry {
   cwd: string
   path: string
@@ -74,6 +84,8 @@ export interface ContextPlan {
   skippedItems: ContextPlanItem[]
   savingsEstimate: number
   substitutionSavings: number
+  /** Tokens dropped by compacting tool outputs since the previous plan. */
+  compactionSavings: number
 }
 
 export interface RecordedContextPlan {
@@ -86,6 +98,7 @@ export interface RecordedContextPlan {
 export interface ContextPlanTotals {
   plans: number
   estimatedSavedTokens: number
+  compactionSavedTokens: number
   plannedInputTokens: number
   includedItems: number
   skippedItems: number
@@ -104,6 +117,16 @@ export interface BuiltRequest {
   plan: ContextPlan
 }
 
+/** A full tool output stashed for reversible compaction (the `expand` tool retrieves it). */
+export interface CompactedBlob {
+  hash: string
+  sessionId?: string
+  tool: string
+  content: string
+  sourceTokens: number
+  createdAt: number
+}
+
 export interface ContextStats {
   mode: ContextMode
   budget: number
@@ -113,6 +136,10 @@ export interface ContextStats {
   repoIndex: RepoIndexStatus
   latestPlan?: ContextPlan
   estimatedSavedTokens: number
+  /** Tokens saved this session by compacting tool outputs (separate bucket from summaries/trim). */
+  compactionSavedTokens: number
+  /** Number of tool outputs compacted this session. */
+  compactedOutputs: number
   averageInputTokens: number
   highestCostTurn?: {
     providerId: string

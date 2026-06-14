@@ -92,6 +92,10 @@ export class DawnAgent {
   private inputTokenEstimates: number[] = []
   private highestCostTurn: ContextStats["highestCostTurn"]
   private busy = false
+  /** Running tally of tokens saved by compacting tool outputs this session. */
+  private compaction = { savedTokens: 0, outputs: 0 }
+  /** Mark of compaction savings already folded into a recorded context plan. */
+  private compactionPlanMark = 0
 
   constructor(private opts: AgentOptions) {
     this.bus = opts.bus
@@ -110,6 +114,11 @@ export class DawnAgent {
       workingSet: this.workingSet,
       contextMode: this.contextMode,
       bgProcs: this.bgProcs,
+      sessionId: opts.sessionId,
+      onCompaction: (before, after) => {
+        this.compaction.savedTokens += before - after
+        this.compaction.outputs += 1
+      },
     })
     // Captured once: a byte-stable system prompt is what keeps the provider
     // prompt-cache prefix valid across turns.
@@ -166,6 +175,8 @@ export class DawnAgent {
     this.estimatedSavedTokens = 0
     this.inputTokenEstimates = []
     this.highestCostTurn = undefined
+    this.compaction = { savedTokens: 0, outputs: 0 }
+    this.compactionPlanMark = 0
   }
 
   contextStats(): ContextStats {
@@ -179,6 +190,8 @@ export class DawnAgent {
       repoIndex,
       latestPlan: this.latestContextPlan,
       estimatedSavedTokens: this.estimatedSavedTokens,
+      compactionSavedTokens: this.compaction.savedTokens,
+      compactedOutputs: this.compaction.outputs,
       averageInputTokens: average(this.inputTokenEstimates),
       highestCostTurn: this.highestCostTurn,
     }
@@ -196,6 +209,9 @@ export class DawnAgent {
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
     const answerGuidance = buildAnswerStyleGuidance(query)
+    // Fold compaction savings accrued since the last plan into this one (persisted for /savings).
+    const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
+    this.compactionPlanMark = this.compaction.savedTokens
     const built = buildRequestMessages({
       system: this.system,
       messages: this.messages,
@@ -204,6 +220,7 @@ export class DawnAgent {
       budget: contextBudget(this.contextMode, this.tokenBudget),
       answerGuidance,
       isAnthropic,
+      compactionSavings,
     })
     this.latestContextPlan = built.plan
     if (built.plan.totalEstimatedTokens > this.tokenBudget) {
@@ -313,12 +330,15 @@ export class DawnAgent {
               break
             case "tool-result": {
               const storedInput = toolInputs.get(part.toolCallId)
+              // part.output is already compacted for heavy tools; keep a bounded cross-turn
+              // echo and estimate the text we actually store.
+              const echo = truncateMiddle(String(part.output ?? ""), 4000)
               this.workingSet.add({
                 kind: "tool-result",
-                content: truncateMiddle(String(part.output ?? ""), 4000),
+                content: echo,
                 reason: `${part.toolName} output`,
                 ttl: ttlForKind(this.contextMode, "tool-result"),
-                estimatedTokens: estimateTokens(part.output),
+                estimatedTokens: estimateTokens(echo),
               })
               bus.emit({
                 type: "tool-end",

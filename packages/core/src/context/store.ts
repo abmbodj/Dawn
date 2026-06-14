@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite"
 import path from "node:path"
 import { dataDir } from "../paths"
 import type {
+  CompactedBlob,
   ContextPlan,
   ContextPlanTotals,
   FileSummary,
@@ -9,6 +10,9 @@ import type {
   RepoIndexEntry,
   RepoIndexStatus,
 } from "./types"
+
+/** Keep the reversible-compaction blob store bounded so it can't grow forever. */
+const MAX_BLOBS = 2000
 
 export class ContextStore {
   private db: Database
@@ -53,11 +57,20 @@ export class ContextStore {
         ts INTEGER NOT NULL,
         json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS compacted_blobs (
+        hash TEXT PRIMARY KEY,
+        session_id TEXT,
+        tool TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_tokens INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `)
     // Migrate existing DBs that pre-date source_tokens column
     try {
       this.db.exec("ALTER TABLE file_summaries ADD COLUMN source_tokens INTEGER NOT NULL DEFAULT 0")
     } catch {}
+    this.pruneBlobs()
   }
 
   replaceRepoIndex(cwd: string, entries: RepoIndexEntry[]): void {
@@ -193,6 +206,7 @@ export class ContextStore {
     const totals: ContextPlanTotals = {
       plans: 0,
       estimatedSavedTokens: 0,
+      compactionSavedTokens: 0,
       plannedInputTokens: 0,
       includedItems: 0,
       skippedItems: 0,
@@ -204,6 +218,7 @@ export class ContextStore {
       const plan = recorded.plan
       totals.plans += 1
       totals.estimatedSavedTokens += plan.savingsEstimate + (plan.substitutionSavings ?? 0)
+      totals.compactionSavedTokens += plan.compactionSavings ?? 0
       totals.plannedInputTokens += plan.totalEstimatedTokens
       totals.includedItems += plan.includedItems?.length ?? 0
       totals.skippedItems += plan.skippedItems?.length ?? plan.trimmedItems.length
@@ -222,6 +237,40 @@ export class ContextStore {
     }
 
     return totals
+  }
+
+  /** Stash a full tool output for later retrieval via the `expand` tool. Idempotent on hash. */
+  putBlob(blob: CompactedBlob): void {
+    this.db
+      .query(
+        `INSERT OR REPLACE INTO compacted_blobs (hash, session_id, tool, content, source_tokens, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(blob.hash, blob.sessionId ?? null, blob.tool, blob.content, blob.sourceTokens, blob.createdAt)
+  }
+
+  getBlob(hash: string): CompactedBlob | undefined {
+    const row = this.db.query("SELECT * FROM compacted_blobs WHERE hash = ?").get(hash) as any
+    if (!row) return undefined
+    return {
+      hash: row.hash,
+      sessionId: row.session_id ?? undefined,
+      tool: row.tool,
+      content: row.content,
+      sourceTokens: row.source_tokens,
+      createdAt: row.created_at,
+    }
+  }
+
+  /** Evict oldest blobs beyond the cap so the store stays bounded. */
+  pruneBlobs(maxRows = MAX_BLOBS): void {
+    this.db
+      .query(
+        `DELETE FROM compacted_blobs WHERE hash IN (
+           SELECT hash FROM compacted_blobs ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?
+         )`,
+      )
+      .run(Math.max(0, Math.floor(maxRows)))
   }
 
   close(): void {

@@ -42,6 +42,8 @@ const emptyContext: ContextStats = {
   cachedSummaries: 0,
   repoIndex: { cwd: "/repo", indexedFiles: 0 },
   estimatedSavedTokens: 0,
+  compactionSavedTokens: 0,
+  compactedOutputs: 0,
   averageInputTokens: 0,
 }
 
@@ -76,6 +78,8 @@ describe("formatContextReport", () => {
       cachedSummaries: 42,
       repoIndex: { cwd: "/repo", indexedFiles: 100, updatedAt: 1 },
       estimatedSavedTokens: 18200,
+      compactionSavedTokens: 0,
+      compactedOutputs: 0,
       averageInputTokens: 0,
       latestPlan: {
         systemTokens: 100,
@@ -104,6 +108,7 @@ describe("formatContextReport", () => {
         skippedItems: [{ kind: "history", label: "history message", tokens: 1200, reason: "history budget" }],
         savingsEstimate: 1200,
         substitutionSavings: 0,
+        compactionSavings: 0,
       },
     }
 
@@ -143,6 +148,8 @@ describe("formatUsageReport", () => {
       cachedSummaries: 0,
       repoIndex: { cwd: "/repo", indexedFiles: 0 },
       estimatedSavedTokens: 1200,
+      compactionSavedTokens: 0,
+      compactedOutputs: 0,
       averageInputTokens: 1500,
       highestCostTurn: {
         providerId: "groq",
@@ -188,6 +195,7 @@ describe("formatSavingsReport", () => {
           context: {
             plans: 2,
             estimatedSavedTokens: 1200,
+            compactionSavedTokens: 0,
             plannedInputTokens: 2200,
             includedItems: 4,
             skippedItems: 3,
@@ -207,6 +215,7 @@ describe("formatSavingsReport", () => {
           context: {
             plans: 4,
             estimatedSavedTokens: 3000,
+            compactionSavedTokens: 0,
             plannedInputTokens: 5000,
             includedItems: 8,
             skippedItems: 6,
@@ -218,6 +227,7 @@ describe("formatSavingsReport", () => {
           context: {
             plans: 6,
             estimatedSavedTokens: 5000,
+            compactionSavedTokens: 0,
             plannedInputTokens: 9000,
             includedItems: 12,
             skippedItems: 10,
@@ -250,6 +260,7 @@ describe("formatSavingsReport", () => {
           context: {
             plans: 1,
             estimatedSavedTokens: 1200,
+            compactionSavedTokens: 0,
             plannedInputTokens: 1600,
             includedItems: 1,
             skippedItems: 1,

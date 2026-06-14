@@ -3,7 +3,8 @@ import path from "node:path"
 import { type ToolSet, tool } from "ai"
 import { z } from "zod"
 import type { Bus } from "../bus/bus"
-import { estimateTokens, maxReadLines, ttlForKind } from "../context/budget"
+import { compactBudget, estimateTokens, maxReadLines, ttlForKind } from "../context/budget"
+import { compactToolOutput } from "../context/compact"
 import type { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
 import type { ContextMode } from "../context/types"
@@ -28,7 +29,14 @@ export interface ToolContext {
   workingSet?: ContextWorkingSet
   contextMode?: ContextMode
   bgProcs?: Map<string, BgProcess>
+  /** Tags stashed compaction blobs; informational. */
+  sessionId?: string
+  /** Called when a heavy tool output is compacted, so the agent can tally savings. */
+  onCompaction?: (beforeTokens: number, afterTokens: number) => void
 }
+
+/** Tools whose string output can be large enough to be worth content-aware compaction. */
+const HEAVY_OUTPUT_TOOLS = new Set(["bash", "bash_output", "grep", "glob", "ls", "web_fetch", "web_search"])
 
 function resolvePath(cwd: string, p: string): string {
   return path.isAbsolute(p) ? p : path.resolve(cwd, p)
@@ -676,7 +684,43 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
-  return {
+  const expand = tool({
+    description:
+      "Retrieve the full, uncompacted output that an earlier tool result elided. When a tool result ends " +
+      'with an «expand:HASH …» marker, its output was compacted to save tokens — call expand("HASH") to get ' +
+      "the original. Narrow it with a regex pattern or offset/limit instead of pulling everything back.",
+    inputSchema: z.object({
+      hash: z.string().describe("The hash from an «expand:…» marker"),
+      pattern: z.string().optional().describe("Only return lines matching this regex"),
+      offset: z.number().int().min(1).optional().describe("1-based line to start from"),
+      limit: z.number().int().min(1).optional().describe("Max lines to return"),
+    }),
+    execute: async ({ hash, pattern, offset, limit }) => {
+      const blob = ctx.contextStore?.getBlob(hash)
+      if (!blob)
+        return `No stored output for hash "${hash}" — it may have been evicted. Re-run the original command if you still need it.`
+      let lines = blob.content.split("\n")
+      if (pattern) {
+        let re: RegExp
+        try {
+          re = new RegExp(pattern)
+        } catch {
+          return `Invalid regex: ${pattern}`
+        }
+        lines = lines.filter((l) => re.test(l))
+        if (lines.length === 0) return `No lines in the stored output match /${pattern}/.`
+      }
+      const start = offset ? offset - 1 : 0
+      const slice = lines.slice(start, start + (limit ?? lines.length))
+      const body = truncateMiddle(slice.join("\n"))
+      const remaining = lines.length - (start + slice.length)
+      return remaining > 0
+        ? `${body}\n[… ${remaining} more lines — continue with offset=${start + slice.length + 1}]`
+        : body
+    },
+  })
+
+  const tools: ToolSet = {
     repo_overview,
     read,
     write,
@@ -693,7 +737,45 @@ export function createTools(ctx: ToolContext): ToolSet {
     todo_write,
     web_fetch,
     web_search,
+    expand,
   }
+  return withCompaction(tools, ctx)
+}
+
+/**
+ * Wraps heavy-output tools so their string results pass through the compaction engine
+ * before reaching the model. Compaction is once-only at execution time and deterministic,
+ * so the compacted text is what lands in both history and the working set. A no-op when
+ * there's no context store to stash originals for retrieval.
+ */
+function withCompaction(tools: ToolSet, ctx: ToolContext): ToolSet {
+  if (!ctx.contextStore) return tools
+  const budget = compactBudget(ctx.contextMode ?? "balanced")
+  const wrapped: ToolSet = {}
+  for (const [name, def] of Object.entries(tools)) {
+    const d = def as any
+    if (!HEAVY_OUTPUT_TOOLS.has(name) || typeof d.execute !== "function") {
+      wrapped[name] = def
+      continue
+    }
+    const original = d.execute.bind(d)
+    wrapped[name] = {
+      ...d,
+      execute: async (input: any, options: any) => {
+        const out = await original(input, options)
+        if (typeof out !== "string") return out
+        const outcome = compactToolOutput(out, {
+          tool: name,
+          budget,
+          store: ctx.contextStore,
+          sessionId: ctx.sessionId,
+        })
+        if (outcome.compacted) ctx.onCompaction?.(outcome.beforeTokens, outcome.afterTokens)
+        return outcome.text
+      },
+    }
+  }
+  return wrapped
 }
 
 function topLevelEntries(cwd: string, maxEntries: number): string {

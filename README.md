@@ -75,11 +75,22 @@ The read tool caps how much it pulls per call by mode — 120 / 240 / 600 lines
 ([tools/index.ts](packages/core/src/tools/index.ts)) — and every read enters the working set, so the
 model has what it needs without re-fetching the same file next turn.
 
-### 6. Output compaction
-Tool output is capped before it ever reaches the model
-([tools/truncate.ts](packages/core/src/tools/truncate.ts)): `truncateMiddle` keeps the head and tail
-(default ~30k chars) with an explicit `[… N lines omitted …]` marker, and `capLine` clamps any single
-line to 2,000 chars so a minified file can't blow up the context.
+### 6. Content-aware output compaction (reversible)
+Large tool outputs are the biggest token sink in a coding agent — a single `bash`, `grep`, or
+`web_fetch` can dwarf the rest of the prompt, and it's re-sent on every step of a multi-step turn. Dawn
+routes each heavy tool output through a compaction engine
+([context/compact/](packages/core/src/context/compact/)) that detects its shape and shrinks it
+accordingly: JSON arrays keep their keys and head/tail items while the redundant middle is elided
+(SmartCrusher-style), repetitive logs collapse identical lines into `(×N)`, grep results are grouped and
+capped per file, and free text keeps an anchor-aware head+tail with error lines preserved. An
+**inflation guard** reverts to the original whenever compaction wouldn't actually help, and aggressiveness
+follows the context mode.
+
+Compaction is **reversible**: the full original is stashed in SQLite and the compacted output ends with an
+`«expand:HASH …»` marker. When the model genuinely needs the elided detail it calls the **`expand`** tool
+— optionally narrowed by regex or line range — instead of re-running the command, so Dawn compacts
+aggressively without ever losing information. (`truncateMiddle`/`capLine` in
+[tools/truncate.ts](packages/core/src/tools/truncate.ts) remain the upstream char-level hard caps.)
 
 ### 7. Prompt caching (Anthropic)
 The system prompt is kept stable across a session
@@ -104,7 +115,7 @@ to decide what to send.
 Because Dawn plans context explicitly, it can measure the result. Three commands surface it:
 
 - **`/context`** — current budget and mode, what's loaded right now, cached summaries, repo-index size,
-  and estimated tokens saved.
+  estimated tokens saved, and tool outputs compacted this session.
 - **`/usage`** — per-model `↑input ↓output`, cache reads/writes, cost, average input per turn, and the
   highest-cost turn.
 - **`/savings`** — the headline report, across **session / project / lifetime** scopes. Plans are
@@ -116,7 +127,7 @@ caching."** The numbers come from these formulas (all in
 [packages/tui/src/status.ts](packages/tui/src/status.ts)):
 
 ```text
-saved        = trim savings + substitution savings   (summaries instead of full files)
+saved        = trim + substitution (summaries) + tool-output compaction
 input cut %  = saved / (sent + saved)
 would send   = sent input + saved
 est $ saved  = saved × input_price / 1M
@@ -131,11 +142,13 @@ Compared to: reading full files, no prompt caching
 Pricing: input $3.00 / 1M tokens, cache read $0.300 / 1M tokens
 
 Session:
-  saved: 12,400 tokens (summaries + trim)
-  input cut: 67%
+  saved: 16,900 tokens
+    summaries + trim: 12,400 tokens
+    tool-output compaction: 4,500 tokens
+  input cut: 73%
   Dawn sent: 6.2k input
-  would send: 18.6k input
-  est $ saved: $0.037
+  would send: 23.1k input
+  est $ saved: $0.051
   cache $ saved: $0.108
   context plans: 14
   context items: 53 included / 21 skipped

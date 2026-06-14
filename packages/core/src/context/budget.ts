@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai"
 import type {
+  CompactBudget,
   ContextBudget,
   ContextMode,
   ContextPlan,
@@ -32,6 +33,13 @@ export function ttlForKind(mode: ContextMode, kind: WorkingSetItem["kind"]): num
 
 export function maxReadLines(mode: ContextMode): number {
   return mode === "minimal" ? 120 : mode === "balanced" ? 240 : 600
+}
+
+/** How aggressively to compact tool outputs, keyed off the context mode. */
+export function compactBudget(mode: ContextMode): CompactBudget {
+  if (mode === "minimal") return { threshold: 400, keepLines: 40, keepItems: 8 }
+  if (mode === "deep") return { threshold: 1600, keepLines: 200, keepItems: 30 }
+  return { threshold: 800, keepLines: 80, keepItems: 16 }
 }
 
 export function messageTokens(message: ModelMessage): number {
@@ -202,6 +210,7 @@ export function buildContextPlan(args: {
   skippedItems?: ContextPlanItem[]
   savingsEstimate: number
   substitutionSavings: number
+  compactionSavings?: number
 }): ContextPlan {
   const totalEstimatedTokens =
     args.systemTokens + args.historyTokens + args.summaryTokens + args.fileTokens + args.toolResultTokens
@@ -219,6 +228,7 @@ export function buildContextPlan(args: {
     skippedItems: args.skippedItems ?? [],
     savingsEstimate: args.savingsEstimate,
     substitutionSavings: args.substitutionSavings,
+    compactionSavings: args.compactionSavings ?? 0,
   }
 }
 
@@ -240,6 +250,8 @@ export function buildRequestMessages(args: {
   budget: ContextBudget
   answerGuidance?: string
   isAnthropic?: boolean
+  /** Tokens saved by tool-output compaction since the previous plan (recorded into the plan). */
+  compactionSavings?: number
 }): {
   system: SystemModelMessage
   messages: ModelMessage[]
@@ -308,6 +320,7 @@ export function buildRequestMessages(args: {
     skippedItems,
     savingsEstimate,
     substitutionSavings,
+    compactionSavings: args.compactionSavings ?? 0,
   })
 
   // Context message placed immediately before the latest user message so it
