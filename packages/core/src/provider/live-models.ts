@@ -11,7 +11,8 @@ import { connectedProviders } from "./provider"
 function toPerMillion(raw: string | number | undefined): number | undefined {
   if (raw === undefined || raw === null) return undefined
   const n = Number(raw)
-  return Number.isFinite(n) ? n * 1_000_000 : undefined
+  if (!Number.isFinite(n) || n < 0) return undefined // negative values are API sentinels (e.g. -1 = "variable"), not real prices
+  return n * 1_000_000
 }
 
 /** Derive access tier from cost. */
