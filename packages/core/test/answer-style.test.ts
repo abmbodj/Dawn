@@ -68,12 +68,14 @@ describe("buildAnswerStyleGuidance", () => {
 })
 
 describe("buildTurnGuidance", () => {
-  test("detects URL references and asks for exact fetch", () => {
+  test("detects URL references and asks for exact fetch with quote frugality", () => {
     const guidance = buildTurnGuidance("How can we use https://example.com/spec.md here?")
 
     expect(hasUrl("see https://example.com/spec.md")).toBe(true)
     expect(guidance).toContain("Use web_fetch on the exact URL")
     expect(guidance).toContain("don't imply you read it")
+    expect(guidance).toContain("Summarize what you find in your own words")
+    expect(guidance).toContain("quote at most a line or two")
   })
 
   test("detects latest/current external facts and asks for search", () => {

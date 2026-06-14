@@ -61,7 +61,8 @@ export function buildTurnGuidance(text: string, opts: TurnGuidanceOptions = {}):
   if (hasUrl(text)) {
     parts.push(
       "The user referenced a URL. Use web_fetch on the exact URL before relying on its contents. " +
-        "If it can't be fetched, say so and don't imply you read it.",
+        "If it can't be fetched, say so and don't imply you read it. " +
+        "Summarize what you find in your own words; quote at most a line or two.",
     )
   }
 
