@@ -10,6 +10,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "model", description: "Switch model across connected providers.", args: "[provider/model]" },
   { name: "plan-model", description: "Set the model used while in plan mode.", args: "[provider/model]" },
   { name: "connect", description: "Connect a model provider (API key or GitHub OAuth).", args: "[provider]" },
+  { name: "init", description: "Scan the repo and generate an AGENTS.md with project conventions." },
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },
   { name: "savings", description: "Show session, project, and lifetime token savings." },

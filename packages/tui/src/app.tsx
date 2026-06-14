@@ -207,6 +207,23 @@ export function itemsFromMessages(messages: ModelMessage[]): Item[] {
 
 const HELP = formatSlashCommandHelp()
 
+const INIT_PROMPT = `Scan this repository and create (or update) an \`AGENTS.md\` file at the project root.
+
+Steps:
+1. Use \`repo_overview\` to understand the overall structure.
+2. Read key convention files you find: \`package.json\`, \`tsconfig*.json\`, \`biome.json\` / \`.eslintrc*\`, \`*.md\` at the root, and any workspace config.
+3. Write \`AGENTS.md\` at the project root capturing the conventions an AI coding agent must know:
+   - Project purpose and tech stack (2–3 sentences max)
+   - Build, test, typecheck, and lint commands (exact \`bun\`/\`npm\` scripts)
+   - File/folder layout that isn't obvious from structure (e.g. where tools live, where new features go)
+   - Naming and code-style conventions
+   - What NOT to do (e.g. don't commit, don't use a banned pattern, don't touch generated files)
+   - Any project-specific gotchas or non-obvious invariants
+
+If \`AGENTS.md\` already exists, read it first and update it with anything missing or outdated — do not wholesale replace content that is still accurate.
+
+Keep the file under 150 lines. Favour bullet points over prose. This file is read by the agent on every session start, so signal-to-noise ratio is critical.`
+
 function firstLine(s: string): string {
   const line = s.split("\n")[0] ?? ""
   return line.length > 80 ? `${line.slice(0, 80)}…` : line
@@ -907,6 +924,17 @@ export function App(props: AppProps) {
               }),
             },
           })
+          break
+        }
+        case "init": {
+          if (busy) {
+            dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt" } })
+            break
+          }
+          dispatch({ type: "push", item: { kind: "user", text: "/init" } })
+          const initController = new AbortController()
+          abortRef.current = initController
+          void agent.send(INIT_PROMPT, initController.signal)
           break
         }
         case "context": {
