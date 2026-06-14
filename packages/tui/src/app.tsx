@@ -27,7 +27,7 @@ import {
 } from "@dawn/core"
 import type { ScrollBoxRenderable, TextareaOptions, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
-import { type RefObject, useCallback, useEffect, useReducer, useRef, useState } from "react"
+import { type RefObject, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
 import { ModelPicker } from "./components/ModelPicker"
 import { ProviderConnect, type ProviderOption, SETUP_PROVIDERS } from "./components/ProviderConnect"
@@ -564,46 +564,23 @@ function FileMentionSuggestionsView({
   )
 }
 
-// A short, subtle onboarding hint shown under the logo on the empty home screen.
-// Leads with the mode switch since it's otherwise undiscoverable until you cycle.
+const TIPS: Array<{ key: string; desc: string }> = [
+  { key: "Shift+Tab", desc: "cycle mode: normal · auto-edit · plan" },
+  { key: "/", desc: "open commands" },
+  { key: "↑ ↓", desc: "navigate history" },
+  { key: "Enter", desc: "send message" },
+  { key: "Shift+Enter", desc: "insert newline" },
+  { key: "Esc", desc: "stop generation" },
+]
+
 function WelcomeTips() {
-  const sep = <span fg={theme.dim}>{"   ·   "}</span>
+  const tip = useMemo(() => TIPS[Math.floor(Math.random() * TIPS.length)], [])
   return (
-    <box
-      style={{
-        marginTop: 1,
-        border: true,
-        borderColor: theme.border,
-        flexDirection: "column",
-        flexShrink: 0,
-        overflow: "hidden",
-        paddingLeft: 1,
-        paddingRight: 1,
-      }}
-      title="getting started"
-    >
-      <text>
-        <span fg={theme.accent}>Shift+Tab</span>
-        <span fg={theme.dim}>{"  cycle mode: normal · auto-edit · plan"}</span>
-      </text>
-      <text>
-        <span fg={theme.accent}>/</span>
-        <span fg={theme.dim}>{"  commands"}</span>
-        {sep}
-        <span fg={theme.accent}>↑ ↓</span>
-        <span fg={theme.dim}>{"  history"}</span>
-      </text>
-      <text>
-        <span fg={theme.accent}>Enter</span>
-        <span fg={theme.dim}>{"  send"}</span>
-        {sep}
-        <span fg={theme.accent}>Shift+Enter</span>
-        <span fg={theme.dim}>{"  newline"}</span>
-        {sep}
-        <span fg={theme.accent}>Esc</span>
-        <span fg={theme.dim}>{"  stop"}</span>
-      </text>
-    </box>
+    <text style={{ marginTop: 1 }}>
+      <span fg={theme.dim}>{"tip  "}</span>
+      <span fg={theme.accent}>{tip.key}</span>
+      <span fg={theme.dim}>{"  " + tip.desc}</span>
+    </text>
   )
 }
 
