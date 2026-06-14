@@ -337,8 +337,7 @@ describe("savingsBoxRows", () => {
     })
 
     expect(rows).toEqual([
-      { label: "saved", value: "0 tokens", tone: "dim" },
-      { label: "input cut", value: "0%", tone: "dim" },
+      { label: "input cut", value: "0% · 0 tokens", tone: "dim" },
       { label: "would send", value: "0 tokens" },
       { label: "sent", value: "0 tokens" },
       { label: "$ saved", value: "$0.000", tone: "dim" },
@@ -362,8 +361,7 @@ describe("savingsBoxRows", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(rows).toContainEqual({ label: "saved", value: "1.2k tokens", tone: "accent" })
-    expect(rows).toContainEqual({ label: "input cut", value: "29%", tone: "accent" })
+    expect(rows).toContainEqual({ label: "input cut", value: "29% · 1.2k tokens", tone: "accent" })
     expect(rows).toContainEqual({ label: "would send", value: "4.2k tokens" })
     expect(rows).toContainEqual({ label: "sent", value: "3.0k tokens" })
     expect(rows).toContainEqual({ label: "$ saved", value: "$0.001", tone: "accent" })

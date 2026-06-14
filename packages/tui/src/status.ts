@@ -260,13 +260,8 @@ export function savingsBoxRows(args: {
 
   return [
     {
-      label: "saved",
-      value: `${formatTokens(savedTokens)} tokens`,
-      tone: hasSavings ? "accent" : "dim",
-    },
-    {
       label: "input cut",
-      value: `${savedPercent}%`,
+      value: `${savedPercent}% · ${formatTokens(savedTokens)} tokens`,
       tone: hasSavings ? "accent" : "dim",
     },
     { label: "would send", value: `${formatTokens(wouldSendTokens)} tokens` },
