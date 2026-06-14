@@ -48,6 +48,11 @@ function lastModelId(): string | undefined {
   return call?.[0]?.model?.modelId
 }
 
+function lastRequestMessages(): any[] {
+  const call = streamTextMock.mock.calls[streamTextMock.mock.calls.length - 1]
+  return call?.[0]?.messages ?? []
+}
+
 describe("DawnAgent plan model selection", () => {
   let tmp: string
   let bus: Bus
@@ -87,6 +92,26 @@ describe("DawnAgent plan model selection", () => {
     try {
       await agent.send("draft a plan")
       expect(lastModelId()).toBe("plan")
+    } finally {
+      agent.close()
+    }
+  })
+
+  test("adds decision-complete plan-mode reminder to the latest user message", async () => {
+    const agent = makeAgent()
+    gate.setMode("plan")
+    try {
+      await agent.send("draft a plan")
+      const latestUser = [...lastRequestMessages()]
+        .reverse()
+        .find((m) => m?.role === "user" && String(m?.content ?? "").includes("draft a plan"))
+
+      expect(String(latestUser?.content ?? "")).toContain("Do not edit files")
+      expect(String(latestUser?.content ?? "")).toContain("goal/success criteria")
+      expect(String(latestUser?.content ?? "")).toContain("key files or behaviors")
+      expect(String(latestUser?.content ?? "")).toContain("tests/acceptance checks")
+      expect(String(latestUser?.content ?? "")).toContain("assumptions/defaults")
+      expect(String(latestUser?.content ?? "")).toContain("open questions")
     } finally {
       agent.close()
     }

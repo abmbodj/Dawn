@@ -337,6 +337,49 @@ describe("context budget", () => {
     ).toBe(true)
   })
 
+  test("Anthropic: context and answer guidance stay before the latest cached user message", () => {
+    const built = buildRequestMessages({
+      system: "sys",
+      messages: [
+        { role: "user", content: "prev" },
+        { role: "assistant", content: "answer" },
+        { role: "user", content: "current question" },
+      ],
+      summaries: [
+        {
+          path: "foo.ts",
+          hash: "abc",
+          summary: "does foo things",
+          symbols: ["foo"],
+          dependencies: [],
+          lastSummarizedAt: 0,
+          tokenEstimate: 10,
+          sourceTokens: 100,
+        },
+      ],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 2000 },
+      answerGuidance: "First sentence: answer directly.",
+      isAnthropic: true,
+    })
+
+    const msgs = built.messages
+    const contextIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("compact repository context"),
+    )
+    const guidanceIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("Answer guidance for this turn"),
+    )
+    const latestIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("current question"),
+    )
+
+    expect(contextIdx).not.toBe(-1)
+    expect(guidanceIdx).toBe(contextIdx + 1)
+    expect(latestIdx).toBe(guidanceIdx + 1)
+    expect((msgs.at(-1) as any)?.providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
+  })
+
   test("Anthropic: system carries providerOptions, last message carries cache breakpoint", () => {
     const built = buildRequestMessages({
       system: "sys",

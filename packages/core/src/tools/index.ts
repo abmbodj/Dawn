@@ -243,14 +243,14 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const repo_overview = tool({
     description:
-      "Read a compact snapshot of the current repository: top-level files, manifests, README excerpt, workspace packages, scripts, dependencies, and git status. Use this before answering broad project/repo overview questions.",
+      "Read a compact snapshot of the current repository: top-level files, manifests, README excerpt, workspace packages, scripts, dependencies, and git status. Use this before answering broad project/repo overview questions; use grep/read afterward for exact code claims.",
     inputSchema: z.object({}),
     execute: async () => buildRepoOverview(cwd),
   })
 
   const read = tool({
     description:
-      "Read a file with line numbers. Prefer reading only the range you need via offset/limit instead of whole large files.",
+      "Read a real file with line numbers after locating it with grep/glob/ls or a user-provided path. Prefer only the needed range via offset/limit; cite these line numbers for repo/code claims.",
     inputSchema: z.object({
       filePath: z.string().describe("Path to the file (relative to cwd or absolute)"),
       offset: z.number().int().min(1).optional().describe("1-based line to start from"),
@@ -368,7 +368,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const grep = tool({
     description:
-      "Search file contents with a regex (ripgrep if available, otherwise grep). Use this to locate code before reading files.",
+      "Search real file contents with a regex (ripgrep if available, otherwise grep). Use this first to locate repo/code truth before reading files; don't guess paths, symbols, or behavior from memory.",
     inputSchema: z.object({
       pattern: z.string().describe("Regular expression to search for"),
       path: z.string().optional().describe("Directory or file to search (default cwd)"),
@@ -406,7 +406,8 @@ export function createTools(ctx: ToolContext): ToolSet {
   })
 
   const glob = tool({
-    description: 'Find files by glob pattern, e.g. "src/**/*.ts". Returns paths relative to cwd.',
+    description:
+      'Find real files by glob pattern, e.g. "src/**/*.ts". Returns paths relative to cwd; use before read when the path is uncertain.',
     inputSchema: z.object({
       pattern: z.string(),
     }),
@@ -424,7 +425,8 @@ export function createTools(ctx: ToolContext): ToolSet {
   })
 
   const ls = tool({
-    description: "List a directory. Directories have a trailing slash.",
+    description:
+      "List a real directory. Directories have a trailing slash; use to verify project structure before relying on paths.",
     inputSchema: z.object({
       path: z.string().optional().describe("Directory to list (default cwd)"),
     }),
@@ -513,7 +515,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const web_fetch = tool({
     description:
-      "Fetch a URL and return its text content (HTML stripped). Use for looking up documentation, changelogs, or any external resource.",
+      "Fetch an exact URL and return its text content (HTML stripped). Use before relying on user-provided links, documentation, changelogs, or URLs returned by search; if fetching fails, report that instead of simulating content.",
     inputSchema: z.object({
       url: z.string().url().describe("URL to fetch"),
     }),
@@ -551,8 +553,8 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const web_search = tool({
     description:
-      "Search the web for current information. Requires BRAVE_API_KEY or TAVILY_API_KEY environment variable. " +
-      "If no key is configured, use web_fetch with a known URL instead.",
+      "Search the web for current or unknown external information, especially latest/current/recent facts. " +
+      "Requires BRAVE_API_KEY or TAVILY_API_KEY; if not configured, use web_fetch with a known URL or say search is unavailable.",
     inputSchema: z.object({
       query: z.string().describe("Search query"),
     }),

@@ -23,8 +23,8 @@ import type { SessionStore } from "../session/store"
 import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
-import { buildAnswerStyleGuidance } from "./answer-style"
-import { classifyFailure, type ClassifiedFailure } from "./errors"
+import { buildTurnGuidance } from "./answer-style"
+import { type ClassifiedFailure, classifyFailure } from "./errors"
 import { loadProjectMemory, type ProjectMemory } from "./project-memory"
 import { makeRepairToolCall } from "./repair"
 import { buildSystemPrompt } from "./system"
@@ -49,6 +49,12 @@ export interface AgentOptions {
 
 const MAX_STEPS = 40
 const REPO_OVERVIEW_TOOL = "repo_overview"
+const PLAN_MODE_REMINDER =
+  "<system-reminder>Plan mode is active. Do not edit files or run side-effecting commands. " +
+  "Research the task thoroughly. Before calling exit_plan_mode, present a decision-complete plan " +
+  "with goal/success criteria, key files or behaviors to change, tests/acceptance checks, " +
+  "assumptions/defaults, and any open questions. If a critical question remains, ask it instead " +
+  "of exiting plan mode.</system-reminder>"
 
 export function isRepoOverviewQuestion(text: string): boolean {
   const query = text
@@ -255,7 +261,7 @@ export class DawnAgent {
     const latest = this.messages[this.messages.length - 1]
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
-    const answerGuidance = buildAnswerStyleGuidance(query)
+    const answerGuidance = buildTurnGuidance(query, { currentDate: new Date().toISOString().slice(0, 10) })
     // Fold compaction savings accrued since the last plan into this one (persisted for /savings).
     const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
     this.compactionPlanMark = this.compaction.savedTokens
@@ -287,10 +293,7 @@ export class DawnAgent {
     this.busy = true
     const { bus, opts } = this
 
-    const effectiveText =
-      opts.gate.mode === "plan"
-        ? `${text}\n\n<system-reminder>Plan mode is active. Do not edit files or run side-effecting commands. Research the task thoroughly, present a complete plan, then call exit_plan_mode for user approval.</system-reminder>`
-        : text
+    const effectiveText = opts.gate.mode === "plan" ? `${text}\n\n${PLAN_MODE_REMINDER}` : text
     this.messages.push({ role: "user", content: effectiveText })
     this.persist()
     bus.emit({ type: "turn-start" })
