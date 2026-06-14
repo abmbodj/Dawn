@@ -23,6 +23,7 @@ import {
   setApiKey,
   startDeviceFlow,
   tryGhCliToken,
+  withLMStudio,
   withOllama,
   withAllLiveModels,
 } from "@dawn/core"
@@ -43,6 +44,7 @@ Usage:
   dawn auth list             show configured providers
   dawn auth logout <provider>
   dawn models [provider]     list known models for connected providers
+  dawn models --refresh      re-fetch model list from models.dev
   dawn --version | --help`
 
 interface Flags {
@@ -52,6 +54,7 @@ interface Flags {
   yolo: boolean
   budget: number
   contextMode: ContextMode
+  refresh?: boolean
   positional: string[]
 }
 
@@ -101,6 +104,9 @@ function parseFlags(argv: string[]): Flags {
         flags.contextMode = mode
         break
       }
+      case "--refresh":
+        flags.refresh = true
+        break
       default:
         flags.positional.push(arg)
     }
@@ -263,9 +269,10 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
   }
 }
 
-async function modelsCommand(filter: string | undefined, cwd: string): Promise<void> {
+async function modelsCommand(filter: string | undefined, refresh: boolean | undefined, cwd: string): Promise<void> {
   const config = loadConfig(cwd)
-  const catalog = await loadCatalog()
+  const catalog = await loadCatalog({ refresh })
+  await Promise.all([withOllama(catalog), withLMStudio(catalog)])
   await withAllLiveModels(catalog, config)
   for (const provider of connectedProviders(catalog, config)) {
     if (filter && provider.id !== filter) continue
@@ -285,6 +292,7 @@ async function oneShot(flags: Flags): Promise<void> {
   }
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
+  await Promise.all([withOllama(catalog), withLMStudio(catalog)])
   await withAllLiveModels(catalog, config)
   const bus = new Bus()
   const gate = new PermissionGate()
@@ -344,6 +352,7 @@ async function oneShot(flags: Flags): Promise<void> {
 async function interactive(flags: Flags): Promise<void> {
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
+  await Promise.all([withOllama(catalog), withLMStudio(catalog)])
   await withAllLiveModels(catalog, config)
 
   const store = new SessionStore()
@@ -395,7 +404,7 @@ async function main(): Promise<void> {
     }
     case "models": {
       const flags = parseFlags(rest)
-      await modelsCommand(flags.positional[0], flags.cwd)
+      await modelsCommand(flags.positional[0], flags.refresh, flags.cwd)
       return
     }
     case "index":

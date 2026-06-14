@@ -295,6 +295,22 @@ export const FALLBACK_CATALOG: Catalog = {
     },
   },
 
+  // ── Ollama Cloud ──────────────────────────────────────────────────────────
+  "ollama-cloud": {
+    id: "ollama-cloud",
+    name: "Ollama Cloud",
+    env: ["OLLAMA_API_KEY"],
+    api: "https://ollama.com/v1",
+    models: {
+      "llama3.3": {
+        id: "llama3.3",
+        name: "Llama 3.3",
+        tool_call: true,
+        access: "standard",
+      },
+    },
+  },
+
   // Ollama is intentionally not static here — it's injected at runtime by
   // withOllama() only when an actual local server is detected (see provider/ollama.ts).
 }

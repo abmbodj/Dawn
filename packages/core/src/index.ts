@@ -79,6 +79,7 @@ export {
   localModelFit,
 } from "./provider/local-fit"
 export { classifyFailure, type ClassifiedFailure, type FailureKind, isRetryableToolFailure } from "./agent/errors"
+export { detectLMStudio, lmStudioBaseURL, withLMStudio } from "./provider/lmstudio"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
 export { withLiveModels, withAllLiveModels } from "./provider/live-models"
 export {
