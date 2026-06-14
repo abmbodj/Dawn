@@ -28,16 +28,17 @@ describe("buildAnswerStyleGuidance", () => {
     expect(guidance).toContain("Lead with the direct answer in plain English")
     expect(guidance).toContain("Don't lead with type names, interfaces, or placeholder pseudo-code.")
     expect(guidance).toContain("Don't invent commands, modes, files, or behavior.")
-    expect(guidance?.length ?? 0).toBeLessThan(500)
+    expect(guidance).toContain("path:line")
+    expect(guidance?.length ?? 0).toBeLessThan(600)
   })
 
   test("builds compact guidance for change summaries", () => {
     const guidance = buildAnswerStyleGuidance("fix the savings color bug")
 
-    expect(guidance).toContain("Start with the outcome in one sentence.")
+    expect(guidance).toContain("One sentence on the outcome.")
     expect(guidance).toContain('End with what you ran to verify, or clearly say "not run"')
     expect(guidance).toContain("No file-by-file dumps")
-    expect(guidance?.length ?? 0).toBeLessThan(400)
+    expect(guidance?.length ?? 0).toBeLessThan(500)
   })
 
   test("returns no extra guidance for other replies", () => {

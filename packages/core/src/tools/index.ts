@@ -13,6 +13,12 @@ import type { PermissionGate } from "../permission/permission"
 import { applyEdit } from "./edit"
 import { capLine, capLines, truncateMiddle } from "./truncate"
 
+export interface BgProcess {
+  proc: ReturnType<typeof Bun.spawn>
+  chunks: string[]
+  done: boolean
+}
+
 export interface ToolContext {
   cwd: string
   gate: PermissionGate
@@ -21,6 +27,7 @@ export interface ToolContext {
   contextStore?: ContextStore
   workingSet?: ContextWorkingSet
   contextMode?: ContextMode
+  bgProcs?: Map<string, BgProcess>
 }
 
 function resolvePath(cwd: string, p: string): string {
@@ -109,6 +116,83 @@ export function toolTitle(toolName: string, input: any): string {
     }
     default:
       return ""
+  }
+}
+
+/** Concise semantic result for a completed tool call, shown in the activity feed. */
+export function toolResultSummary(toolName: string, input: any, output: unknown): string {
+  const out = String(output ?? "")
+  switch (toolName) {
+    case "read": {
+      // Count numbered lines (format: "    N→content")
+      const lineCount = out.split("\n").filter((l) => /^\s*\d+→/.test(l)).length
+      return lineCount > 0 ? `Read ${lineCount} line${lineCount === 1 ? "" : "s"}` : "Read"
+    }
+    case "grep": {
+      if (out === "No matches found") return "no matches"
+      const matches = out.split("\n").filter(Boolean).length
+      return `${matches} match${matches === 1 ? "" : "es"}`
+    }
+    case "glob": {
+      if (out === "No files match") return "no files"
+      const count = out.split("\n").filter((l) => l && !l.startsWith("[")).length
+      return `${count} file${count === 1 ? "" : "s"}`
+    }
+    case "ls": {
+      if (out === "(empty directory)") return "empty"
+      const count = out.split("\n").filter((l) => l && !l.startsWith("[")).length
+      return `${count} entr${count === 1 ? "y" : "ies"}`
+    }
+    case "edit": {
+      const added = (String(input?.newString ?? "").match(/\n/g) ?? []).length + 1
+      const removed = (String(input?.oldString ?? "").match(/\n/g) ?? []).length + 1
+      return `+${added} −${removed}`
+    }
+    case "write": {
+      const lines = String(input?.content ?? "").split("\n").length
+      return `Wrote ${lines} line${lines === 1 ? "" : "s"}`
+    }
+    case "bash": {
+      const exitMatch = out.match(/\[exit code (\d+)\]$/)
+      if (exitMatch) return `exit ${exitMatch[1]}`
+      const lineCount = out.split("\n").filter(Boolean).length
+      return lineCount > 1 ? `ok · ${lineCount} lines` : "ok"
+    }
+    case "repo_overview":
+      return "snapshot"
+    case "web_fetch": {
+      const domain = (() => {
+        try {
+          return new URL(String(out)).hostname
+        } catch {
+          return ""
+        }
+      })()
+      const lines = out.split("\n").filter(Boolean).length
+      return domain ? `fetched ${domain}` : `${lines} line${lines === 1 ? "" : "s"}`
+    }
+    case "web_search": {
+      if (out.startsWith("Search not configured")) return "not configured"
+      const results = out.split("\n\n").filter(Boolean).length
+      return `${results} result${results === 1 ? "" : "s"}`
+    }
+    case "bash_background":
+      return out.startsWith("Started") ? `started ${out.match(/id: (\w+)/)?.[1] ?? ""}`.trim() : out
+    case "bash_output": {
+      const status = out.match(/\[(bg\w+)\] (\w+)/)?.[2] ?? ""
+      return status || "polled"
+    }
+    case "bash_kill":
+      return out.startsWith("Stopped") ? "killed" : out
+    case "todo_write": {
+      const todos = Array.isArray(input?.todos) ? input.todos : []
+      const done = todos.filter((t: any) => t?.status === "completed").length
+      return `${todos.length} task${todos.length === 1 ? "" : "s"} · ${done} done`
+    }
+    default: {
+      const first = out.split("\n")[0] ?? ""
+      return first.length > 80 ? `${first.slice(0, 80)}…` : first
+    }
   }
 }
 
@@ -417,7 +501,199 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
-  return { repo_overview, read, write, edit, bash, grep, glob, ls, ask_user, exit_plan_mode, todo_write }
+  const WEB_FETCH_MAX_CHARS = 12_000
+
+  const web_fetch = tool({
+    description:
+      "Fetch a URL and return its text content (HTML stripped). Use for looking up documentation, changelogs, or any external resource.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL to fetch"),
+    }),
+    execute: async ({ url }) => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+      const contentType = res.headers.get("content-type") ?? ""
+      let text = await res.text()
+      if (contentType.includes("html")) {
+        // Strip tags, collapse whitespace
+        text = text
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"')
+          .replace(/\s{2,}/g, " ")
+          .trim()
+      }
+      const capped = truncateMiddle(text, WEB_FETCH_MAX_CHARS)
+      const domain = new URL(url).hostname
+      ctx.workingSet?.add({
+        kind: "tool-result",
+        content: capped,
+        reason: `web_fetch ${domain}`,
+        ttl: ttlForKind(mode, "tool-result"),
+        estimatedTokens: estimateTokens(capped),
+      })
+      return capped
+    },
+  })
+
+  const web_search = tool({
+    description:
+      "Search the web for current information. Requires BRAVE_API_KEY or TAVILY_API_KEY environment variable. " +
+      "If no key is configured, use web_fetch with a known URL instead.",
+    inputSchema: z.object({
+      query: z.string().describe("Search query"),
+    }),
+    execute: async ({ query }) => {
+      const braveKey = process.env.BRAVE_API_KEY
+      const tavilyKey = process.env.TAVILY_API_KEY
+
+      if (braveKey) {
+        const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`
+        const res = await fetch(url, {
+          headers: { Accept: "application/json", "X-Subscription-Token": braveKey },
+          signal: AbortSignal.timeout(10_000),
+        })
+        if (!res.ok) throw new Error(`Brave search HTTP ${res.status}`)
+        const data = (await res.json()) as {
+          web?: { results?: Array<{ title: string; url: string; description?: string }> }
+        }
+        const results = data.web?.results ?? []
+        return (
+          results.map((r) => `${r.title}\n${r.url}\n${r.description ?? ""}`).join("\n\n") || "No results."
+        )
+      }
+
+      if (tavilyKey) {
+        const res = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: tavilyKey, query, max_results: 5 }),
+          signal: AbortSignal.timeout(10_000),
+        })
+        if (!res.ok) throw new Error(`Tavily search HTTP ${res.status}`)
+        const data = (await res.json()) as {
+          results?: Array<{ title: string; url: string; content?: string }>
+        }
+        return (
+          (data.results ?? []).map((r) => `${r.title}\n${r.url}\n${r.content ?? ""}`).join("\n\n") ||
+          "No results."
+        )
+      }
+
+      return "Search not configured. Set BRAVE_API_KEY or TAVILY_API_KEY, or use web_fetch with a known URL."
+    },
+  })
+
+  // Background process registry (shared across tool instances in this session)
+  const bgProcs: Map<string, BgProcess> = ctx.bgProcs ?? new Map()
+  let bgCounter = 0
+
+  const bash_background = tool({
+    description:
+      "Run a shell command in the background without blocking. Returns a process ID to poll with bash_output or stop with bash_kill. " +
+      "Use for dev servers, file watchers, long builds, or any command you need to run concurrently.",
+    inputSchema: z.object({
+      command: z.string(),
+    }),
+    execute: async ({ command }) => {
+      const ok = await gate.ask({ tool: "bash", title: `[background] ${command}` })
+      if (!ok) return DENIED
+      const id = `bg${++bgCounter}`
+      const proc = Bun.spawn(["bash", "-c", command], {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const entry: BgProcess = { proc, chunks: [], done: false }
+      bgProcs.set(id, entry)
+      // Stream output into chunks asynchronously
+      ;(async () => {
+        const reader = proc.stdout.getReader()
+        const decoder = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          entry.chunks.push(decoder.decode(value))
+        }
+      })().catch(() => {})
+      ;(async () => {
+        const reader = proc.stderr.getReader()
+        const decoder = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          entry.chunks.push(`[stderr] ${decoder.decode(value)}`)
+        }
+      })().catch(() => {})
+      proc.exited
+        .then(() => {
+          entry.done = true
+        })
+        .catch(() => {
+          entry.done = true
+        })
+      return `Started background process (id: ${id}). Use bash_output to check output or bash_kill to stop it.`
+    },
+  })
+
+  const bash_output = tool({
+    description:
+      "Drain and return new output from a background process started with bash (run_in_background). Also reports whether the process is still running.",
+    inputSchema: z.object({
+      id: z.string().describe("Process ID returned by bash when run_in_background was used"),
+    }),
+    execute: async ({ id }) => {
+      const entry = bgProcs.get(id)
+      if (!entry) return `No background process with id "${id}".`
+      const output = entry.chunks.splice(0).join("")
+      const status = entry.done ? "exited" : "running"
+      const trimmed = truncateMiddle(output.trimEnd() || "(no new output)", 4000)
+      return `[${id}] ${status}\n${trimmed}`
+    },
+  })
+
+  const bash_kill = tool({
+    description: "Stop a background process started with bash (run_in_background).",
+    inputSchema: z.object({
+      id: z.string().describe("Process ID to stop"),
+    }),
+    execute: async ({ id }) => {
+      const entry = bgProcs.get(id)
+      if (!entry) return `No background process with id "${id}".`
+      try {
+        entry.proc.kill()
+      } catch {
+        // already exited
+      }
+      entry.done = true
+      bgProcs.delete(id)
+      return `Stopped ${id}.`
+    },
+  })
+
+  return {
+    repo_overview,
+    read,
+    write,
+    edit,
+    bash,
+    bash_background,
+    bash_output,
+    bash_kill,
+    grep,
+    glob,
+    ls,
+    ask_user,
+    exit_plan_mode,
+    todo_write,
+    web_fetch,
+    web_search,
+  }
 }
 
 function topLevelEntries(cwd: string, maxEntries: number): string {

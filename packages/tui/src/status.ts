@@ -80,15 +80,18 @@ export function formatStatusUsage(usage: UsageTotals, mode: FooterMode): string 
   }
 }
 
-export function formatContextReport(stats: ContextStats): string {
+export function formatContextReport(stats: ContextStats, memorySources?: string[]): string {
   const lines = [
     "Context",
     `Mode: ${stats.mode}`,
     `Budget: ${formatWholeTokens(stats.budget)} tokens`,
     `Working set: ${formatWholeTokens(stats.workingSetTokens)} tokens`,
-    "",
-    "Loaded:",
   ]
+  if (memorySources && memorySources.length > 0) {
+    lines.push(`Project instructions: ${memorySources.join(", ")}`)
+  }
+  lines.push("", "Loaded:")
+
   if (stats.loadedItems.length === 0) {
     lines.push("- none")
   } else {
@@ -164,7 +167,7 @@ export function formatSavingsReport(args: {
     inputPrice === undefined
       ? "Pricing: — (no pricing data)"
       : `Pricing: input ${formatCost(inputPrice)} / 1M tokens` +
-          (cacheReadPrice !== undefined ? `, cache read ${formatCost(cacheReadPrice)} / 1M tokens` : ""),
+        (cacheReadPrice !== undefined ? `, cache read ${formatCost(cacheReadPrice)} / 1M tokens` : ""),
   ]
 
   for (const scope of args.scopes) {

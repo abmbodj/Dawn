@@ -13,7 +13,7 @@ const catalog: Catalog = {
       "paid-expensive": { id: "paid-expensive", name: "Paid Expensive", cost: { input: 10, output: 20 } },
       "no-price": { id: "no-price", name: "No Price" },
       "no-tool": { id: "no-tool", name: "No Tool", tool_call: false },
-      "reasoning": { id: "reasoning", name: "Reasoner", cost: { input: 5, output: 15 }, reasoning: true },
+      reasoning: { id: "reasoning", name: "Reasoner", cost: { input: 5, output: 15 }, reasoning: true },
     },
   },
 }

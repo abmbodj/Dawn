@@ -75,7 +75,8 @@ describe("substitution savings", () => {
     expect(built.plan.substitutionSavings).toBeGreaterThan(0)
     expect(built.plan.substitutionSavings).toBe(summary.sourceTokens - summary.tokenEstimate)
     // would-send = sent + savings; summary makes sent much smaller than naive full-file send
-    const wouldSendTokens = built.plan.totalEstimatedTokens + built.plan.savingsEstimate + built.plan.substitutionSavings
+    const wouldSendTokens =
+      built.plan.totalEstimatedTokens + built.plan.savingsEstimate + built.plan.substitutionSavings
     expect(wouldSendTokens).toBeGreaterThan(built.plan.totalEstimatedTokens)
   })
 

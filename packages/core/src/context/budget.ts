@@ -292,7 +292,10 @@ export function buildRequestMessages(args: {
   const skippedItems = [...summaries.trimmedDetails, ...history.trimmedDetails, ...working.trimmedDetails]
   const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens
   // Tokens saved by sending a summary instead of reading the full source file
-  const substitutionSavings = summaries.kept.reduce((sum, s) => sum + Math.max(0, s.sourceTokens - s.tokenEstimate), 0)
+  const substitutionSavings = summaries.kept.reduce(
+    (sum, s) => sum + Math.max(0, s.sourceTokens - s.tokenEstimate),
+    0,
+  )
   const plan = buildContextPlan({
     systemTokens,
     historyTokens: history.tokens,

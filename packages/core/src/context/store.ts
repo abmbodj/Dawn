@@ -55,7 +55,9 @@ export class ContextStore {
       );
     `)
     // Migrate existing DBs that pre-date source_tokens column
-    try { this.db.exec("ALTER TABLE file_summaries ADD COLUMN source_tokens INTEGER NOT NULL DEFAULT 0") } catch {}
+    try {
+      this.db.exec("ALTER TABLE file_summaries ADD COLUMN source_tokens INTEGER NOT NULL DEFAULT 0")
+    } catch {}
   }
 
   replaceRepoIndex(cwd: string, entries: RepoIndexEntry[]): void {

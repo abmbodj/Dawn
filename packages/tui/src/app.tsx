@@ -32,6 +32,13 @@ import { Logo } from "./components/Logo"
 import { ModelPicker } from "./components/ModelPicker"
 import { ProviderConnect, type ProviderOption, SETUP_PROVIDERS } from "./components/ProviderConnect"
 import { Setup } from "./components/Setup"
+import {
+  applyMention,
+  extractMentionQuery,
+  filterFileMentions,
+  mentionCaretOffset,
+  scanProjectFiles,
+} from "./fileMentions"
 import { dawnSyntaxStyle } from "./markdown"
 import {
   formatSlashCommandHelp,
@@ -500,6 +507,44 @@ function SlashCommandSuggestionsView({
   )
 }
 
+function FileMentionSuggestionsView({
+  suggestions,
+  selectedIndex,
+  maxRows,
+}: {
+  suggestions: string[]
+  selectedIndex: number
+  maxRows: number
+}) {
+  const count = Math.max(1, Math.min(maxRows, suggestions.length))
+  const start = Math.max(0, Math.min(selectedIndex - Math.floor(count / 2), suggestions.length - count))
+  const visible = suggestions.slice(start, start + count)
+  return (
+    <box
+      style={{
+        border: true,
+        borderColor: theme.accent,
+        flexDirection: "column",
+        flexShrink: 0,
+        overflow: "hidden",
+        paddingLeft: 1,
+        paddingRight: 1,
+      }}
+      title="files"
+    >
+      {visible.map((file, index) => {
+        const selected = start + index === selectedIndex
+        return (
+          <text key={file}>
+            <span fg={selected ? theme.accent : theme.dim}>{selected ? "› " : "  "}</span>
+            <span fg={selected ? theme.accent : theme.text}>{file}</span>
+          </text>
+        )
+      })}
+    </box>
+  )
+}
+
 // A short, subtle onboarding hint shown under the logo on the empty home screen.
 // Leads with the mode switch since it's otherwise undiscoverable until you cycle.
 function WelcomeTips() {
@@ -682,12 +727,19 @@ export function App(props: AppProps) {
   const [inputLines, setInputLines] = useState(1)
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
   const [dismissedCompletionValue, setDismissedCompletionValue] = useState<string | null>(null)
+  const [projectFiles, setProjectFiles] = useState<string[]>([])
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+  const [selectedMention, setSelectedMention] = useState(0)
   // Submitted prompts, oldest→newest, for Up/Down recall in the input.
   const [history, setHistory] = useState<string[]>([])
   const textareaRef = useRef<TextareaRenderable | null>(null)
   const historyIndexRef = useRef<number | null>(null)
   const draftRef = useRef("")
-  const caretRef = useRef<{ line: number; lineCount: number }>({ line: 0, lineCount: 1 })
+  const caretRef = useRef<{ line: number; lineCount: number; caretOffset: number }>({
+    line: 0,
+    lineCount: 1,
+    caretOffset: 0,
+  })
   const detailScrollRef = useRef<ScrollBoxRenderable | null>(null)
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
@@ -729,6 +781,18 @@ export function App(props: AppProps) {
   useEffect(() => {
     gate.setMode(permMode)
   }, [gate, permMode])
+
+  // Show a one-time dim note when project instructions are loaded.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-once effect
+  useEffect(() => {
+    const { sources } = agent.projectMemory
+    if (sources.length > 0) {
+      dispatch({
+        type: "push",
+        item: { kind: "info", text: `loaded project instructions: ${sources.join(", ")}` },
+      })
+    }
+  }, [])
 
   useEffect(() => {
     const unsubscribe = agent.bus.subscribe((event) => {
@@ -846,7 +910,13 @@ export function App(props: AppProps) {
           break
         }
         case "context": {
-          dispatch({ type: "push", item: { kind: "info", text: formatContextReport(agent.contextStats()) } })
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: formatContextReport(agent.contextStats(), agent.projectMemory.sources),
+            },
+          })
           break
         }
         case "new": {
@@ -902,17 +972,29 @@ export function App(props: AppProps) {
     [agent, busy, runCommand, session.id, store],
   )
 
-  const handlePromptInput = useCallback((value: string) => {
-    setPromptValue(value)
-    setSelectedSuggestion(0)
-    if (programmaticPromptValueRef.current === value) {
-      programmaticPromptValueRef.current = null
-      return
-    }
-    // A real keystroke ends history browsing and re-enables suggestions.
-    historyIndexRef.current = null
-    setDismissedCompletionValue(null)
-  }, [])
+  const handlePromptInput = useCallback(
+    (value: string) => {
+      setPromptValue(value)
+      setSelectedSuggestion(0)
+      if (programmaticPromptValueRef.current === value) {
+        programmaticPromptValueRef.current = null
+        return
+      }
+      // A real keystroke ends history browsing and re-enables suggestions.
+      historyIndexRef.current = null
+      setDismissedCompletionValue(null)
+      // Update @-mention query from new value + current caret offset
+      const offset = caretRef.current.caretOffset
+      const query = extractMentionQuery(value, offset)
+      setMentionQuery(query)
+      setSelectedMention(0)
+      // Eagerly scan project files on first @ so the popup is instant
+      if (query !== null && projectFiles.length === 0) {
+        scanProjectFiles(session.cwd).then(setProjectFiles)
+      }
+    },
+    [projectFiles.length, session.cwd],
+  )
 
   // The textarea is uncontrolled, so read its text on every content change.
   const handleContentChange = useCallback(() => {
@@ -921,9 +1003,19 @@ export function App(props: AppProps) {
     handlePromptInput(value)
   }, [handlePromptInput])
 
-  const handleCursorChange = useCallback((event: { line: number }) => {
-    caretRef.current = { line: event.line, lineCount: textareaRef.current?.lineCount ?? 1 }
-  }, [])
+  const handleCursorChange = useCallback(
+    (event: { line: number }) => {
+      const area = textareaRef.current
+      const caretOffset = area?.cursorOffset ?? 0
+      caretRef.current = { line: event.line, lineCount: area?.lineCount ?? 1, caretOffset }
+      // Recompute mention query on cursor move (user may have moved inside/outside @token)
+      const value = area?.plainText ?? promptValue
+      const query = extractMentionQuery(value, caretOffset)
+      setMentionQuery(query)
+      setSelectedMention(0)
+    },
+    [promptValue],
+  )
 
   // Imperatively replace the input text (history recall, completion fill). Flags
   // the value as programmatic so suggestions/dismissal aren't reset spuriously.
@@ -1019,6 +1111,13 @@ export function App(props: AppProps) {
   const selectedSuggestionIndex =
     commandSuggestions.length > 0 ? Math.min(selectedSuggestion, commandSuggestions.length - 1) : 0
   const selectedCommand = commandSuggestions[selectedSuggestionIndex]
+  const mentionSuggestions =
+    focusInput && !completionOpen && mentionQuery !== null
+      ? filterFileMentions(projectFiles, mentionQuery)
+      : []
+  const mentionOpen = mentionSuggestions.length > 0
+  const selectedMentionIndex =
+    mentionSuggestions.length > 0 ? Math.min(selectedMention, mentionSuggestions.length - 1) : 0
   const showUsageBox = footerMode(width) === "wide"
   // While in plan mode the dedicated plan model runs (if set); the footer reflects
   // whichever model will actually handle the next turn.
@@ -1048,7 +1147,9 @@ export function App(props: AppProps) {
     ? "Esc to stop"
     : completionOpen
       ? "↑↓ navigate · Tab complete · Enter run · Esc close"
-      : "/ commands · ↑↓ history · Shift+Enter newline · Enter send"
+      : mentionOpen
+        ? "↑↓ navigate · Tab/Enter insert · Esc close"
+        : "/ commands · @ file · ↑↓ history · Shift+Enter newline · Enter send"
 
   const fillSuggestion = useCallback(
     (command: SlashCommand) => {
@@ -1058,6 +1159,25 @@ export function App(props: AppProps) {
       setDismissedCompletionValue(value)
     },
     [setInputText],
+  )
+
+  const applyFileMention = useCallback(
+    (filePath: string) => {
+      const currentText = textareaRef.current?.plainText ?? promptValue
+      const offset = caretRef.current.caretOffset
+      const newText = applyMention(currentText, offset, filePath)
+      const newOffset = mentionCaretOffset(currentText, offset, filePath)
+      programmaticPromptValueRef.current = newText
+      const area = textareaRef.current
+      if (area) {
+        area.setText(newText)
+        area.cursorOffset = newOffset
+      }
+      setPromptValue(newText)
+      setMentionQuery(null)
+      setSelectedMention(0)
+    },
+    [promptValue],
   )
 
   const runSuggestion = useCallback(
@@ -1219,9 +1339,43 @@ export function App(props: AppProps) {
         return
       }
     }
+    if (mentionOpen) {
+      if (key.name === "down") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedMention((i) => (i + 1) % mentionSuggestions.length)
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        key.stopPropagation()
+        setSelectedMention((i) => (i - 1 + mentionSuggestions.length) % mentionSuggestions.length)
+        return
+      }
+      if (key.name === "tab" && !key.shift) {
+        key.preventDefault()
+        key.stopPropagation()
+        const chosen = mentionSuggestions[selectedMentionIndex]
+        if (chosen) applyFileMention(chosen)
+        return
+      }
+      if (isEnterKey(key.name)) {
+        key.preventDefault()
+        key.stopPropagation()
+        const chosen = mentionSuggestions[selectedMentionIndex]
+        if (chosen) applyFileMention(chosen)
+        return
+      }
+      if (key.name === "escape") {
+        key.preventDefault()
+        key.stopPropagation()
+        setMentionQuery(null)
+        return
+      }
+    }
     // Prompt history recall. Only intercept Up/Down at the buffer edges so the
     // textarea keeps native cursor movement on interior lines of a draft.
-    if (focusInput && !completionOpen && (key.name === "up" || key.name === "down")) {
+    if (focusInput && !completionOpen && !mentionOpen && (key.name === "up" || key.name === "down")) {
       const { line, lineCount } = caretRef.current
       if (key.name === "up" && line === 0 && history.length > 0) {
         key.preventDefault()
@@ -1359,6 +1513,12 @@ export function App(props: AppProps) {
         <SlashCommandSuggestionsView
           suggestions={commandSuggestions}
           selectedIndex={selectedSuggestionIndex}
+          maxRows={maxSuggestionRows}
+        />
+      ) : mentionOpen ? (
+        <FileMentionSuggestionsView
+          suggestions={mentionSuggestions}
+          selectedIndex={selectedMentionIndex}
           maxRows={maxSuggestionRows}
         />
       ) : null}

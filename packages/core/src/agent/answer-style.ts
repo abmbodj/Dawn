@@ -20,17 +20,18 @@ export function buildAnswerStyleGuidance(text: string): string | undefined {
       return (
         "This is a codebase question — answer it like a colleague who just looked.\n" +
         "- Lead with the direct answer in plain English, then one short paragraph on why or how.\n" +
-        "- Mention at most 1-2 file or function references, and only after the direct answer.\n" +
+        "- Cite specific code as `path:line` (e.g. `agent.ts:109`) when pointing at something concrete.\n" +
+        "- Mention at most 1-2 references, and only after the direct answer.\n" +
         "- Don't lead with type names, interfaces, or placeholder pseudo-code.\n" +
         '- Don\'t invent commands, modes, files, or behavior. If you infer something, label it "inference" or "likely".'
       )
     case "change-summary":
       return (
-        "You've been narrating as you worked, so close the turn — don't re-report every step.\n" +
-        "- Start with the outcome in one sentence.\n" +
-        "- Add a line on the most important behavior or code that changed.\n" +
+        "You've been narrating as you worked, so close with a sign-off, not a report.\n" +
+        "- One sentence on the outcome. For a trivial change, that's enough — or just stop.\n" +
+        "- If it's useful, add one line on the key behavior or code that changed (with a `path:line` cite).\n" +
         '- End with what you ran to verify, or clearly say "not run" if you didn\'t.\n' +
-        "- No file-by-file dumps or changelog-style recaps."
+        "- No file-by-file dumps, bullet lists of changes, or changelog-style recaps."
       )
     case "other":
       return undefined

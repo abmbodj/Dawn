@@ -20,10 +20,11 @@ import type { Catalog } from "../provider/catalog"
 import { normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
-import { createTools, toolPreview, toolTitle } from "../tools/index"
+import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { buildAnswerStyleGuidance } from "./answer-style"
+import { loadProjectMemory, type ProjectMemory } from "./project-memory"
 import { makeRepairToolCall } from "./repair"
 import { isRetryableToolFailure } from "./retry"
 import { buildSystemPrompt } from "./system"
@@ -81,6 +82,11 @@ export class DawnAgent {
   private readonly workingSet = new ContextWorkingSet()
   private readonly contextMode: ContextMode
   private readonly tokenBudget: number
+  private readonly bgProcs = new Map<
+    string,
+    { proc: ReturnType<typeof Bun.spawn>; chunks: string[]; done: boolean }
+  >()
+  readonly projectMemory: ProjectMemory
   private latestContextPlan: ContextPlan | undefined
   private estimatedSavedTokens = 0
   private inputTokenEstimates: number[] = []
@@ -103,10 +109,12 @@ export class DawnAgent {
       contextStore: this.contextStore,
       workingSet: this.workingSet,
       contextMode: this.contextMode,
+      bgProcs: this.bgProcs,
     })
     // Captured once: a byte-stable system prompt is what keeps the provider
     // prompt-cache prefix valid across turns.
-    this.system = buildSystemPrompt(opts.cwd)
+    this.projectMemory = loadProjectMemory(opts.cwd)
+    this.system = buildSystemPrompt(opts.cwd, this.projectMemory.text || undefined)
   }
 
   get isBusy(): boolean {
@@ -115,6 +123,14 @@ export class DawnAgent {
 
   close(): void {
     this.contextStore.close()
+    for (const entry of this.bgProcs.values()) {
+      try {
+        entry.proc.kill()
+      } catch {
+        /* already exited */
+      }
+    }
+    this.bgProcs.clear()
   }
 
   /** Validates the ref resolves (provider known, key present) before switching. */
@@ -270,6 +286,9 @@ export class DawnAgent {
         })
 
         let retryableFailure: unknown
+        // Stash inputs at tool-call time so tool-result can build a semantic summary
+        // even when the SDK's tool-result part doesn't carry input.
+        const toolInputs = new Map<string, unknown>()
 
         for await (const part of result.fullStream) {
           switch (part.type) {
@@ -283,6 +302,7 @@ export class DawnAgent {
               bus.emit({ type: "reasoning-delta", text: part.text })
               break
             case "tool-call":
+              toolInputs.set(part.toolCallId, part.input)
               bus.emit({
                 type: "tool-start",
                 id: part.toolCallId,
@@ -291,7 +311,8 @@ export class DawnAgent {
                 preview: toolPreview(part.toolName, part.input),
               })
               break
-            case "tool-result":
+            case "tool-result": {
+              const storedInput = toolInputs.get(part.toolCallId)
               this.workingSet.add({
                 kind: "tool-result",
                 content: truncateMiddle(String(part.output ?? ""), 4000),
@@ -303,17 +324,18 @@ export class DawnAgent {
                 type: "tool-end",
                 id: part.toolCallId,
                 name: part.toolName,
-                title: toolTitle(part.toolName, part.input),
-                summary: truncateMiddle(String(part.output ?? ""), 200),
+                title: toolTitle(part.toolName, storedInput ?? part.input),
+                summary: toolResultSummary(part.toolName, storedInput ?? part.input, part.output),
                 isError: false,
               })
               break
+            }
             case "tool-error":
               bus.emit({
                 type: "tool-end",
                 id: part.toolCallId,
                 name: part.toolName,
-                title: toolTitle(part.toolName, part.input),
+                title: toolTitle(part.toolName, toolInputs.get(part.toolCallId) ?? part.input),
                 summary: part.error instanceof Error ? part.error.message : String(part.error),
                 isError: true,
               })

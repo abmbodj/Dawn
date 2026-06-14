@@ -1,5 +1,6 @@
 export type { ModelMessage } from "ai"
 export { type AgentOptions, DawnAgent } from "./agent/agent"
+export { estimateMemoryTokens, loadProjectMemory, type ProjectMemory } from "./agent/project-memory"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
 export {
