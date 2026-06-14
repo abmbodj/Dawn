@@ -1,31 +1,158 @@
 # Dawn
 
-Dawn - a token-frugal AI coding agent for the terminal.
+**A token-frugal AI coding agent for the terminal.**
 
-Dawn is an early Bun and TypeScript monorepo for running an AI coding agent from your shell. It includes
-an interactive terminal UI, one-shot automation mode, multi-provider model selection, persisted sessions,
-permission prompts for side-effecting tools, and token/cost tracking.
+Dawn is an early Bun + TypeScript monorepo for running an AI coding agent from your shell. It has an
+interactive terminal UI, a one-shot `dawn run` mode, multi-provider model selection, persisted and
+resumable sessions, and permission prompts for side-effecting tools.
 
-This project is currently private and early-stage (`"private": true` in `package.json`). Treat the README as
-developer-facing setup and usage documentation, not as a production stability or package registry promise.
+The thing that makes Dawn *Dawn* is the part most agents skip: it treats your context window as a
+budget to spend carefully, not a bucket to refill every turn — and it shows you, live, exactly what
+that saved.
 
-## Features
+> This project is currently private and early-stage (`"private": true` in `package.json`). Treat this
+> README as developer-facing setup and usage documentation, not a stability or registry promise.
 
-- Interactive TUI with persisted sessions and resumable conversations.
-- One-shot `dawn run` mode for non-interactive prompts.
-- Multi-provider model support through the AI SDK and OpenAI-compatible endpoints.
-- API key storage with environment-variable fallback.
-- Local Ollama discovery, including RAM-fit warnings for large local models.
-- Permission prompts for `write`, `edit`, and `bash` tools in interactive mode.
-- Session usage and cost tracking across models.
-- Session, project, and lifetime savings reports compared to running without Dawn context planning.
-- Offline-friendly model catalog fallback with a cached `models.dev` refresh when available.
+---
+
+## Why Dawn
+
+Most coding agents resend the world on every turn: whole files re-read from scratch, the entire
+conversation replayed, large tool outputs pasted in verbatim. Input tokens dominate the bill, and you
+pay for them again and again.
+
+Dawn does the opposite. Before each turn it **plans** a compact context that fits a token budget:
+summaries instead of full files, recent history instead of all of it, tool results that expire after a
+few turns, and prompt caching where the provider supports it. Then it records what it sent versus what
+a naive agent *would have* sent, so the savings aren't a marketing claim — they're a number you can
+read with `/savings`.
+
+---
+
+## How Dawn saves tokens
+
+Every mechanism below lives in the code, not in a pitch deck. Together they're what keeps Dawn's
+per-turn input small.
+
+### 1. A per-turn context budget and planner
+Before each request, `buildRequestMessages`
+([packages/core/src/context/budget.ts](packages/core/src/context/budget.ts)) packs the prompt to fit a
+token budget — **8,000 tokens by default** (`--budget`) — in one of three modes (`--context`):
+
+| Mode | Read cap / call | Working-set TTLs | Summary TTL |
+| --- | --- | --- | --- |
+| `minimal` | 120 lines | shortest | 6 turns |
+| `balanced` *(default)* | 240 lines | medium | 10 turns |
+| `deep` | 600 lines | longest | 14 turns |
+
+Allocation order is system prompt → summaries (capped at 35% of what's left) → recent history →
+working set. Anything that doesn't fit is trimmed by priority before the request goes out.
+
+### 2. Summaries instead of full files
+Dawn indexes the repo and stores a compact summary per file — language, defined symbols, imports, and
+a short excerpt ([context/summarize.ts](packages/core/src/context/summarize.ts)). When a file is
+relevant, Dawn sends the summary instead of re-reading the source, and counts the difference as
+**substitution savings** (`sourceTokens − tokenEstimate`). Summaries are cached in SQLite keyed by file
+hash ([context/store.ts](packages/core/src/context/store.ts)), so an unchanged file is never
+re-summarized.
+
+### 3. A working set with TTL leases
+Loaded files, file ranges, and tool results live in a working set
+([context/working-set.ts](packages/core/src/context/working-set.ts)) where each item holds a TTL lease
+that ages out every turn (`decrementLeases`). Tool results survive ~1–3 turns, file loads ~1–4, and
+summaries ~6–14, depending on mode. When the budget is tight, items are dropped by priority —
+`summary > file-range > file > tool-result` — so the cheapest, most reusable context stays and the
+bulky transient context goes.
+
+### 4. Atomic history trimming
+Old conversation turns are dropped once they exceed the history budget, while the latest user turn is
+always kept (`trimHistory`/`groupHistory` in budget.ts). Tool-call/tool-result pairs are trimmed as a
+unit, which both saves tokens and avoids the orphaned-pair `400`s that OpenAI-compatible providers
+return.
+
+### 5. Bounded reads
+The read tool caps how much it pulls per call by mode — 120 / 240 / 600 lines
+([tools/index.ts](packages/core/src/tools/index.ts)) — and every read enters the working set, so the
+model has what it needs without re-fetching the same file next turn.
+
+### 6. Output compaction
+Tool output is capped before it ever reaches the model
+([tools/truncate.ts](packages/core/src/tools/truncate.ts)): `truncateMiddle` keeps the head and tail
+(default ~30k chars) with an explicit `[… N lines omitted …]` marker, and `capLine` clamps any single
+line to 2,000 chars so a minified file can't blow up the context.
+
+### 7. Prompt caching (Anthropic)
+The system prompt is kept stable across a session
+([agent/system.ts](packages/core/src/agent/system.ts)) and the compact context message is inserted
+right *before* the latest user turn, so it doesn't invalidate the cached prefix. A moving cache
+breakpoint (`withMovingAnthropicBreakpoint`) extends the cached span each turn, and cached input is
+billed at the cache-read rate (`computeCost` in [usage/ledger.ts](packages/core/src/usage/ledger.ts)).
+
+### 8. Terse answer-style guidance
+Dawn classifies each message (question / change / other) and injects output-shaping guidance
+([agent/answer-style.ts](packages/core/src/agent/answer-style.ts)): lead with the answer, cite
+`path:line`, skip file-by-file dumps. Smaller, sharper replies mean fewer output tokens too.
+
+### 9. Zero-cost token estimation
+All budgeting uses a local estimate (`estimateTokens = ceil(chars / 4)`) — no metering API calls just
+to decide what to send.
+
+---
+
+## The stats Dawn shows you
+
+Because Dawn plans context explicitly, it can measure the result. Three commands surface it:
+
+- **`/context`** — current budget and mode, what's loaded right now, cached summaries, repo-index size,
+  and estimated tokens saved.
+- **`/usage`** — per-model `↑input ↓output`, cache reads/writes, cost, average input per turn, and the
+  highest-cost turn.
+- **`/savings`** — the headline report, across **session / project / lifetime** scopes. Plans are
+  persisted to SQLite (`recordContextPlan`) and aggregated (`contextPlanTotals`), so lifetime numbers
+  survive restarts.
+
+The baseline Dawn compares against is stated in the report itself: **"reading full files, no prompt
+caching."** The numbers come from these formulas (all in
+[packages/tui/src/status.ts](packages/tui/src/status.ts)):
+
+```text
+saved        = trim savings + substitution savings   (summaries instead of full files)
+input cut %  = saved / (sent + saved)
+would send   = sent input + saved
+est $ saved  = saved × input_price / 1M
+cache $ saved = cached_input × (input_price − cache_read_price) / 1M
+```
+
+### Sample `/savings` output
+
+```text
+Savings
+Compared to: reading full files, no prompt caching
+Pricing: input $3.00 / 1M tokens, cache read $0.300 / 1M tokens
+
+Session:
+  saved: 12,400 tokens (summaries + trim)
+  input cut: 67%
+  Dawn sent: 6.2k input
+  would send: 18.6k input
+  est $ saved: $0.037
+  cache $ saved: $0.108
+  context plans: 14
+  context items: 53 included / 21 skipped
+  highest-saving turn: 4,800 tokens saved (7.4k / 8.0k, balanced)
+```
+
+> **Illustrative only.** The figures above are plugged into Dawn's real formulas to show the shape of
+> the report — they are not a benchmark. Your actual numbers depend on your repo, model, and mode, and
+> show up live in `/savings`. Dollar savings appear only when the selected model has pricing data.
+
+---
 
 ## Requirements
 
-- [Bun](https://bun.sh/) 1.3 or newer is recommended.
+- [Bun](https://bun.sh/) 1.3 or newer.
 - A terminal that can run the OpenTUI interface.
-- At least one connected model provider, API key, or reachable Ollama server.
+- At least one connected model provider — an API key or a reachable Ollama server.
 
 ## Quickstart
 
@@ -42,21 +169,16 @@ Start the interactive agent in the current directory:
 dawn
 ```
 
-If the command is not linked yet, run it through Bun:
+If the command isn't linked yet, run it through Bun:
 
 ```sh
 bun run dawn
 ```
 
-Add an API key for a provider:
+Add an API key for a provider, then list available models:
 
 ```sh
 dawn auth login groq
-```
-
-List models available from connected providers:
-
-```sh
 dawn models
 ```
 
@@ -66,60 +188,65 @@ Run a one-shot prompt:
 dawn run "summarize this repository"
 ```
 
-## CLI Reference
+## CLI reference
 
 ```text
-dawn                       Start an interactive session in the current directory.
-dawn -c, --continue        Resume the most recent session for this directory.
-dawn -m, --model <ref>     Use a model reference like provider/model.
-dawn --cwd <path>          Run against a different working directory.
-dawn --budget <tokens>     Cap estimated prompt tokens.
-dawn --context <mode>      Use minimal, balanced, or deep context planning.
-dawn run "<prompt>"        Run a one-shot non-interactive prompt.
-dawn run --yolo "<prompt>" Allow read, write, edit, and bash tools without prompts.
-dawn index                 Build or refresh the repository context index.
-dawn auth login <provider> Store an API key for a provider.
-dawn auth list             Show providers with stored API keys.
+dawn                        Start an interactive session in the current directory.
+dawn -c, --continue         Resume the most recent session for this directory.
+dawn -m, --model <ref>      Use a model reference like provider/model.
+dawn --cwd <path>           Run against a different working directory.
+dawn --budget <tokens>      Cap estimated prompt tokens (default 8000).
+dawn --context <mode>       Context planning: minimal, balanced (default), or deep.
+dawn run "<prompt>"         Run a one-shot non-interactive prompt.
+dawn run --yolo "<prompt>"  Allow read, write, edit, and bash tools without prompts.
+dawn index                  Build or refresh the repository context index.
+dawn auth login <provider>  Store an API key for a provider.
+dawn auth list              Show providers with stored API keys.
 dawn auth logout <provider> Remove a stored API key.
-dawn models [provider]     List known tool-capable models for connected providers.
-dawn --version             Print the current Dawn version.
-dawn --help                Print command help.
+dawn models [provider]      List known tool-capable models for connected providers.
+dawn --version              Print the current Dawn version.
+dawn --help                 Print command help.
 ```
 
-Model references use the `provider/model` format, for example:
+`--budget` and `--context` are the two dials on the savings/quality tradeoff: a smaller budget or
+`minimal` mode sends less context (cheaper, less grounded); `deep` sends more (pricier, more
+thorough). Model references use the `provider/model` format:
 
 ```sh
 dawn --model anthropic/claude-opus-4-8
 dawn --model groq/meta-llama/llama-4-scout-17b-16e-instruct
 ```
 
-In `dawn run`, reads are pre-allowed. Write/edit/bash tools are denied unless `--yolo` is passed. In the
-interactive TUI, Dawn asks before side-effecting tools run.
+In `dawn run`, reads are pre-allowed; write/edit/bash are denied unless `--yolo` is passed. In the
+interactive TUI, Dawn asks before any side-effecting tool runs.
 
-## Interactive Commands
+## Interactive commands
 
 Inside the TUI, submit these slash commands in the prompt:
 
 ```text
-/model   Switch model across connected providers.
-/context Show context budget, working set, and savings.
-/usage   Show token and cost breakdown for the session.
-/savings Show session, project, and lifetime token savings.
-/new     Start a fresh session.
-/clear   Clear the visible transcript while keeping the conversation.
-/reset   Wipe all Dawn data and return to setup wizard.
-/help    Show TUI help.
-/quit    Exit Dawn.
+/model      Switch model across connected providers.
+/plan-model Set the model used while in plan mode.
+/connect    Connect a model provider (API key or GitHub OAuth).
+/init       Scan the repo and generate an AGENTS.md with project conventions.
+/context    Show context budget, working set, and savings.
+/usage      Show token and cost breakdown for this session.
+/savings    Show session, project, and lifetime token savings.
+/new        Start a fresh session.
+/clear      Clear the visible transcript while keeping the conversation.
+/reset      Wipe all Dawn data and return to the setup wizard.
+/help       Show TUI help.
+/quit       Exit Dawn (alias: /exit).
 ```
 
-Type `/` in the prompt to open command autocomplete. Use Up/Down to navigate, Tab to complete, Enter
-to run the highlighted command, and Esc to close suggestions.
+Type `/` to open command autocomplete: Up/Down navigate, Tab completes, Enter runs, Esc closes.
 
 Keyboard shortcuts:
 
 ```text
-Esc      Interrupt a running turn or close an active picker.
-Ctrl+C   Quit.
+Shift+Tab  Cycle permission mode (normal / auto-edit / plan).
+Esc        Interrupt a running turn or close an active picker.
+Ctrl+C     Quit.
 ```
 
 When Dawn requests a tool permission:
@@ -132,18 +259,18 @@ n/Esc    Deny.
 
 ## Providers
 
-Dawn can use built-in provider metadata for Anthropic, OpenAI, Google, Groq, xAI, Mistral, DeepSeek,
-Perplexity, Together AI, Fireworks AI, Cerebras, OpenRouter, and Ollama when a local Ollama server is
-detected.
+Dawn ships built-in metadata for Anthropic, OpenAI, Google, Groq, xAI, Mistral, DeepSeek, Perplexity,
+Together AI, Fireworks AI, Cerebras, OpenRouter, and Ollama (when a local Ollama server is detected,
+including RAM-fit warnings for large local models).
 
-Provider credentials can come from Dawn's auth store or from each provider's environment variables, such as
+Credentials can come from Dawn's auth store or from each provider's environment variables, such as
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, or `GITHUB_COPILOT_TOKEN`.
 For GitHub Copilot, `dawn auth login github-copilot` uses GitHub device authorization, opens the
 default browser when possible, and falls back to storing a pasted Copilot token if no OAuth client id
 is available.
 
-The model catalog is loaded from cache, refreshed from `models.dev` when reachable, and falls back to an
-embedded catalog so the agent can still boot offline.
+The model catalog is loaded from cache, refreshed from `models.dev` when reachable, and falls back to
+an embedded catalog so the agent still boots offline.
 
 ## Configuration
 
@@ -180,8 +307,8 @@ The project `dawn.json` overrides global settings for that working directory. Ex
 Supported config fields:
 
 - `model`: default model reference in `provider/model` format.
-- `githubOAuthClientId`: GitHub OAuth App client id for Copilot device authorization. Overrides
-  Dawn's built-in client id when set.
+- `githubOAuthClientId`: GitHub OAuth App client id for Copilot device authorization. Overrides Dawn's
+  built-in client id when set.
 - `providers`: extra OpenAI-compatible providers by provider ID.
 - `providers.<id>.name`: optional display name.
 - `providers.<id>.baseURL`: OpenAI-compatible API base URL.
@@ -191,73 +318,45 @@ Supported config fields:
 Environment overrides:
 
 ```text
-DAWN_HOME        Override the home directory Dawn uses for config/data/cache defaults.
-DAWN_CONFIG_DIR  Override the config directory.
-DAWN_DATA_DIR    Override the data/auth directory.
-DAWN_CACHE_DIR   Override the cache directory.
+DAWN_HOME              Override the home directory Dawn uses for config/data/cache defaults.
+DAWN_CONFIG_DIR        Override the config directory.
+DAWN_DATA_DIR          Override the data/auth directory.
+DAWN_CACHE_DIR         Override the cache directory.
 DAWN_GITHUB_CLIENT_ID  GitHub OAuth App client id for Copilot device authorization.
-DAWN_NO_ANIM     Disable TUI logo animation when set.
+DAWN_NO_ANIM           Disable the TUI logo animation when set.
 ```
 
 ## Development
 
-Install dependencies:
-
 ```sh
-bun install
-```
-
-Run the local CLI:
-
-```sh
-bun run dawn
-```
-
-Run tests:
-
-```sh
-bun test
-```
-
-Typecheck:
-
-```sh
-bun run typecheck
-```
-
-Lint/check formatting with Biome:
-
-```sh
-bun run check
-```
-
-Format:
-
-```sh
-bun run format
+bun install        # install dependencies
+bun run dawn       # run the local CLI
+bun test           # run tests
+bun run typecheck  # tsc --noEmit
+bun run check      # biome check .
+bun run format     # biome format --write .
 ```
 
 The repository is organized as:
 
 ```text
 index.ts             CLI entrypoint.
-packages/core        Agent, providers, auth, config, sessions, tools, usage ledger.
+packages/core        Agent, providers, auth, config, sessions, tools, context planner, usage ledger.
 packages/tui         OpenTUI React interface.
 ```
 
-## Security Notes
+## Security notes
 
 - Do not commit API keys or local `dawn.json` files containing secrets.
 - Prefer provider environment variables or `dawn auth login <provider>` over inline credentials.
 - Stored API keys are written to Dawn's auth file with `0600` permissions.
 - `dawn run --yolo` allows side-effecting tools without prompts; use it only in trusted worktrees.
-- A dedicated `SECURITY.md`, `CONTRIBUTING.md`, license, and CI badges should be added when repository
+- A dedicated `SECURITY.md`, `CONTRIBUTING.md`, license, and CI badges should be added once repository
   hosting and contribution policy are finalized.
 
 ## Support
 
-For now, use the repository's configured issue tracker or discussions once hosting is available. Until then,
-the most reliable local reference is:
+Until hosting is available, the most reliable local reference is:
 
 ```sh
 dawn --help
