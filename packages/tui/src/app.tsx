@@ -76,7 +76,7 @@ export type Item =
       done: boolean
     }
   | { kind: "reasoning"; text: string; done?: boolean }
-  | { kind: "info"; text: string }
+  | { kind: "info"; text: string; silent?: boolean }
   | { kind: "error"; text: string }
   | { kind: "todos"; items: TodoItem[] }
 
@@ -806,7 +806,7 @@ export function App(props: AppProps) {
     if (sources.length > 0) {
       dispatch({
         type: "push",
-        item: { kind: "info", text: `loaded project instructions: ${sources.join(", ")}` },
+        item: { kind: "info", text: `loaded project instructions: ${sources.join(", ")}`, silent: true },
       })
     }
   }, [])
@@ -1131,7 +1131,7 @@ export function App(props: AppProps) {
     [applyModel, catalog, pickerTarget],
   )
 
-  const empty = items.length === 0
+  const empty = items.length === 0 || items.every((i) => i.kind === "info" && i.silent)
   const focusInput = !pickerOpen && !permission && !confirmModel && !connect && !question
   const commandSuggestions = getSlashCommandSuggestions(promptValue)
   const completionOpen =
