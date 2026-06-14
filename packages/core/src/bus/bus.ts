@@ -16,7 +16,7 @@ export interface TodoItem {
 
 export type AgentEvent =
   | { type: "turn-start" }
-  | { type: "attempt-reset"; reason: "retryable-tool-failure" }
+  | { type: "attempt-reset"; reason: "retryable-tool-failure" | "model-switch" }
   | { type: "text-delta"; text: string }
   | { type: "text-end" }
   | { type: "reasoning-delta"; text: string }
@@ -27,6 +27,7 @@ export type AgentEvent =
   | { type: "error"; message: string }
   | { type: "status"; message: string }
   | { type: "todos"; items: TodoItem[] }
+  | { type: "model-switched"; from: string; to: string; reason: string }
 
 export type AgentEventHandler = (event: AgentEvent) => void
 

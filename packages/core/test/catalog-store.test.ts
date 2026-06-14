@@ -59,15 +59,16 @@ describe("normalizeModelRef", () => {
 
 describe("fallback catalog", () => {
   test("contains a priced default anthropic model", () => {
-    const info = getModelInfo(FALLBACK_CATALOG, "anthropic/claude-opus-4-8")
-    expect(info?.cost?.input).toBe(5)
-    expect(info?.cost?.cache_read).toBe(0.5)
+    // FALLBACK_CATALOG now keeps one offline-safe model per provider (claude-sonnet-4-6)
+    const info = getModelInfo(FALLBACK_CATALOG, "anthropic/claude-sonnet-4-6")
+    expect(info?.cost?.input).toBe(3)
+    expect(info?.tool_call).toBe(true)
   })
 
-  test("contains canonical Groq Scout and omits the legacy bare key", () => {
+  test("groq fallback has one tool-capable model", () => {
     const models = FALLBACK_CATALOG.groq?.models ?? {}
-    expect(models["meta-llama/llama-4-scout-17b-16e-instruct"]).toBeDefined()
-    expect(models["llama-4-scout-17b-16e-instruct"]).toBeUndefined()
+    const toolCapable = Object.values(models).filter((m) => m.tool_call !== false)
+    expect(toolCapable.length).toBeGreaterThan(0)
   })
 
   test("normalizes stale cached Groq model ids", async () => {

@@ -78,8 +78,9 @@ export {
   type LocalModelFit,
   localModelFit,
 } from "./provider/local-fit"
+export { classifyFailure, type ClassifiedFailure, type FailureKind, isRetryableToolFailure } from "./agent/errors"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
-export { withOpenRouter } from "./provider/openrouter"
+export { withLiveModels, withAllLiveModels } from "./provider/live-models"
 export {
   connectedProviders,
   type ProviderStatus,

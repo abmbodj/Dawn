@@ -73,10 +73,12 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
     const isCurrent = ref === current
 
     let cost: string
-    if (!model.cost) {
+    if (model.access === "premium") {
+      cost = "premium plan"
+    } else if (!model.cost) {
       cost = "price unknown"
     } else if (model.cost.input === 0 && model.cost.output === 0) {
-      cost = "free"
+      cost = model.access === "free" || !model.access ? "free" : "included"
     } else {
       cost = `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
     }
@@ -112,7 +114,7 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
   return entries
 }
 
-const MODELS_LEGEND = "✦ reasoning · free $0 · price/Mtok in/out · type to search"
+const MODELS_LEGEND = "✦ reasoning · free $0 · premium = add-on plan · price/Mtok in/out · type to search"
 
 export function ModelPicker({
   catalog,

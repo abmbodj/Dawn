@@ -24,9 +24,9 @@ import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { buildAnswerStyleGuidance } from "./answer-style"
+import { classifyFailure, type ClassifiedFailure } from "./errors"
 import { loadProjectMemory, type ProjectMemory } from "./project-memory"
 import { makeRepairToolCall } from "./repair"
-import { isRetryableToolFailure } from "./retry"
 import { buildSystemPrompt } from "./system"
 
 export interface AgentOptions {
@@ -67,6 +67,53 @@ export function isRepoOverviewQuestion(text: string): boolean {
   const directProjectQuestion = /\bwhat(?:'s| is) this project\b/.test(query)
 
   return (asksForOverview && mentionsRepo) || directProjectQuestion
+}
+
+/**
+ * Pick the best fallback model when the active model fails.
+ * Priority: provider-suggested slug → cheapest same-provider model with tool-call support.
+ * Returns undefined if no accessible alternative exists.
+ */
+function chooseFallback(
+  activeRef: string,
+  catalog: Catalog,
+  config: import("../config/config").DawnConfig,
+  suggestedSlug?: string,
+): string | undefined {
+  const { providerId } = parseModelRef(activeRef)
+
+  // Try the provider-suggested slug first (e.g. from OpenRouter's "use this slug instead")
+  if (suggestedSlug) {
+    const normalized = suggestedSlug.includes("/") ? suggestedSlug : `${providerId}/${suggestedSlug}`
+    try {
+      resolveModel(normalized, catalog, config)
+      if (normalized !== activeRef) return normalized
+    } catch {
+      /* not resolvable */
+    }
+  }
+
+  // Find the cheapest accessible model on the same provider
+  const models = catalog[providerId]?.models ?? {}
+  const candidates = Object.values(models)
+    .filter((m) => m.tool_call !== false)
+    .filter((m) => `${providerId}/${m.id}` !== activeRef)
+    .sort((a, b) => {
+      const ap = a.cost?.input ?? Infinity
+      const bp = b.cost?.input ?? Infinity
+      return ap - bp
+    })
+
+  for (const model of candidates) {
+    const ref = `${providerId}/${model.id}`
+    try {
+      resolveModel(ref, catalog, config)
+      return ref
+    } catch {
+      /* key missing or provider broken */
+    }
+  }
+  return undefined
 }
 
 export class DawnAgent {
@@ -249,26 +296,25 @@ export class DawnAgent {
     bus.emit({ type: "turn-start" })
 
     try {
-      // Plan mode runs on the dedicated plan model when one is set; everything
-      // else (normal / acceptEdits) runs on the edit model.
-      const activeRef = opts.gate.mode === "plan" && this.planModelRef ? this.planModelRef : this.modelRef
-      const resolved = resolveModel(activeRef, opts.catalog, opts.config)
-      const { providerId } = parseModelRef(activeRef)
       const forceRepoOverview = isRepoOverviewQuestion(text)
 
-      const isAnthropic = providerId === "anthropic"
-      // Non-Anthropic providers (e.g. Groq) reject reasoning_content in messages
-      // even when their own models produced it in a previous step.  prepareStep
-      // lets us strip those parts from the SDK's internally-accumulated messages
-      // before each subsequent step — the same filter applied to inter-turn history
-      // in buildRequestMessages, but applied intra-turn here.
-      const needsReasoningStrip = !isAnthropic
-      const buildRequest = () => this.requestMessages(isAnthropic)
+      // Active model ref — may change on auto-switch; updated on this.modelRef/planModelRef too.
+      let activeRef = opts.gate.mode === "plan" && this.planModelRef ? this.planModelRef : this.modelRef
+      let resolved = resolveModel(activeRef, opts.catalog, opts.config)
 
-      // One-shot retry on provider tool-call 400s (e.g. Groq failed_generation).
-      // We attempt the stream twice at most; only the completing attempt persists messages.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const { system, messages: requestMsgs } = buildRequest()
+      let switchCount = 0
+      const MAX_SWITCHES = 2
+      // 2 retries (same model) + up to MAX_SWITCHES model switches
+      const MAX_ATTEMPTS = 2 + MAX_SWITCHES
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        const { providerId } = parseModelRef(activeRef)
+        const isAnthropic = providerId === "anthropic"
+        // Non-Anthropic providers (e.g. Groq) reject reasoning_content in messages
+        // even when their own models produced it in a previous step.
+        const needsReasoningStrip = !isAnthropic
+
+        const { system, messages: requestMsgs } = this.requestMessages(isAnthropic)
 
         const result = streamText({
           model: resolved.model,
@@ -303,22 +349,26 @@ export class DawnAgent {
         })
 
         let retryableFailure: unknown
+        let switchFailure: ClassifiedFailure | undefined
+        let hasOutput = false
         // Stash inputs at tool-call time so tool-result can build a semantic summary
-        // even when the SDK's tool-result part doesn't carry input.
         const toolInputs = new Map<string, unknown>()
 
         for await (const part of result.fullStream) {
           switch (part.type) {
             case "text-delta":
+              hasOutput = true
               bus.emit({ type: "text-delta", text: part.text })
               break
             case "text-end":
               bus.emit({ type: "text-end" })
               break
             case "reasoning-delta":
+              hasOutput = true
               bus.emit({ type: "reasoning-delta", text: part.text })
               break
             case "tool-call":
+              hasOutput = true
               toolInputs.set(part.toolCallId, part.input)
               bus.emit({
                 type: "tool-start",
@@ -330,8 +380,6 @@ export class DawnAgent {
               break
             case "tool-result": {
               const storedInput = toolInputs.get(part.toolCallId)
-              // part.output is already compacted for heavy tools; keep a bounded cross-turn
-              // echo and estimate the text we actually store.
               const echo = truncateMiddle(String(part.output ?? ""), 4000)
               this.workingSet.add({
                 kind: "tool-result",
@@ -377,13 +425,17 @@ export class DawnAgent {
               break
             }
             case "error": {
-              if (isRetryableToolFailure(part.error)) {
+              const classified = classifyFailure(part.error)
+              if (classified.kind === "retryable-tool") {
                 retryableFailure = part.error
+              } else if (
+                classified.kind === "free-tier-deprecated" ||
+                classified.kind === "model-unavailable" ||
+                classified.kind === "no-output"
+              ) {
+                switchFailure = classified
               } else {
-                bus.emit({
-                  type: "error",
-                  message: part.error instanceof Error ? part.error.message : String(part.error),
-                })
+                bus.emit({ type: "error", message: classified.message })
               }
               break
             }
@@ -392,6 +444,15 @@ export class DawnAgent {
           }
         }
 
+        // A clean stream that produced nothing is treated as no-output → trigger switch.
+        if (!hasOutput && !retryableFailure && !switchFailure) {
+          switchFailure = {
+            kind: "no-output",
+            message: `${activeRef} returned no output — switching to an available alternative.`,
+          }
+        }
+
+        // ── Same-model retry (Groq tool-call 400) ────────────────────────────
         if (retryableFailure !== undefined) {
           bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
           if (attempt === 0) {
@@ -407,6 +468,33 @@ export class DawnAgent {
           return
         }
 
+        // ── Auto-switch to a different model ─────────────────────────────────
+        if (switchFailure !== undefined) {
+          if (switchCount < MAX_SWITCHES) {
+            const fallback = chooseFallback(activeRef, opts.catalog, opts.config, switchFailure.suggestedSlug)
+            if (fallback) {
+              const fromRef = activeRef
+              activeRef = fallback
+              resolved = resolveModel(fallback, opts.catalog, opts.config)
+              if (opts.gate.mode === "plan" && this.planModelRef) {
+                this.planModelRef = fallback
+              } else {
+                this.modelRef = fallback
+              }
+              switchCount++
+              bus.emit({ type: "attempt-reset", reason: "model-switch" })
+              bus.emit({ type: "model-switched", from: fromRef, to: fallback, reason: switchFailure.message })
+              continue
+            }
+          }
+          // No fallback available or cap reached
+          bus.emit({ type: "error", message: switchFailure.message })
+          this.workingSet.decrementLeases()
+          bus.emit({ type: "turn-end" })
+          return
+        }
+
+        // ── Success ───────────────────────────────────────────────────────────
         const response = await result.response
         this.messages.push(...response.messages)
         this.persist()
@@ -415,14 +503,15 @@ export class DawnAgent {
         return
       }
 
-      // Both attempts exhausted without completing — turn ends without response messages
+      // All attempts exhausted without completing
       this.workingSet.decrementLeases()
       bus.emit({ type: "turn-end" })
     } catch (err) {
       if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
         bus.emit({ type: "turn-end", aborted: true })
       } else {
-        bus.emit({ type: "error", message: err instanceof Error ? err.message : String(err) })
+        const classified = classifyFailure(err)
+        bus.emit({ type: "error", message: classified.message })
         bus.emit({ type: "turn-end" })
       }
     } finally {

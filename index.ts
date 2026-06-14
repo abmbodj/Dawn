@@ -24,7 +24,7 @@ import {
   startDeviceFlow,
   tryGhCliToken,
   withOllama,
-  withOpenRouter,
+  withAllLiveModels,
 } from "@dawn/core"
 
 const VERSION = "0.1.0"
@@ -124,24 +124,39 @@ async function indexCommand(flags: Flags): Promise<void> {
 
 function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
   if (config.model) return config.model
-  const connected = new Set(connectedProviders(catalog, config).map((p) => p.id))
-  const preferred: Array<[string, string]> = [
-    ["github-copilot", "github-copilot/gpt-4o"],
-    ["anthropic", "anthropic/claude-opus-4-8"],
-    ["openai", "openai/gpt-5.5"],
-    ["google", "google/gemini-3.5-flash"],
-    ["groq", "groq/qwen/qwen3-32b"],
-    ["xai", "xai/grok-3"],
-    ["mistral", "mistral/mistral-large-latest"],
-    ["deepseek", "deepseek/deepseek-chat"],
+  const connected = connectedProviders(catalog, config)
+  const connectedIds = new Set(connected.map((p) => p.id))
+
+  // Prefer well-known capable models if the provider is connected AND the model exists in the live list
+  const preferred: Array<[string, string[]]> = [
+    ["github-copilot", ["gpt-4o", "claude-opus-4", "claude-3.5-sonnet", "gpt-4o-mini"]],
+    ["anthropic", ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]],
+    ["openai", ["gpt-5.5", "gpt-5.4-mini", "gpt-4o"]],
+    ["google", ["gemini-3.5-pro", "gemini-3.5-flash"]],
+    ["groq", ["qwen/qwen3-32b", "llama-3.3-70b-versatile"]],
+    ["xai", ["grok-3", "grok-3-mini"]],
+    ["mistral", ["mistral-large-latest", "mistral-small-latest"]],
+    ["deepseek", ["deepseek-chat"]],
   ]
-  for (const [provider, ref] of preferred) if (connected.has(provider)) return ref
-  // Cloud providers without a preference entry: still safe to auto-select.
-  for (const id of connected) {
-    if (id === "ollama") continue // never silently default to a local model — see Setup wizard
-    const models = Object.keys(catalog[id]?.models ?? {})
-    if (models[0]) return `${id}/${models[0]}`
+  for (const [provider, candidates] of preferred) {
+    if (!connectedIds.has(provider)) continue
+    const models = catalog[provider]?.models ?? {}
+    for (const modelId of candidates) {
+      if (models[modelId]) return `${provider}/${modelId}`
+    }
+    // Provider connected but preferred models not in live list — fall through to first available
+    const first = Object.keys(models).find((id) => models[id]?.tool_call !== false)
+    if (first) return `${provider}/${first}`
   }
+
+  // Any other connected cloud provider
+  for (const { id } of connected) {
+    if (id === "ollama") continue // never silently default to a local model — see Setup wizard
+    const models = catalog[id]?.models ?? {}
+    const first = Object.keys(models).find((mid) => models[mid]?.tool_call !== false)
+    if (first) return `${id}/${first}`
+  }
+
   // Nothing usable yet — placeholder; the Setup wizard runs first and overrides this.
   return "github-copilot/gpt-4o"
 }
@@ -251,7 +266,7 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
 async function modelsCommand(filter: string | undefined, cwd: string): Promise<void> {
   const config = loadConfig(cwd)
   const catalog = await loadCatalog()
-  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
+  await withAllLiveModels(catalog, config)
   for (const provider of connectedProviders(catalog, config)) {
     if (filter && provider.id !== filter) continue
     for (const model of Object.values(catalog[provider.id]?.models ?? {})) {
@@ -270,7 +285,7 @@ async function oneShot(flags: Flags): Promise<void> {
   }
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
-  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
+  await withAllLiveModels(catalog, config)
   const bus = new Bus()
   const gate = new PermissionGate()
   gate.preAllow("read")
@@ -329,7 +344,7 @@ async function oneShot(flags: Flags): Promise<void> {
 async function interactive(flags: Flags): Promise<void> {
   const config = loadConfig(flags.cwd)
   const catalog = await loadCatalog()
-  await Promise.all([withOllama(catalog), withOpenRouter(catalog)])
+  await withAllLiveModels(catalog, config)
 
   const store = new SessionStore()
   const contextStore = new ContextStore()

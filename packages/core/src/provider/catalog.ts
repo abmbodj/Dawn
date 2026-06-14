@@ -19,6 +19,14 @@ export interface ModelInfo {
   release_date?: string
   /** On-disk size in bytes (local providers only); used for the RAM-fit guard. */
   sizeBytes?: number
+  /**
+   * Subscription / billing tier for this model.
+   * "free"     — no per-token cost (e.g. OpenRouter :free, Copilot included quota)
+   * "standard" — regular paid pricing
+   * "premium"  — draws on a premium/add-on quota (e.g. Copilot premium models)
+   * Absent means unknown (treat as standard).
+   */
+  access?: "free" | "standard" | "premium"
 }
 
 export interface ProviderInfo {
@@ -44,7 +52,12 @@ function cachePath(): string {
   return path.join(cacheDir(), "models.json")
 }
 
-/** Embedded catalog — prices USD/1M tokens. Updated when models.dev is reachable. */
+/**
+ * Offline emergency fallback — one stable model per provider.
+ * Only used when models.dev is unreachable AND the live-model fetch fails.
+ * Provides the api/env fields that models.dev omits so providers stay resolvable.
+ * The live fetch (withAllLiveModels) replaces per-provider model lists at runtime.
+ */
 export const FALLBACK_CATALOG: Catalog = {
   // ── Anthropic ─────────────────────────────────────────────────────────────
   anthropic: {
@@ -53,35 +66,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["ANTHROPIC_API_KEY"],
     npm: "@ai-sdk/anthropic",
     models: {
-      "claude-fable-5": {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        cost: { input: 0, output: 0 },
-        limit: { context: 1_000_000, output: 128_000 },
-        tool_call: true,
-        reasoning: true,
-      },
-      "claude-opus-4-8": {
-        id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
-        limit: { context: 1_000_000, output: 128_000 },
-        tool_call: true,
-        reasoning: true,
-      },
       "claude-sonnet-4-6": {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
         cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
         limit: { context: 1_000_000, output: 64_000 },
         tool_call: true,
-      },
-      "claude-haiku-4-5": {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        cost: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
-        limit: { context: 200_000, output: 64_000 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -93,35 +84,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["OPENAI_API_KEY"],
     npm: "@ai-sdk/openai",
     models: {
-      "gpt-5.5": {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        cost: { input: 5, output: 30, cache_read: 0.5 },
-        limit: { context: 1_050_000, output: 128_000 },
-        tool_call: true,
-      },
       "gpt-5.4-mini": {
         id: "gpt-5.4-mini",
         name: "GPT-5.4 mini",
         cost: { input: 0.75, output: 4.5, cache_read: 0.075 },
         limit: { context: 400_000, output: 128_000 },
         tool_call: true,
-      },
-      o3: {
-        id: "o3",
-        name: "o3",
-        cost: { input: 10, output: 40, cache_read: 1 },
-        limit: { context: 200_000, output: 100_000 },
-        tool_call: true,
-        reasoning: true,
-      },
-      "o4-mini": {
-        id: "o4-mini",
-        name: "o4-mini",
-        cost: { input: 1.25, output: 5, cache_read: 0.125 },
-        limit: { context: 200_000, output: 100_000 },
-        tool_call: true,
-        reasoning: true,
+        access: "standard",
       },
     },
   },
@@ -133,19 +102,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
     npm: "@ai-sdk/google",
     models: {
-      "gemini-3.5-pro": {
-        id: "gemini-3.5-pro",
-        name: "Gemini 3.5 Pro",
-        cost: { input: 3.5, output: 10.5, cache_read: 0.35 },
-        limit: { context: 1_048_576, output: 65_536 },
-        tool_call: true,
-      },
       "gemini-3.5-flash": {
         id: "gemini-3.5-flash",
         name: "Gemini 3.5 Flash",
         cost: { input: 1.5, output: 9, cache_read: 0.15 },
         limit: { context: 1_048_576, output: 65_536 },
         tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -163,47 +126,12 @@ export const FALLBACK_CATALOG: Catalog = {
         cost: { input: 0, output: 0 },
         limit: { context: 128_000, output: 16_384 },
         tool_call: true,
-      },
-      "gpt-4o-mini": {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        cost: { input: 0, output: 0 },
-        limit: { context: 128_000, output: 16_384 },
-        tool_call: true,
-      },
-      "o3-mini": {
-        id: "o3-mini",
-        name: "o3 Mini",
-        cost: { input: 0, output: 0 },
-        limit: { context: 200_000, output: 100_000 },
-        tool_call: true,
-        reasoning: true,
-      },
-      "claude-3.5-sonnet": {
-        id: "claude-3.5-sonnet",
-        name: "Claude 3.5 Sonnet",
-        cost: { input: 0, output: 0 },
-        limit: { context: 200_000, output: 8_096 },
-        tool_call: true,
-      },
-      "gemini-2.0-flash": {
-        id: "gemini-2.0-flash",
-        name: "Gemini 2.0 Flash",
-        cost: { input: 0, output: 0 },
-        limit: { context: 1_000_000, output: 8_192 },
-        tool_call: true,
-      },
-      "claude-opus-4": {
-        id: "claude-opus-4",
-        name: "Claude Opus 4",
-        cost: { input: 0, output: 0 },
-        limit: { context: 200_000, output: 32_000 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
 
-  // ── Groq — free tier ──────────────────────────────────────────────────────
+  // ── Groq ──────────────────────────────────────────────────────────────────
   groq: {
     id: "groq",
     name: "Groq",
@@ -216,44 +144,7 @@ export const FALLBACK_CATALOG: Catalog = {
         cost: { input: 0.59, output: 0.79 },
         limit: { context: 128_000, output: 32_768 },
         tool_call: true,
-      },
-      "openai/gpt-oss-120b": {
-        id: "openai/gpt-oss-120b",
-        name: "GPT-OSS 120B",
-        cost: { input: 0.15, output: 0.6 },
-        limit: { context: 131_072, output: 32_768 },
-        tool_call: true,
-        reasoning: true,
-      },
-      "meta-llama/llama-4-scout-17b-16e-instruct": {
-        id: "meta-llama/llama-4-scout-17b-16e-instruct",
-        name: "Llama 4 Scout",
-        cost: { input: 0.11, output: 0.34 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
-      "meta-llama/llama-4-maverick-17b-128e-instruct": {
-        id: "meta-llama/llama-4-maverick-17b-128e-instruct",
-        name: "Llama 4 Maverick",
-        cost: { input: 0.2, output: 0.6 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
-      "qwen/qwen3-32b": {
-        id: "qwen/qwen3-32b",
-        name: "Qwen3 32B",
-        cost: { input: 0.29, output: 0.39 },
-        limit: { context: 131_072, output: 32_768 },
-        tool_call: true,
-        reasoning: true,
-      },
-      "qwen-qwq-32b": {
-        id: "qwen-qwq-32b",
-        name: "Qwen QwQ 32B",
-        cost: { input: 0.29, output: 0.39 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-        reasoning: true,
+        access: "standard",
       },
     },
   },
@@ -265,13 +156,6 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["XAI_API_KEY"],
     api: "https://api.x.ai/v1",
     models: {
-      "grok-3": {
-        id: "grok-3",
-        name: "Grok 3",
-        cost: { input: 3, output: 15 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
       "grok-3-mini": {
         id: "grok-3-mini",
         name: "Grok 3 Mini",
@@ -279,13 +163,7 @@ export const FALLBACK_CATALOG: Catalog = {
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
         reasoning: true,
-      },
-      "grok-3-fast": {
-        id: "grok-3-fast",
-        name: "Grok 3 Fast",
-        cost: { input: 5, output: 25 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -297,26 +175,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["MISTRAL_API_KEY"],
     api: "https://api.mistral.ai/v1",
     models: {
-      "mistral-large-latest": {
-        id: "mistral-large-latest",
-        name: "Mistral Large",
-        cost: { input: 2, output: 6 },
-        limit: { context: 128_000, output: 16_384 },
-        tool_call: true,
-      },
-      "codestral-latest": {
-        id: "codestral-latest",
-        name: "Codestral",
-        cost: { input: 0.3, output: 0.9 },
-        limit: { context: 256_000, output: 32_768 },
-        tool_call: true,
-      },
       "mistral-small-latest": {
         id: "mistral-small-latest",
         name: "Mistral Small",
         cost: { input: 0.1, output: 0.3 },
         limit: { context: 128_000, output: 16_384 },
         tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -334,14 +199,7 @@ export const FALLBACK_CATALOG: Catalog = {
         cost: { input: 0.27, output: 1.1 },
         limit: { context: 128_000, output: 16_384 },
         tool_call: true,
-      },
-      "deepseek-reasoner": {
-        id: "deepseek-reasoner",
-        name: "DeepSeek Reasoner",
-        cost: { input: 0.55, output: 2.19 },
-        limit: { context: 128_000, output: 16_384 },
-        tool_call: true,
-        reasoning: true,
+        access: "standard",
       },
     },
   },
@@ -353,27 +211,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["PERPLEXITY_API_KEY"],
     api: "https://api.perplexity.ai",
     models: {
-      "sonar-pro": {
-        id: "sonar-pro",
-        name: "Sonar Pro",
-        cost: { input: 3, output: 15 },
-        limit: { context: 200_000, output: 16_384 },
-        tool_call: true,
-      },
       sonar: {
         id: "sonar",
         name: "Sonar",
         cost: { input: 1, output: 1 },
         limit: { context: 200_000, output: 16_384 },
         tool_call: true,
-      },
-      "sonar-reasoning-pro": {
-        id: "sonar-reasoning-pro",
-        name: "Sonar Reasoning Pro",
-        cost: { input: 2, output: 8 },
-        limit: { context: 200_000, output: 16_384 },
-        tool_call: true,
-        reasoning: true,
+        access: "standard",
       },
     },
   },
@@ -385,26 +229,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["TOGETHER_API_KEY"],
     api: "https://api.together.xyz/v1",
     models: {
-      "meta-llama/Llama-4-Maverick-Instruct-Basic": {
-        id: "meta-llama/Llama-4-Maverick-Instruct-Basic",
-        name: "Llama 4 Maverick",
-        cost: { input: 0.27, output: 0.27 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
       "meta-llama/Llama-4-Scout-Instruct-Basic": {
         id: "meta-llama/Llama-4-Scout-Instruct-Basic",
         name: "Llama 4 Scout",
         cost: { input: 0.1, output: 0.1 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
-      },
-      "deepseek-ai/DeepSeek-V3": {
-        id: "deepseek-ai/DeepSeek-V3",
-        name: "DeepSeek V3",
-        cost: { input: 1.25, output: 1.25 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -416,26 +247,13 @@ export const FALLBACK_CATALOG: Catalog = {
     env: ["FIREWORKS_API_KEY"],
     api: "https://api.fireworks.ai/inference/v1",
     models: {
-      "accounts/fireworks/models/llama-4-maverick": {
-        id: "accounts/fireworks/models/llama-4-maverick",
-        name: "Llama 4 Maverick",
-        cost: { input: 0.22, output: 0.88 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
       "accounts/fireworks/models/llama-4-scout": {
         id: "accounts/fireworks/models/llama-4-scout",
         name: "Llama 4 Scout",
         cost: { input: 0.15, output: 0.6 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
-      },
-      "accounts/fireworks/models/deepseek-v3": {
-        id: "accounts/fireworks/models/deepseek-v3",
-        name: "DeepSeek V3",
-        cost: { input: 0.9, output: 0.9 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
@@ -453,52 +271,26 @@ export const FALLBACK_CATALOG: Catalog = {
         cost: { input: 0.1, output: 0.1 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
-      },
-      "llama3.1-70b": {
-        id: "llama3.1-70b",
-        name: "Llama 3.1 70B",
-        cost: { input: 0.6, output: 0.6 },
-        limit: { context: 128_000, output: 16_384 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },
 
   // ── OpenRouter ────────────────────────────────────────────────────────────
-  // Minimal fallback — withOpenRouter() replaces this at runtime with the full 300+ model list.
+  // One stable paid fallback — withAllLiveModels() replaces this with the full account list.
   openrouter: {
     id: "openrouter",
     name: "OpenRouter",
     env: ["OPENROUTER_API_KEY"],
     api: "https://openrouter.ai/api/v1",
     models: {
-      "deepseek/deepseek-chat-v3-0324:free": {
-        id: "deepseek/deepseek-chat-v3-0324:free",
-        name: "DeepSeek Chat V3 (free)",
-        cost: { input: 0, output: 0 },
-        limit: { context: 131_072, output: 16_384 },
-        tool_call: true,
-      },
       "meta-llama/llama-4-maverick": {
         id: "meta-llama/llama-4-maverick",
         name: "Llama 4 Maverick",
         cost: { input: 0.18, output: 0.59 },
         limit: { context: 131_072, output: 16_384 },
         tool_call: true,
-      },
-      "google/gemini-2.5-pro-preview": {
-        id: "google/gemini-2.5-pro-preview",
-        name: "Gemini 2.5 Pro",
-        cost: { input: 1.25, output: 10 },
-        limit: { context: 1_048_576, output: 65_536 },
-        tool_call: true,
-      },
-      "anthropic/claude-opus-4-8": {
-        id: "anthropic/claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        cost: { input: 5, output: 25 },
-        limit: { context: 1_000_000, output: 128_000 },
-        tool_call: true,
+        access: "standard",
       },
     },
   },

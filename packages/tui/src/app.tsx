@@ -23,7 +23,7 @@ import {
   resetDawnData,
   saveConfig,
   toolTitle,
-  withOpenRouter,
+  withLiveModels,
 } from "@dawn/core"
 import type { ScrollBoxRenderable, TextareaOptions, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
@@ -148,6 +148,8 @@ export function reduceItems(items: Item[], action: Action): Item[] {
               ? { ...it, done: true, summary: ev.summary, isError: ev.isError }
               : it,
           )
+        case "model-switched":
+          return [...items, { kind: "info", text: `auto-switched model: ${ev.from} → ${ev.to} (${ev.reason})` }]
         case "status":
           return [...items, { kind: "info", text: ev.message }]
         case "error":
@@ -788,11 +790,11 @@ export function App(props: AppProps) {
       } catch {
         setNeedsSetup(false)
       }
-      if (parseModelRef(ref).providerId === "openrouter") {
-        withOpenRouter(catalog).then(() => setCatalogVersion((v) => v + 1))
-      }
+      // Refresh live model list for whichever provider was just connected
+      const { providerId } = parseModelRef(ref)
+      withLiveModels(catalog, providerId, config).then(() => setCatalogVersion((v) => v + 1))
     },
-    [agent, catalog],
+    [agent, catalog, config],
   )
 
   useEffect(() => {
@@ -817,6 +819,10 @@ export function App(props: AppProps) {
       if (event.type === "turn-start") setBusy(true)
       if (event.type === "turn-end") setBusy(false)
       if (event.type === "step-finish") setUsage(store.usageTotals(session.id))
+      if (event.type === "model-switched") {
+        // Keep the displayed model ref in sync when the agent auto-switches
+        setModelRef(event.to)
+      }
     })
     gate.setHandler(
       (req) =>
@@ -1104,11 +1110,10 @@ export function App(props: AppProps) {
       dispatch({ type: "push", item: { kind: "info", text: `connected ${provider.id}` } })
       setPickerProvider(provider.id)
       setPickerOpen(true)
-      if (provider.id === "openrouter") {
-        withOpenRouter(catalog).then(() => setCatalogVersion((v) => v + 1))
-      }
+      // Refresh live model list for this provider so the picker shows the actual accessible models
+      withLiveModels(catalog, provider.id, config).then(() => setCatalogVersion((v) => v + 1))
     },
-    [catalog],
+    [catalog, config],
   )
 
   const handleConnectCancel = useCallback(() => {
