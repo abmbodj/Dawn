@@ -241,7 +241,11 @@ export async function withLiveModels(catalog: Catalog, providerId: string, confi
       models: buildProviderModels(providerId, toolCapable, providerInfo),
     }
 
-    return { ...catalog, [providerId]: updatedProvider }
+    // Mutate in place (same contract as withOpenRouter / withOllama) so callers
+    // that hold a reference to the catalog object see the update without needing
+    // to use the return value.
+    catalog[providerId] = updatedProvider
+    return catalog
   } catch {
     return catalog
   }
@@ -253,20 +257,7 @@ export async function withLiveModels(catalog: Catalog, providerId: string, confi
  */
 export async function withAllLiveModels(catalog: Catalog, config: DawnConfig): Promise<Catalog> {
   const connected = connectedProviders(catalog, config)
-  // Run in parallel; each call never throws and returns a new catalog
-  let result = catalog
-  const updates = await Promise.allSettled(
-    connected.map((p) => withLiveModels(catalog, p.id, config)),
-  )
-  for (const update of updates) {
-    if (update.status === "fulfilled") {
-      // Merge changed providers into the accumulating result
-      for (const [id, info] of Object.entries(update.value)) {
-        if (info !== catalog[id]) {
-          result = { ...result, [id]: info }
-        }
-      }
-    }
-  }
-  return result
+  // withLiveModels mutates the catalog in place, so parallel calls safely accumulate onto it.
+  await Promise.allSettled(connected.map((p) => withLiveModels(catalog, p.id, config)))
+  return catalog
 }
