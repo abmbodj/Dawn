@@ -8,7 +8,6 @@ import type {
   PermissionGate,
   PermissionMode,
   PermissionRequest,
-  PluginCommand,
   SessionMeta,
   SessionStore,
   TodoItem,
@@ -580,12 +579,15 @@ const TIPS: Array<{ key: string; desc: string }> = [
 ]
 
 function WelcomeTips() {
-  const tip = useMemo(() => TIPS[Math.floor(Math.random() * TIPS.length)], [])
+  const tip = useMemo(
+    () => TIPS[Math.floor(Math.random() * TIPS.length)] ?? { key: "/", desc: "open commands" },
+    [],
+  )
   return (
     <text style={{ marginTop: 1 }}>
       <span fg={theme.dim}>{"tip  "}</span>
       <span fg={theme.accent}>{tip.key}</span>
-      <span fg={theme.dim}>{"  " + tip.desc}</span>
+      <span fg={theme.dim}>{`  ${tip.desc}`}</span>
     </text>
   )
 }

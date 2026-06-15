@@ -28,7 +28,7 @@ function accessFromCost(cost: ModelInfo["cost"]): ModelInfo["access"] {
  * supply pricing, limits, and capability metadata.
  */
 function buildProviderModels(
-  providerId: string,
+  _providerId: string,
   liveIds: LiveModel[],
   existing: ProviderInfo | undefined,
 ): ProviderInfo["models"] {
@@ -85,7 +85,7 @@ async function fetchOpenAICompatible(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   }
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
 
   // GitHub Copilot requires extra identity headers
   if (providerId === "github-copilot") {
@@ -240,8 +240,10 @@ export async function withLiveModels(
     } else if (providerId === "google") {
       if (!apiKey) return catalog
       liveModels = await fetchGoogle(apiKey)
+    } else if (baseURL) {
+      liveModels = await fetchOpenAICompatible(baseURL, apiKey, providerId)
     } else {
-      liveModels = await fetchOpenAICompatible(baseURL!, apiKey, providerId)
+      return catalog
     }
 
     if (liveModels.length === 0) return catalog
@@ -252,6 +254,7 @@ export async function withLiveModels(
 
     const updatedProvider: ProviderInfo = {
       ...(providerInfo ?? FALLBACK_CATALOG[providerId] ?? { id: providerId, name: providerId, models: {} }),
+      modelsSource: "live",
       models: buildProviderModels(providerId, toolCapable, providerInfo),
     }
 

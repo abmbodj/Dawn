@@ -8,8 +8,21 @@ import { hasConfiguredModel, loadConfig, saveConfig } from "../src/config/config
 import type { Catalog } from "../src/provider/catalog"
 
 const CATALOG: Catalog = {
-  anthropic: { id: "anthropic", name: "Anthropic", env: ["ANTHROPIC_API_KEY"], models: {} },
-  ollama: { id: "ollama", name: "Ollama (local)", env: [], api: "http://localhost:11434/v1", models: {} },
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    modelsSource: "live",
+    models: { "claude-sonnet": { id: "claude-sonnet", name: "Claude Sonnet", tool_call: true } },
+  },
+  ollama: {
+    id: "ollama",
+    name: "Ollama (local)",
+    env: [],
+    api: "http://localhost:11434/v1",
+    modelsSource: "live",
+    models: {},
+  },
 }
 
 let tmp: string

@@ -24,7 +24,14 @@ export async function detectLMStudio(): Promise<ProviderInfo | undefined> {
     for (const m of items) {
       models[m.id] = { id: m.id, name: m.id, cost: null, tool_call: true }
     }
-    return { id: "lmstudio", name: "LM Studio (local)", env: [], api: `${base}/v1`, models }
+    return {
+      id: "lmstudio",
+      name: "LM Studio (local)",
+      env: [],
+      api: `${base}/v1`,
+      modelsSource: "live",
+      models,
+    }
   } catch {
     return undefined
   }

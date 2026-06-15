@@ -68,6 +68,7 @@ export async function withOpenRouter(catalog: Catalog): Promise<Catalog> {
         name: "OpenRouter",
         env: ["OPENROUTER_API_KEY"],
         api: "https://openrouter.ai/api/v1",
+        modelsSource: "live",
         models,
       }
     }

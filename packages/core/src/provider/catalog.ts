@@ -35,6 +35,8 @@ export interface ProviderInfo {
   env?: string[]
   npm?: string
   api?: string
+  /** Whether this model list came from a live provider probe/list call or static catalog metadata. */
+  modelsSource?: "live" | "catalog"
   models: Record<string, ModelInfo>
 }
 

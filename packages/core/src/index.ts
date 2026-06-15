@@ -96,6 +96,14 @@ export {
   type LocalModelFit,
   localModelFit,
 } from "./provider/local-fit"
+export {
+  isUsableModelRef,
+  type ModelSelection,
+  type ModelSelectionReason,
+  type SelectInitialModelOptions,
+  selectInitialModel,
+  selectProviderInitialModel,
+} from "./provider/model-selection"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
 export {
   connectedProviders,

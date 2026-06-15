@@ -90,12 +90,18 @@ export function saveConfig(patch: Partial<DawnConfig>): void {
 
 /**
  * Whether the user has a model ready to use without further setup: an explicit
- * `config.model`, or a cloud (key-requiring) provider that's connected. A
- * reachable local provider (Ollama) alone does NOT count — we still want to run
- * onboarding so the user consciously picks it rather than silently landing on a
- * model their machine may not be able to run.
+ * runtime `config.model`, or a cloud (key-requiring) provider with a live
+ * tool-capable model. A reachable local provider (Ollama) alone does NOT count
+ * — we still want to run onboarding so the user consciously picks it rather
+ * than silently landing on a model their machine may not be able to run.
  */
 export function hasConfiguredModel(catalog: Catalog, config: DawnConfig): boolean {
   if (config.model) return true
-  return connectedProviders(catalog, config).some((p) => p.hasKey)
+  return connectedProviders(catalog, config).some((p) => {
+    if (!p.hasKey) return false
+    const provider = catalog[p.id]
+    return (
+      provider?.modelsSource === "live" && Object.values(provider.models).some((m) => m.tool_call !== false)
+    )
+  })
 }

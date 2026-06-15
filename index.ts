@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
+import fs from "node:fs"
+import path from "node:path"
 import {
   Asker,
   addPlugin,
   Bus,
   buildRepoIndex,
-  type Catalog,
   type ContextMode,
   ContextStore,
   connectedProviders,
@@ -16,6 +17,7 @@ import {
   listInstalledPlugins,
   loadCatalog,
   loadConfig,
+  type ModelSelection,
   openExternalUrl,
   PermissionGate,
   pluginsDir,
@@ -24,6 +26,8 @@ import {
   removePlugin,
   resolveGithubClientId,
   SessionStore,
+  saveConfig,
+  selectInitialModel,
   setApiKey,
   startDeviceFlow,
   tryGhCliToken,
@@ -132,43 +136,27 @@ async function indexCommand(flags: Flags): Promise<void> {
   }
 }
 
-function pickDefaultModel(catalog: Catalog, config: DawnConfig): string {
-  if (config.model) return config.model
-  const connected = connectedProviders(catalog, config)
-  const connectedIds = new Set(connected.map((p) => p.id))
+function noInitialModelMessage(): string {
+  return "No live tool-capable model is available. Connect a provider or pass --model provider/model."
+}
 
-  // Prefer well-known capable models if the provider is connected AND the model exists in the live list
-  const preferred: Array<[string, string[]]> = [
-    ["github-copilot", ["gpt-4o", "claude-opus-4", "claude-3.5-sonnet", "gpt-4o-mini"]],
-    ["anthropic", ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]],
-    ["openai", ["gpt-5.5", "gpt-5.4-mini", "gpt-4o"]],
-    ["google", ["gemini-3.5-pro", "gemini-3.5-flash"]],
-    ["groq", ["qwen/qwen3-32b", "llama-3.3-70b-versatile"]],
-    ["xai", ["grok-3", "grok-3-mini"]],
-    ["mistral", ["mistral-large-latest", "mistral-small-latest"]],
-    ["deepseek", ["deepseek-chat"]],
-  ]
-  for (const [provider, candidates] of preferred) {
-    if (!connectedIds.has(provider)) continue
-    const models = catalog[provider]?.models ?? {}
-    for (const modelId of candidates) {
-      if (models[modelId]) return `${provider}/${modelId}`
-    }
-    // Provider connected but preferred models not in live list — fall through to first available
-    const first = Object.keys(models).find((id) => models[id]?.tool_call !== false)
-    if (first) return `${provider}/${first}`
+function projectConfigHasModel(cwd: string): boolean {
+  try {
+    const project = JSON.parse(fs.readFileSync(path.join(cwd, "dawn.json"), "utf8")) as { model?: unknown }
+    return typeof project.model === "string" && project.model.trim().length > 0
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false
+    return false
   }
+}
 
-  // Any other connected cloud provider
-  for (const { id } of connected) {
-    if (id === "ollama") continue // never silently default to a local model — see Setup wizard
-    const models = catalog[id]?.models ?? {}
-    const first = Object.keys(models).find((mid) => models[mid]?.tool_call !== false)
-    if (first) return `${id}/${first}`
-  }
+function runtimeConfig(config: DawnConfig, selection: ModelSelection | undefined): DawnConfig {
+  return { ...config, model: selection?.ref }
+}
 
-  // Nothing usable yet — placeholder; the Setup wizard runs first and overrides this.
-  return "github-copilot/gpt-4o"
+function persistRepairedModel(cwd: string, selection: ModelSelection | undefined): void {
+  if (!selection?.repairedFrom || projectConfigHasModel(cwd)) return
+  saveConfig({ model: selection.ref })
 }
 
 async function promptHidden(label: string): Promise<string> {
@@ -302,6 +290,13 @@ async function oneShot(flags: Flags): Promise<void> {
   const catalog = await loadCatalog()
   await Promise.all([withOllama(catalog), withLMStudio(catalog)])
   await withAllLiveModels(catalog, config)
+  const selection = selectInitialModel(catalog, config, { requestedModel: flags.model })
+  if (!selection) {
+    console.error(`error: ${noInitialModelMessage()}`)
+    process.exit(1)
+  }
+  persistRepairedModel(flags.cwd, selection)
+  const activeConfig = runtimeConfig(config, selection)
   const bus = new Bus()
   const gate = new PermissionGate()
   gate.preAllow("read")
@@ -312,12 +307,12 @@ async function oneShot(flags: Flags): Promise<void> {
   const session = store.createSession(flags.cwd, prompt.slice(0, 80))
   const agent = new DawnAgent({
     cwd: flags.cwd,
-    modelRef: flags.model ?? pickDefaultModel(catalog, config),
-    planModelRef: config.planModel,
+    modelRef: selection.ref,
+    planModelRef: activeConfig.planModel,
     bus,
     gate,
     catalog,
-    config,
+    config: activeConfig,
     store,
     sessionId: session.id,
     contextStore,
@@ -371,6 +366,9 @@ async function interactive(flags: Flags): Promise<void> {
   const catalog = await loadCatalog()
   await Promise.all([withOllama(catalog), withLMStudio(catalog)])
   await withAllLiveModels(catalog, config)
+  const selection = selectInitialModel(catalog, config, { requestedModel: flags.model })
+  persistRepairedModel(flags.cwd, selection)
+  const activeConfig = runtimeConfig(config, selection)
 
   const store = new SessionStore()
   const contextStore = new ContextStore()
@@ -383,13 +381,13 @@ async function interactive(flags: Flags): Promise<void> {
   const asker = new Asker()
   const agent = new DawnAgent({
     cwd: flags.cwd,
-    modelRef: flags.model ?? pickDefaultModel(catalog, config),
-    planModelRef: config.planModel,
+    modelRef: selection?.ref ?? "github-copilot/gpt-4o",
+    planModelRef: activeConfig.planModel,
     bus,
     gate,
     asker,
     catalog,
-    config,
+    config: activeConfig,
     store,
     sessionId: session.id,
     initialMessages,
@@ -408,7 +406,7 @@ async function interactive(flags: Flags): Promise<void> {
   }
 
   const { launchTui } = await import("@dawn/tui")
-  await launchTui({ agent, store, session, catalog, config, gate, asker })
+  await launchTui({ agent, store, session, catalog, config: activeConfig, gate, asker })
 }
 
 async function main(): Promise<void> {
@@ -464,7 +462,6 @@ async function main(): Promise<void> {
           console.log(`Removed plugin "${name}" from ${pluginsDir()}.`)
           return
         }
-        case "list":
         default: {
           const plugins = listInstalledPlugins()
           if (plugins.length === 0) {

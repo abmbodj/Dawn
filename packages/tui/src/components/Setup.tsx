@@ -1,4 +1,13 @@
-import { type Catalog, type DawnConfig, formatBytes, localModelFit, saveConfig } from "@dawn/core"
+import {
+  type Catalog,
+  type DawnConfig,
+  formatBytes,
+  localModelFit,
+  type ModelSelection,
+  saveConfig,
+  selectProviderInitialModel,
+  withLiveModels,
+} from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
@@ -18,8 +27,29 @@ export interface SetupProps {
   animate?: boolean
 }
 
+export async function selectConnectedProviderSetupModel(
+  provider: ProviderOption,
+  catalog: Catalog,
+  config: DawnConfig,
+): Promise<ModelSelection | undefined> {
+  await withLiveModels(catalog, provider.id, config)
+  return selectProviderInitialModel(provider.id, catalog, config)
+}
+
+export async function completeConnectedProviderSetup(
+  provider: ProviderOption,
+  catalog: Catalog,
+  config: DawnConfig,
+): Promise<ModelSelection | undefined> {
+  const selection = await selectConnectedProviderSetupModel(provider, catalog, config)
+  if (selection) saveConfig({ model: selection.ref })
+  return selection
+}
+
 export function Setup({ onDone, catalog, config, animate }: SetupProps) {
   const [localPick, setLocalPick] = useState<LocalOption | null>(null)
+  const [providerStatus, setProviderStatus] = useState<string | null>(null)
+  const [providerError, setProviderError] = useState<string | null>(null)
 
   const localModels: LocalOption[] = Object.values(catalog.ollama?.models ?? {}).map((m) => ({
     ref: `ollama/${m.id}`,
@@ -53,8 +83,17 @@ export function Setup({ onDone, catalog, config, animate }: SetupProps) {
   }
 
   const handleConnected = (provider: ProviderOption) => {
-    saveConfig({ model: provider.defaultModel })
-    onDone(provider.defaultModel)
+    setProviderError(null)
+    setProviderStatus(`Checking available ${provider.id} models...`)
+    ;(async () => {
+      const selection = await completeConnectedProviderSetup(provider, catalog, config)
+      if (!selection) {
+        setProviderStatus(null)
+        setProviderError("No tool-capable models are visible. Fix provider access or pick another provider.")
+        return
+      }
+      onDone(selection.ref)
+    })()
   }
 
   const localOptions = localModels.map((m) => {
@@ -117,6 +156,16 @@ export function Setup({ onDone, catalog, config, animate }: SetupProps) {
               onConnected={handleConnected}
               onCancel={() => {}}
             />
+            {providerStatus ? (
+              <text fg={theme.dim} style={{ marginTop: 1 }}>
+                {providerStatus}
+              </text>
+            ) : null}
+            {providerError ? (
+              <text fg={theme.error} style={{ marginTop: 1 }}>
+                {providerError}
+              </text>
+            ) : null}
           </>
         )}
       </box>
