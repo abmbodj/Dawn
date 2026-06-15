@@ -46,7 +46,11 @@ function buildProviderModels(
       id: live.id,
       name: live.name ?? catalogEntry?.name ?? live.id,
       cost: cost ?? catalogEntry?.cost,
-      limit: catalogEntry?.limit ?? (live.contextLength ? { context: live.contextLength, output: live.outputLimit ?? undefined } : undefined),
+      limit:
+        catalogEntry?.limit ??
+        (live.contextLength
+          ? { context: live.contextLength, output: live.outputLimit ?? undefined }
+          : undefined),
       tool_call: catalogEntry?.tool_call ?? live.toolCall ?? true,
       reasoning: catalogEntry?.reasoning ?? live.reasoning,
       access: live.access ?? catalogEntry?.access ?? accessFromCost(cost ?? catalogEntry?.cost),
@@ -72,7 +76,11 @@ interface LiveModel {
 // ---------------------------------------------------------------------------
 
 /** Standard OpenAI-compatible /models endpoint: { data: [{ id, … }] } */
-async function fetchOpenAICompatible(baseURL: string, apiKey: string | undefined, providerId: string): Promise<LiveModel[]> {
+async function fetchOpenAICompatible(
+  baseURL: string,
+  apiKey: string | undefined,
+  providerId: string,
+): Promise<LiveModel[]> {
   const url = `${baseURL.replace(/\/$/, "")}/models`
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -124,7 +132,7 @@ async function fetchOpenAICompatible(baseURL: string, apiKey: string | undefined
       const costInput = toPerMillion(m.pricing?.prompt)
       const costOutput = toPerMillion(m.pricing?.completion)
 
-      let access: ModelInfo["access"] = undefined
+      let access: ModelInfo["access"]
       if (providerId === "github-copilot") {
         if (m.is_premium || m.billing_type === "premium") access = "premium"
         else access = "standard"
@@ -139,7 +147,8 @@ async function fetchOpenAICompatible(baseURL: string, apiKey: string | undefined
         outputLimit: m.per_request_limits?.completion_tokens,
         costInput,
         costOutput,
-        toolCall: params.length > 0 ? params.includes("tools") : (m.capabilities?.supports_tool_calling ?? undefined),
+        toolCall:
+          params.length > 0 ? params.includes("tools") : (m.capabilities?.supports_tool_calling ?? undefined),
         reasoning: params.includes("reasoning") || params.includes("include_reasoning"),
         access,
       } satisfies LiveModel
@@ -205,7 +214,11 @@ async function fetchGoogle(apiKey: string): Promise<LiveModel[]> {
  * Refresh the live model list for a single connected provider.
  * Merges live IDs with catalog metadata; never throws.
  */
-export async function withLiveModels(catalog: Catalog, providerId: string, config: DawnConfig): Promise<Catalog> {
+export async function withLiveModels(
+  catalog: Catalog,
+  providerId: string,
+  config: DawnConfig,
+): Promise<Catalog> {
   const providerInfo = catalog[providerId]
   const custom = config.providers?.[providerId]
   const envNames = [...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []), ...(providerInfo?.env ?? [])]

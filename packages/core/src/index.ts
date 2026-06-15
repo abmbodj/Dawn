@@ -1,5 +1,11 @@
 export type { ModelMessage } from "ai"
 export { type AgentOptions, DawnAgent } from "./agent/agent"
+export {
+  type ClassifiedFailure,
+  classifyFailure,
+  type FailureKind,
+  isRetryableToolFailure,
+} from "./agent/errors"
 export { estimateMemoryTokens, loadProjectMemory, type ProjectMemory } from "./agent/project-memory"
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
@@ -50,6 +56,8 @@ export type {
   WorkingSetKind,
 } from "./context/types"
 export { ContextWorkingSet } from "./context/working-set"
+export { connectMcpServers, type McpConnection, type McpToolInfo } from "./mcp/client"
+export { loadMcpServers, type McpServerConfig, McpServerSchema } from "./mcp/config"
 export { cacheDir, configDir, dataDir } from "./paths"
 export { Asker, type AskHandler, type AskOption, type UserQuestion } from "./permission/asker"
 export {
@@ -61,6 +69,14 @@ export {
 } from "./permission/permission"
 export { copyToClipboard } from "./platform/clipboard"
 export { type ExternalOpenCommand, externalOpenCommand, openExternalUrl } from "./platform/open-external"
+export { type PluginCommand, renderCommandPrompt } from "./plugins/commands"
+export {
+  addPlugin,
+  listInstalledPlugins,
+  loadEnabledPlugins,
+  pluginsDir,
+  removePlugin,
+} from "./plugins/registry"
 export {
   type Catalog,
   FALLBACK_CATALOG,
@@ -72,16 +88,15 @@ export {
   type ProviderInfo,
   parseModelRef,
 } from "./provider/catalog"
+export { withAllLiveModels, withLiveModels } from "./provider/live-models"
+export { detectLMStudio, lmStudioBaseURL, withLMStudio } from "./provider/lmstudio"
 export {
   type FitStatus,
   formatBytes,
   type LocalModelFit,
   localModelFit,
 } from "./provider/local-fit"
-export { classifyFailure, type ClassifiedFailure, type FailureKind, isRetryableToolFailure } from "./agent/errors"
-export { detectLMStudio, lmStudioBaseURL, withLMStudio } from "./provider/lmstudio"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
-export { withLiveModels, withAllLiveModels } from "./provider/live-models"
 export {
   connectedProviders,
   type ProviderStatus,
@@ -90,6 +105,15 @@ export {
 } from "./provider/provider"
 export { resetDawnData } from "./reset"
 export { type SessionMeta, SessionStore } from "./session/store"
+export { type LoadedSkill, SkillBuffer } from "./skills/buffer"
+export { type ParsedFrontmatter, parseFrontmatter } from "./skills/frontmatter"
+export {
+  buildSkillCatalog,
+  discoverSkills,
+  findSkill,
+  matchAutoTriggers,
+} from "./skills/registry"
+export type { Skill, SkillCatalogEntry, SkillFrontmatter } from "./skills/types"
 export { applyEdit } from "./tools/edit"
 export {
   buildRepoOverview,

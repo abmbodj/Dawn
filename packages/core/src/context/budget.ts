@@ -252,6 +252,8 @@ export function buildRequestMessages(args: {
   isAnthropic?: boolean
   /** Tokens saved by tool-output compaction since the previous plan (recorded into the plan). */
   compactionSavings?: number
+  /** Dynamically loaded skill bodies (model-invoked or auto-triggered this session). */
+  loadedSkills?: Array<{ name: string; body: string }>
 }): {
   system: SystemModelMessage
   messages: ModelMessage[]
@@ -274,9 +276,14 @@ export function buildRequestMessages(args: {
   const keptWorkingText = working.kept.map(workingSetItemText)
   const summaryTextBody = summaryBlocks.join("\n\n")
   const workingTextBody = keptWorkingText.join("\n\n")
+  const loadedSkillsBody =
+    args.loadedSkills && args.loadedSkills.length > 0
+      ? args.loadedSkills.map((s) => `## ${s.name}\n${s.body}`).join("\n\n")
+      : ""
   const contextParts = [
     summaryTextBody ? `Repository summaries:\n${summaryTextBody}` : "",
     workingTextBody ? `Working set:\n${workingTextBody}` : "",
+    loadedSkillsBody ? `Loaded skill instructions:\n${loadedSkillsBody}` : "",
   ].filter(Boolean)
 
   const summaryTokens = estimateTokens(summaryTextBody)

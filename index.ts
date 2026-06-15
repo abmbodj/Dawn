@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import {
   Asker,
+  addPlugin,
   Bus,
   buildRepoIndex,
   type Catalog,
@@ -12,20 +13,23 @@ import {
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
   listAuthProviders,
+  listInstalledPlugins,
   loadCatalog,
   loadConfig,
   openExternalUrl,
   PermissionGate,
+  pluginsDir,
   pollForToken,
   removeApiKey,
+  removePlugin,
   resolveGithubClientId,
   SessionStore,
   setApiKey,
   startDeviceFlow,
   tryGhCliToken,
+  withAllLiveModels,
   withLMStudio,
   withOllama,
-  withAllLiveModels,
 } from "@dawn/core"
 
 const VERSION = "0.1.0"
@@ -269,7 +273,11 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
   }
 }
 
-async function modelsCommand(filter: string | undefined, refresh: boolean | undefined, cwd: string): Promise<void> {
+async function modelsCommand(
+  filter: string | undefined,
+  refresh: boolean | undefined,
+  cwd: string,
+): Promise<void> {
   const config = loadConfig(cwd)
   const catalog = await loadCatalog({ refresh })
   await Promise.all([withOllama(catalog), withLMStudio(catalog)])
@@ -316,6 +324,15 @@ async function oneShot(flags: Flags): Promise<void> {
     contextMode: flags.contextMode,
     tokenBudget: flags.budget,
   })
+
+  const mcpServers = agent.resolveMcpServers()
+  if (Object.keys(mcpServers).length > 0) {
+    const conns = await agent.initMcp(mcpServers)
+    for (const c of conns) {
+      if (c.error) console.error(`mcp: ${c.name} failed — ${c.error}`)
+      else console.error(`mcp: ${c.name} connected (${c.tools.length} tools)`)
+    }
+  }
 
   let failed = false
   bus.subscribe((ev) => {
@@ -381,6 +398,15 @@ async function interactive(flags: Flags): Promise<void> {
     tokenBudget: flags.budget,
   })
 
+  const mcpServers = agent.resolveMcpServers()
+  if (Object.keys(mcpServers).length > 0) {
+    const conns = await agent.initMcp(mcpServers)
+    for (const c of conns) {
+      if (c.error) console.error(`mcp: ${c.name} failed — ${c.error}`)
+      else console.error(`mcp: ${c.name} connected (${c.tools.length} tools)`)
+    }
+  }
+
   const { launchTui } = await import("@dawn/tui")
   await launchTui({ agent, store, session, catalog, config, gate, asker })
 }
@@ -410,6 +436,52 @@ async function main(): Promise<void> {
     case "index":
       await indexCommand(parseFlags(rest))
       return
+    case "plugin": {
+      const [subCmd, ...pluginArgs] = rest
+      switch (subCmd) {
+        case "add": {
+          const source = pluginArgs[0]
+          if (!source) {
+            console.error("usage: dawn plugin add <git-url|path>")
+            process.exit(1)
+          }
+          const plugin = await addPlugin(source)
+          console.log(
+            `Installed plugin "${plugin.name}" (${plugin.commands.length} commands, ${plugin.skills.length} skills).`,
+          )
+          console.log(
+            `Enable it by adding "${plugin.name}" to plugins.enabled in dawn.json or ~/.config/dawn/config.json.`,
+          )
+          return
+        }
+        case "remove": {
+          const name = pluginArgs[0]
+          if (!name) {
+            console.error("usage: dawn plugin remove <name>")
+            process.exit(1)
+          }
+          removePlugin(name)
+          console.log(`Removed plugin "${name}" from ${pluginsDir()}.`)
+          return
+        }
+        case "list":
+        default: {
+          const plugins = listInstalledPlugins()
+          if (plugins.length === 0) {
+            console.log(`No plugins installed in ${pluginsDir()}.`)
+          } else {
+            for (const p of plugins) {
+              console.log(`  ${p.name}  ${p.manifest.description ?? ""}`)
+              console.log(`    dir: ${p.dir}`)
+              console.log(
+                `    commands: ${p.commands.length}  skills: ${p.skills.length}  mcp-servers: ${Object.keys(p.mcpServers).length}`,
+              )
+            }
+          }
+          return
+        }
+      }
+    }
     case "run":
       await oneShot(parseFlags(rest))
       return

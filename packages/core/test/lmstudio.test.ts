@@ -33,7 +33,10 @@ describe("detectLMStudio", () => {
   test("returns a ProviderInfo with loaded models", async () => {
     mockFetch(() =>
       Response.json({
-        data: [{ id: "lmstudio-community/meta-llama-3.1-8b-instruct-gguf" }, { id: "qwen2.5-coder-7b-instruct" }],
+        data: [
+          { id: "lmstudio-community/meta-llama-3.1-8b-instruct-gguf" },
+          { id: "qwen2.5-coder-7b-instruct" },
+        ],
       }),
     )
     const info = await detectLMStudio()

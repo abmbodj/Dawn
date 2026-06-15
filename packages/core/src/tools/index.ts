@@ -11,6 +11,9 @@ import type { ContextMode } from "../context/types"
 import type { ContextWorkingSet } from "../context/working-set"
 import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
+import type { SkillBuffer } from "../skills/buffer"
+import { findSkill } from "../skills/registry"
+import type { Skill } from "../skills/types"
 import { applyEdit } from "./edit"
 import { capLine, capLines, truncateMiddle } from "./truncate"
 
@@ -33,6 +36,10 @@ export interface ToolContext {
   sessionId?: string
   /** Called when a heavy tool output is compacted, so the agent can tally savings. */
   onCompaction?: (beforeTokens: number, afterTokens: number) => void
+  /** Discovered skills — used by the skill() tool to load bodies on demand. */
+  skills?: Skill[]
+  /** Session-persistent buffer for dynamically loaded skill bodies. */
+  skillBuffer?: SkillBuffer
 }
 
 /** Tools whose string output can be large enough to be worth content-aware compaction. */
@@ -722,6 +729,25 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
+  const skill = tool({
+    description:
+      "Load the full instructions for a named skill. The available skills are listed under # Skills in your system prompt. " +
+      "Call this when the user's task matches a skill's description — the body lands in context for this session.",
+    inputSchema: z.object({
+      name: z.string().describe("Skill name from the # Skills catalog"),
+    }),
+    execute: async ({ name }) => {
+      const found = ctx.skills ? findSkill(ctx.skills, name) : undefined
+      if (!found) {
+        const available = ctx.skills?.map((s) => s.name).join(", ") ?? "none"
+        return `No skill named "${name}". Available skills: ${available}`
+      }
+      if (ctx.skillBuffer?.has(name)) return `Skill "${name}" is already loaded in context.`
+      ctx.skillBuffer?.load(found)
+      return `Loaded skill "${name}". Its instructions are now in context — follow them for this session.`
+    },
+  })
+
   const tools: ToolSet = {
     repo_overview,
     read,
@@ -740,6 +766,7 @@ export function createTools(ctx: ToolContext): ToolSet {
     web_fetch,
     web_search,
     expand,
+    ...(ctx.skills && ctx.skills.length > 0 ? { skill } : {}),
   }
   return withCompaction(tools, ctx)
 }

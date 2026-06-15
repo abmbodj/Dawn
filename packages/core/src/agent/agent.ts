@@ -14,12 +14,21 @@ import { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
 import type { ContextMode, ContextPlan, ContextPlanTotals, ContextStats, FileSummary } from "../context/types"
 import { ContextWorkingSet } from "../context/working-set"
+import type { McpConnection } from "../mcp/client"
+import { connectMcpServers } from "../mcp/client"
+import type { McpServerConfig } from "../mcp/config"
+import { loadMcpServers } from "../mcp/config"
+import { mcpToolsToToolSet } from "../mcp/tools"
 import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
+import { loadEnabledPlugins, pluginMcpServers } from "../plugins/registry"
 import type { Catalog } from "../provider/catalog"
 import { normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
+import { SkillBuffer } from "../skills/buffer"
+import { buildSkillCatalog, discoverSkills, findSkill, matchAutoTriggers } from "../skills/registry"
+import type { Skill } from "../skills/types"
 import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
@@ -149,6 +158,18 @@ export class DawnAgent {
   private compaction = { savedTokens: 0, outputs: 0 }
   /** Mark of compaction savings already folded into a recorded context plan. */
   private compactionPlanMark = 0
+  /** Discovered skills for this working directory. */
+  readonly skills: Skill[]
+  /** Session-persistent buffer for dynamically loaded skill bodies. */
+  private readonly skillBuffer: SkillBuffer
+  /** Active MCP server connections (populated by initMcp). */
+  private mcpConnections: McpConnection[] = []
+  /** Dynamic tools from MCP servers (merged into streamText per-turn). */
+  private mcpTools: ToolSet = {}
+  /** The ToolContext object, captured so initMcp can build MCP tools with the same context. */
+  private readonly toolCtx: Parameters<typeof createTools>[0]
+  /** Plugin commands available as dynamic slash commands. */
+  readonly pluginCommands: import("../plugins/commands").PluginCommand[]
 
   constructor(private opts: AgentOptions) {
     this.bus = opts.bus
@@ -158,7 +179,28 @@ export class DawnAgent {
     this.contextMode = opts.contextMode ?? DEFAULT_CONTEXT_MODE
     this.tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET
     this.contextStore = opts.contextStore ?? new ContextStore()
-    this.tools = createTools({
+
+    // Load enabled plugins (skills, commands, MCP servers)
+    const enabledPlugins = loadEnabledPlugins(opts.config)
+    const pluginSkills = enabledPlugins.flatMap((p) => p.skills)
+    this.pluginCommands = enabledPlugins.flatMap((p) => p.commands)
+
+    // Discover skills from all configured sources (including plugin-provided)
+    const skillConfig = opts.config.skills
+    this.skills = discoverSkills(opts.cwd, {
+      importClaude: skillConfig?.importClaude ?? false,
+      pluginSkills,
+    })
+    this.skillBuffer = new SkillBuffer()
+
+    // Resolve always-load skill bodies (pinned into the cached system prompt)
+    const alwaysLoad = skillConfig?.alwaysLoad ?? []
+    const pinnedSkillBodies = alwaysLoad
+      .map((name) => findSkill(this.skills, name))
+      .filter((s): s is Skill => s !== undefined)
+      .map((s) => ({ name: s.name, body: s.body }))
+
+    this.toolCtx = {
       cwd: opts.cwd,
       gate: opts.gate,
       bus: opts.bus,
@@ -172,18 +214,67 @@ export class DawnAgent {
         this.compaction.savedTokens += before - after
         this.compaction.outputs += 1
       },
-    })
+      skills: this.skills,
+      skillBuffer: this.skillBuffer,
+    }
+    this.tools = createTools(this.toolCtx)
     // Captured once: a byte-stable system prompt is what keeps the provider
     // prompt-cache prefix valid across turns.
     this.projectMemory = loadProjectMemory(opts.cwd)
-    this.system = buildSystemPrompt(opts.cwd, this.projectMemory.text || undefined)
+    this.system = buildSystemPrompt(
+      opts.cwd,
+      this.projectMemory.text || undefined,
+      buildSkillCatalog(this.skills) || undefined,
+      pinnedSkillBodies.length > 0 ? pinnedSkillBodies : undefined,
+    )
+  }
+
+  /** Summary of skills for the /skills command. */
+  skillStats(): Array<{ name: string; description: string; source: Skill["source"]; loaded: boolean }> {
+    return this.skills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      source: s.source,
+      loaded: this.skillBuffer.has(s.name),
+    }))
+  }
+
+  /**
+   * Resolve the full MCP server map for this agent (config + plugins), ready to pass to initMcp.
+   * Convenience for callers that just want "all servers Dawn should connect to".
+   */
+  resolveMcpServers(): Record<string, McpServerConfig> {
+    return loadMcpServers(
+      this.opts.cwd,
+      this.opts.config,
+      pluginMcpServers(loadEnabledPlugins(this.opts.config)),
+    )
+  }
+
+  /**
+   * Connect MCP servers and register their tools. Call after constructing the agent,
+   * before the first turn. A server that fails to connect is recorded but never throws.
+   */
+  async initMcp(servers: Record<string, McpServerConfig>): Promise<McpConnection[]> {
+    this.mcpConnections = await connectMcpServers(servers)
+    this.mcpTools = mcpToolsToToolSet(this.mcpConnections, this.toolCtx)
+    return this.mcpConnections
+  }
+
+  /** Summary of MCP connections for the /mcp command. */
+  mcpStatus(): Array<{ name: string; toolCount: number; error?: string }> {
+    return this.mcpConnections.map((c) => ({
+      name: c.name,
+      toolCount: c.tools.length,
+      error: c.error,
+    }))
   }
 
   get isBusy(): boolean {
     return this.busy
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.contextStore.close()
     for (const entry of this.bgProcs.values()) {
       try {
@@ -193,6 +284,9 @@ export class DawnAgent {
       }
     }
     this.bgProcs.clear()
+    await Promise.all(this.mcpConnections.filter((c) => !c.error).map((c) => c.close().catch(() => {})))
+    this.mcpConnections = []
+    this.mcpTools = {}
   }
 
   /** Validates the ref resolves (provider known, key present) before switching. */
@@ -224,6 +318,7 @@ export class DawnAgent {
     this.messages = messages
     this.ledger.reset()
     this.workingSet.clear()
+    this.skillBuffer.clear()
     this.latestContextPlan = undefined
     this.estimatedSavedTokens = 0
     this.inputTokenEstimates = []
@@ -274,6 +369,7 @@ export class DawnAgent {
       answerGuidance,
       isAnthropic,
       compactionSavings,
+      loadedSkills: this.skillBuffer.loaded(),
     })
     this.latestContextPlan = built.plan
     if (built.plan.totalEstimatedTokens > this.tokenBudget) {
@@ -299,6 +395,13 @@ export class DawnAgent {
     bus.emit({ type: "turn-start" })
 
     try {
+      // Auto-trigger: load skill bodies whose patterns match this turn before building the request
+      const autoTrigger = this.opts.config.skills?.autoTrigger
+      if (autoTrigger) {
+        const triggered = matchAutoTriggers(text, this.skills, autoTrigger)
+        for (const s of triggered) this.skillBuffer.load(s)
+      }
+
       const forceRepoOverview = isRepoOverviewQuestion(text)
 
       // Active model ref — may change on auto-switch; updated on this.modelRef/planModelRef too.
@@ -323,7 +426,7 @@ export class DawnAgent {
           model: resolved.model,
           system: system as any,
           messages: requestMsgs,
-          tools: this.tools,
+          tools: { ...this.tools, ...this.mcpTools },
           experimental_repairToolCall: makeRepairToolCall(),
           prepareStep:
             needsReasoningStrip || forceRepoOverview

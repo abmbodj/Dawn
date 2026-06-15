@@ -11,6 +11,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "plan-model", description: "Set the model used while in plan mode.", args: "[provider/model]" },
   { name: "connect", description: "Connect a model provider (API key or GitHub OAuth).", args: "[provider]" },
   { name: "init", description: "Scan the repo and generate an AGENTS.md with project conventions." },
+  { name: "skills", description: "Show discovered skills and which are currently loaded in context." },
+  { name: "mcp", description: "Show connected MCP servers and their tool counts." },
+  { name: "plugin", description: "Show enabled plugins and their commands." },
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },
   { name: "savings", description: "Show session, project, and lifetime token savings." },
@@ -20,6 +23,17 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "Show TUI help." },
   { name: "quit", description: "Exit Dawn.", aliases: ["exit"] },
 ]
+
+/** Dynamic commands registered at runtime (e.g., from plugins). */
+let dynamicCommands: SlashCommand[] = []
+
+export function registerDynamicCommands(cmds: SlashCommand[]): void {
+  dynamicCommands = cmds
+}
+
+function allCommands(): SlashCommand[] {
+  return [...SLASH_COMMANDS, ...dynamicCommands]
+}
 
 export function normalizeSlashCommand(input: string): string | null {
   const trimmed = input.trim()
@@ -32,7 +46,7 @@ export function normalizeSlashCommand(input: string): string | null {
 export function resolveSlashCommand(input: string): SlashCommand | undefined {
   const name = normalizeSlashCommand(input)
   if (!name) return undefined
-  return SLASH_COMMANDS.find((command) => command.name === name || command.aliases?.includes(name))
+  return allCommands().find((command) => command.name === name || command.aliases?.includes(name))
 }
 
 export function getSlashCommandSuggestions(input: string): SlashCommand[] {
@@ -43,16 +57,15 @@ export function getSlashCommandSuggestions(input: string): SlashCommand[] {
 
   // Prefix-match the canonical name OR any alias, so e.g. `/exit` and `/e`
   // surface `quit`. Display order is preserved (filter keeps array order).
-  return SLASH_COMMANDS.filter((command) =>
+  return allCommands().filter((command) =>
     [command.name, ...(command.aliases ?? [])].some((candidate) => candidate.startsWith(query)),
   )
 }
 
 export function formatSlashCommandHelp(): string {
-  const width = Math.max(...SLASH_COMMANDS.map((command) => command.name.length))
-  const commands = SLASH_COMMANDS.map(
-    (command) => `  /${command.name.padEnd(width)} ${command.description}`,
-  ).join("\n")
+  const cmds = allCommands()
+  const width = Math.max(...cmds.map((command) => command.name.length))
+  const commands = cmds.map((command) => `  /${command.name.padEnd(width)} ${command.description}`).join("\n")
   return `Commands:
 ${commands}
 Autocomplete: type /, Up/Down navigate, Tab complete, Enter run

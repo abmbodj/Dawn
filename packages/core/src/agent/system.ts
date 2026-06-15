@@ -17,8 +17,16 @@ function gitSummary(cwd: string): string {
 /**
  * Stable across a session so the Anthropic prompt-cache prefix holds.
  * Anything volatile (per-request) must NOT go in here.
+ *
+ * skillCatalog: one-liner catalog injected so the model knows what skills exist.
+ * pinnedSkillBodies: full bodies for always-load skills (session-stable, known at boot).
  */
-export function buildSystemPrompt(cwd: string, projectMemory?: string): string {
+export function buildSystemPrompt(
+  cwd: string,
+  projectMemory?: string,
+  skillCatalog?: string,
+  pinnedSkillBodies?: Array<{ name: string; body: string }>,
+): string {
   const base = `You are Dawn, a terminal coding agent — a sharp, friendly engineer pair-programming with the user. You answer questions about the codebase, write features, fix bugs, and run commands.
 
 # Voice
@@ -71,13 +79,25 @@ export function buildSystemPrompt(cwd: string, projectMemory?: string): string {
 - date: ${new Date().toISOString().slice(0, 10)}
 - git: ${gitSummary(cwd)}`
 
-  if (projectMemory) {
-    return `${base}
+  const parts: string[] = [base]
 
-# Project instructions
+  if (skillCatalog) {
+    parts.push(skillCatalog)
+  }
+
+  if (pinnedSkillBodies && pinnedSkillBodies.length > 0) {
+    const bodies = pinnedSkillBodies.map((s) => `## ${s.name}\n${s.body}`).join("\n\n")
+    parts.push(
+      `# Always-loaded skill instructions\nThese skill instructions are always active this session:\n\n${bodies}`,
+    )
+  }
+
+  if (projectMemory) {
+    parts.push(`# Project instructions
 The following come from this project's AGENTS.md / DAWN.md files. Follow them; when they conflict with the general guidance above, they take priority.
 
-${projectMemory}`
+${projectMemory}`)
   }
-  return base
+
+  return parts.join("\n\n")
 }

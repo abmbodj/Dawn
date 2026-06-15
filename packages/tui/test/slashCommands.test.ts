@@ -14,12 +14,14 @@ describe("slash command suggestions", () => {
   })
 
   test("filters by prefix", () => {
-    expect(getSlashCommandSuggestions("/m").map((command) => command.name)).toEqual(["model"])
-    expect(getSlashCommandSuggestions("/s").map((command) => command.name)).toEqual(["savings"])
+    expect(getSlashCommandSuggestions("/mo").map((command) => command.name)).toEqual(["model"])
+    expect(getSlashCommandSuggestions("/mc").map((command) => command.name)).toEqual(["mcp"])
+    expect(getSlashCommandSuggestions("/sa").map((command) => command.name)).toEqual(["savings"])
+    expect(getSlashCommandSuggestions("/sk").map((command) => command.name)).toEqual(["skills"])
   })
 
   test("matching is case-insensitive", () => {
-    expect(getSlashCommandSuggestions("/M").map((command) => command.name)).toEqual(["model"])
+    expect(getSlashCommandSuggestions("/Mo").map((command) => command.name)).toEqual(["model"])
   })
 
   test("hides suggestions after whitespace", () => {

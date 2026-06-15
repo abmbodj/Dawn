@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { z } from "zod"
+import { McpServerSchema } from "../mcp/config"
 import { configDir } from "../paths"
 import type { Catalog } from "../provider/catalog"
 import { connectedProviders } from "../provider/provider"
@@ -14,6 +15,15 @@ const CustomProviderSchema = z.object({
   apiKeyEnv: z.string().optional(),
 })
 
+const SkillsConfigSchema = z.object({
+  /** Skill names to load into every session (embedded in the cached system prompt). */
+  alwaysLoad: z.array(z.string()).optional(),
+  /** Map of skill name → glob/keyword patterns; load the skill when a user turn matches. */
+  autoTrigger: z.record(z.string(), z.array(z.string())).optional(),
+  /** Opt-in: also discover skills from ~/.claude/skills (Claude Code's skill directory). */
+  importClaude: z.boolean().optional(),
+})
+
 export const DawnConfigSchema = z.object({
   /** Default model as "provider/model", e.g. "anthropic/claude-opus-4-8" */
   model: z.string().optional(),
@@ -25,6 +35,12 @@ export const DawnConfigSchema = z.object({
   providers: z.record(z.string(), CustomProviderSchema).optional(),
   /** Per-tool permission overrides: allow | ask | deny */
   permissions: z.record(z.string(), z.enum(["allow", "ask", "deny"])).optional(),
+  /** Skills configuration: always-load, auto-trigger, and import options. */
+  skills: SkillsConfigSchema.optional(),
+  /** MCP server definitions (Claude Code .mcp.json format). */
+  mcpServers: z.record(z.string(), McpServerSchema).optional(),
+  /** Plugin configuration. */
+  plugins: z.object({ enabled: z.array(z.string()).optional() }).optional(),
 })
 
 export type DawnConfig = z.infer<typeof DawnConfigSchema>
@@ -43,13 +59,23 @@ function readJson(file: string): unknown | undefined {
 export function loadConfig(cwd: string): DawnConfig {
   const global = readJson(path.join(configDir(), "config.json")) ?? {}
   const project = readJson(path.join(cwd, "dawn.json")) ?? {}
+  const g = global as DawnConfig
+  const p = project as DawnConfig
+  // Union-merge plugins.enabled so project adds to (rather than replaces) personal plugins
+  const globalEnabled = g.plugins?.enabled ?? []
+  const projectEnabled = p.plugins?.enabled ?? []
+  const mergedEnabled = [...new Set([...globalEnabled, ...projectEnabled])]
+  const hasMcp = g.mcpServers !== undefined || p.mcpServers !== undefined
+  const mergedPlugins =
+    mergedEnabled.length > 0
+      ? { ...(g.plugins ?? {}), ...(p.plugins ?? {}), enabled: mergedEnabled }
+      : (p.plugins ?? g.plugins)
   const merged = {
-    ...(global as object),
-    ...(project as object),
-    providers: {
-      ...((global as DawnConfig).providers ?? {}),
-      ...((project as DawnConfig).providers ?? {}),
-    },
+    ...g,
+    ...p,
+    providers: { ...(g.providers ?? {}), ...(p.providers ?? {}) },
+    ...(hasMcp ? { mcpServers: { ...(g.mcpServers ?? {}), ...(p.mcpServers ?? {}) } } : {}),
+    ...(mergedPlugins !== undefined ? { plugins: mergedPlugins } : {}),
   }
   return DawnConfigSchema.parse(merged)
 }

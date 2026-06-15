@@ -8,6 +8,7 @@ import type {
   PermissionGate,
   PermissionMode,
   PermissionRequest,
+  PluginCommand,
   SessionMeta,
   SessionStore,
   TodoItem,
@@ -20,6 +21,7 @@ import {
   hasConfiguredModel,
   localModelFit,
   parseModelRef,
+  renderCommandPrompt,
   resetDawnData,
   saveConfig,
   toolTitle,
@@ -43,6 +45,7 @@ import { dawnSyntaxStyle } from "./markdown"
 import {
   formatSlashCommandHelp,
   getSlashCommandSuggestions,
+  registerDynamicCommands,
   resolveSlashCommand,
   type SlashCommand,
 } from "./slashCommands"
@@ -149,7 +152,10 @@ export function reduceItems(items: Item[], action: Action): Item[] {
               : it,
           )
         case "model-switched":
-          return [...items, { kind: "info", text: `auto-switched model: ${ev.from} → ${ev.to} (${ev.reason})` }]
+          return [
+            ...items,
+            { kind: "info", text: `auto-switched model: ${ev.from} → ${ev.to} (${ev.reason})` },
+          ]
         case "status":
           return [...items, { kind: "info", text: ev.message }]
         case "error":
@@ -740,6 +746,18 @@ export function App(props: AppProps) {
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
   const [permMode, setPermMode] = useState<PermissionMode>("normal")
+
+  // Register plugin commands as dynamic slash commands once on mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pluginCmds = agent.pluginCommands
+  useEffect(() => {
+    if (pluginCmds.length > 0) {
+      registerDynamicCommands(
+        pluginCmds.map((c) => ({ name: c.name, description: c.description, args: c.argHint })),
+      )
+    }
+    return () => registerDynamicCommands([])
+  }, [pluginCmds])
   const [question, setQuestion] = useState<PendingQuestion | null>(null)
   const [questionSel, setQuestionSel] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
@@ -834,9 +852,10 @@ export function App(props: AppProps) {
   }, [agent, asker, gate, session.id, store])
 
   const quit = useCallback(() => {
-    agent.close()
-    store.close()
-    process.exit(0)
+    void agent.close().finally(() => {
+      store.close()
+      process.exit(0)
+    })
   }, [agent, store])
 
   const runCommand = useCallback(
@@ -920,6 +939,36 @@ export function App(props: AppProps) {
           void agent.send(INIT_PROMPT, initController.signal)
           break
         }
+        case "mcp": {
+          const status = agent.mcpStatus()
+          const text =
+            status.length === 0
+              ? "No MCP servers configured. Add mcpServers to dawn.json or .mcp.json in this project."
+              : [
+                  `MCP servers (${status.length}):`,
+                  ...status.map((s) => {
+                    if (s.error) return `  ${s.name} — ✗ ${s.error}`
+                    return `  ${s.name} — ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}`
+                  }),
+                ].join("\n")
+          dispatch({ type: "push", item: { kind: "info", text } })
+          break
+        }
+        case "skills": {
+          const stats = agent.skillStats()
+          const text =
+            stats.length === 0
+              ? "No skills discovered. Add SKILL.md files to .dawn/skills/ in this project or ~/.config/dawn/skills/."
+              : [
+                  `Skills (${stats.length}):`,
+                  ...stats.map((s) => {
+                    const badge = s.loaded ? " [loaded]" : ""
+                    return `  ${s.name}${badge} (${s.source})\n    ${s.description}`
+                  }),
+                ].join("\n")
+          dispatch({ type: "push", item: { kind: "info", text } })
+          break
+        }
         case "context": {
           dispatch({
             type: "push",
@@ -954,6 +1003,38 @@ export function App(props: AppProps) {
         case "quit":
           quit()
           break
+        case "plugin": {
+          const installed = agent.pluginCommands.length
+          const text =
+            installed === 0
+              ? "No plugins enabled. Install with: dawn plugin add <git-url|path>\nThen add the plugin name to plugins.enabled in dawn.json or ~/.config/dawn/config.json."
+              : [
+                  `Plugin commands (${installed}):`,
+                  ...agent.pluginCommands.map((c) => `  /${c.name} (${c.pluginName}) — ${c.description}`),
+                ].join("\n")
+          dispatch({ type: "push", item: { kind: "info", text } })
+          break
+        }
+        default: {
+          // Check if this is a dynamic plugin command
+          if (busy) {
+            dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt" } })
+            break
+          }
+          const cmdText = cmd.trim()
+          const slashIndex = cmdText.indexOf(" ")
+          const cmdName = (slashIndex === -1 ? cmdText.slice(1) : cmdText.slice(1, slashIndex)).toLowerCase()
+          const cmdArgs = slashIndex === -1 ? "" : cmdText.slice(slashIndex + 1)
+          const pluginCmd = agent.pluginCommands.find((c) => c.name === cmdName)
+          if (pluginCmd) {
+            const rendered = renderCommandPrompt(pluginCmd, cmdArgs)
+            dispatch({ type: "push", item: { kind: "user", text: cmdText } })
+            const controller = new AbortController()
+            abortRef.current = controller
+            void agent.send(rendered, controller.signal)
+          }
+          break
+        }
       }
     },
     [agent, busy, catalog, modelRef, quit, session, store],

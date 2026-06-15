@@ -30,7 +30,10 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
 
     // Auth
     if (status === 401 || status === 403 || h.includes("invalid api key") || h.includes("unauthorized")) {
-      return { kind: "auth", message: "Authentication failed — check your API key (`dawn auth login <provider>`)." }
+      return {
+        kind: "auth",
+        message: "Authentication failed — check your API key (`dawn auth login <provider>`).",
+      }
     }
 
     // Rate limit
@@ -39,8 +42,17 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     // Context overflow
-    if (h.includes("context length") || h.includes("context window") || h.includes("too many tokens") || h.includes("maximum context")) {
-      return { kind: "context-overflow", message: "Prompt exceeds this model's context window. Try a model with a larger context or clear some history." }
+    if (
+      h.includes("context length") ||
+      h.includes("context window") ||
+      h.includes("too many tokens") ||
+      h.includes("maximum context")
+    ) {
+      return {
+        kind: "context-overflow",
+        message:
+          "Prompt exceeds this model's context window. Try a model with a larger context or clear some history.",
+      }
     }
 
     // Retryable tool failure (Groq failed_generation)
@@ -49,7 +61,9 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     // Free-tier deprecated (OpenRouter: "use this slug instead: X")
-    const slugMatch = /use (?:this )?slug instead[:\s]+([^\s,.'"\]]+)/i.exec(`${e.message ?? ""} ${e.responseBody ?? ""}`)
+    const slugMatch = /use (?:this )?slug instead[:\s]+([^\s,.'"\]]+)/i.exec(
+      `${e.message ?? ""} ${e.responseBody ?? ""}`,
+    )
     if (slugMatch?.[1]) {
       const slug = slugMatch[1]
       return {
@@ -69,7 +83,10 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
       h.includes("decommissioned") ||
       h.includes("deprecated")
     ) {
-      return { kind: "model-unavailable", message: `Model unavailable (${e.message ?? `HTTP ${status}`}) — switching to an available alternative.` }
+      return {
+        kind: "model-unavailable",
+        message: `Model unavailable (${e.message ?? `HTTP ${status}`}) — switching to an available alternative.`,
+      }
     }
 
     return { kind: "unknown", message: e.message ?? `Provider error (HTTP ${status})` }
@@ -86,7 +103,11 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
 
     const slugMatch = /use (?:this )?slug instead[:\s]+([^\s,.'"\]]+)/i.exec(msg)
     if (slugMatch?.[1]) {
-      return { kind: "free-tier-deprecated", message: `Auto-switching to ${slugMatch[1]}.`, suggestedSlug: slugMatch[1] }
+      return {
+        kind: "free-tier-deprecated",
+        message: `Auto-switching to ${slugMatch[1]}.`,
+        suggestedSlug: slugMatch[1],
+      }
     }
 
     if (lower.includes("no output") || lower.includes("no content") || lower.includes("empty response")) {
@@ -94,7 +115,10 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     if (lower.includes("unauthorized") || lower.includes("invalid api key")) {
-      return { kind: "auth", message: "Authentication failed — check your API key (`dawn auth login <provider>`)." }
+      return {
+        kind: "auth",
+        message: "Authentication failed — check your API key (`dawn auth login <provider>`).",
+      }
     }
 
     if (lower.includes("rate limit") || lower.includes("quota")) {
@@ -106,7 +130,10 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     if (lower.includes("not supported") || lower.includes("not found") || lower.includes("unavailable")) {
-      return { kind: "model-unavailable", message: `Model unavailable: ${msg} — switching to an alternative.` }
+      return {
+        kind: "model-unavailable",
+        message: `Model unavailable: ${msg} — switching to an alternative.`,
+      }
     }
 
     return { kind: "unknown", message: msg }
