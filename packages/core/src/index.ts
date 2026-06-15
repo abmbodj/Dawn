@@ -72,6 +72,7 @@ export { type ExternalOpenCommand, externalOpenCommand, openExternalUrl } from "
 export { type PluginCommand, renderCommandPrompt } from "./plugins/commands"
 export {
   addPlugin,
+  type InstalledPlugin,
   listInstalledPlugins,
   loadEnabledPlugins,
   pluginsDir,

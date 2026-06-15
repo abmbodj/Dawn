@@ -4,6 +4,8 @@ import type {
   Catalog,
   DawnAgent,
   DawnConfig,
+  InstalledPlugin,
+  McpServerConfig,
   ModelMessage,
   PermissionGate,
   PermissionMode,
@@ -15,11 +17,15 @@ import type {
   UserQuestion,
 } from "@dawn/core"
 import {
+  addPlugin,
   connectedProviders,
   formatBytes,
   hasConfiguredModel,
+  listInstalledPlugins,
+  loadConfig,
   localModelFit,
   parseModelRef,
+  removePlugin,
   renderCommandPrompt,
   resetDawnData,
   saveConfig,
@@ -30,9 +36,12 @@ import type { ScrollBoxRenderable, TextareaOptions, TextareaRenderable } from "@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { type RefObject, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { Logo } from "./components/Logo"
+import { McpSetup } from "./components/McpSetup"
 import { ModelPicker } from "./components/ModelPicker"
+import { PluginSetup } from "./components/PluginSetup"
 import { ProviderConnect, type ProviderOption, SETUP_PROVIDERS } from "./components/ProviderConnect"
 import { Setup } from "./components/Setup"
+import { SkillsSetup } from "./components/SkillsSetup"
 import {
   applyMention,
   extractMentionQuery,
@@ -748,6 +757,11 @@ export function App(props: AppProps) {
   const [modelRef, setModelRef] = useState(agent.modelRef)
   const [planModelRef, setPlanModelRef] = useState<string | undefined>(agent.planModelRef)
   const [permMode, setPermMode] = useState<PermissionMode>("normal")
+  const [mcpSetupOpen, setMcpSetupOpen] = useState(false)
+  const [skillsSetupOpen, setSkillsSetupOpen] = useState(false)
+  const [pluginSetupOpen, setPluginSetupOpen] = useState(false)
+  const [setupConfig, setSetupConfig] = useState<DawnConfig>(config)
+  const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>(() => listInstalledPlugins())
 
   // Register plugin commands as dynamic slash commands once on mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -941,36 +955,12 @@ export function App(props: AppProps) {
           void agent.send(INIT_PROMPT, initController.signal)
           break
         }
-        case "mcp": {
-          const status = agent.mcpStatus()
-          const text =
-            status.length === 0
-              ? "No MCP servers configured. Add mcpServers to dawn.json or .mcp.json in this project."
-              : [
-                  `MCP servers (${status.length}):`,
-                  ...status.map((s) => {
-                    if (s.error) return `  ${s.name} — ✗ ${s.error}`
-                    return `  ${s.name} — ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}`
-                  }),
-                ].join("\n")
-          dispatch({ type: "push", item: { kind: "info", text } })
+        case "mcp":
+          setMcpSetupOpen(true)
           break
-        }
-        case "skills": {
-          const stats = agent.skillStats()
-          const text =
-            stats.length === 0
-              ? "No skills discovered. Add SKILL.md files to .dawn/skills/ in this project or ~/.config/dawn/skills/."
-              : [
-                  `Skills (${stats.length}):`,
-                  ...stats.map((s) => {
-                    const badge = s.loaded ? " [loaded]" : ""
-                    return `  ${s.name}${badge} (${s.source})\n    ${s.description}`
-                  }),
-                ].join("\n")
-          dispatch({ type: "push", item: { kind: "info", text } })
+        case "skills":
+          setSkillsSetupOpen(true)
           break
-        }
         case "context": {
           dispatch({
             type: "push",
@@ -1005,18 +995,11 @@ export function App(props: AppProps) {
         case "quit":
           quit()
           break
-        case "plugin": {
-          const installed = agent.pluginCommands.length
-          const text =
-            installed === 0
-              ? "No plugins enabled. Install with: dawn plugin add <git-url|path>\nThen add the plugin name to plugins.enabled in dawn.json or ~/.config/dawn/config.json."
-              : [
-                  `Plugin commands (${installed}):`,
-                  ...agent.pluginCommands.map((c) => `  /${c.name} (${c.pluginName}) — ${c.description}`),
-                ].join("\n")
-          dispatch({ type: "push", item: { kind: "info", text } })
+        case "plugin":
+          setInstalledPlugins(listInstalledPlugins())
+          setSetupConfig(loadConfig(agent.cwd))
+          setPluginSetupOpen(true)
           break
-        }
         default: {
           // Check if this is a dynamic plugin command
           if (busy) {
@@ -1180,6 +1163,72 @@ export function App(props: AppProps) {
     setConnect(null)
   }, [])
 
+  const handleMcpAdd = useCallback(
+    async (name: string, cfg: McpServerConfig): Promise<void> => {
+      const cur = loadConfig(agent.cwd)
+      saveConfig({ mcpServers: { ...(cur.mcpServers ?? {}), [name]: cfg } })
+      setSetupConfig(loadConfig(agent.cwd))
+      await agent.initMcp({ [name]: cfg })
+    },
+    [agent],
+  )
+
+  const handleMcpRemove = useCallback(
+    (name: string) => {
+      const cur = loadConfig(agent.cwd)
+      const { [name]: _removed, ...rest } = cur.mcpServers ?? {}
+      saveConfig({ mcpServers: rest })
+      setSetupConfig(loadConfig(agent.cwd))
+    },
+    [agent],
+  )
+
+  const handleToggleAlwaysLoad = useCallback(
+    (name: string) => {
+      const cur = loadConfig(agent.cwd)
+      const existing = cur.skills?.alwaysLoad ?? []
+      const alwaysLoad = existing.includes(name) ? existing.filter((n) => n !== name) : [...existing, name]
+      saveConfig({ skills: { ...(cur.skills ?? {}), alwaysLoad } })
+      setSetupConfig(loadConfig(agent.cwd))
+    },
+    [agent],
+  )
+
+  const handleTogglePlugin = useCallback(
+    (name: string) => {
+      const cur = loadConfig(agent.cwd)
+      const enabled = cur.plugins?.enabled ?? []
+      const next = enabled.includes(name) ? enabled.filter((n) => n !== name) : [...enabled, name]
+      saveConfig({ plugins: { enabled: next } })
+      setSetupConfig(loadConfig(agent.cwd))
+    },
+    [agent],
+  )
+
+  const handleInstallPlugin = useCallback(
+    async (source: string): Promise<InstalledPlugin> => {
+      const plugin = await addPlugin(source)
+      setInstalledPlugins(listInstalledPlugins())
+      handleTogglePlugin(plugin.name)
+      return plugin
+    },
+    [handleTogglePlugin],
+  )
+
+  const handleRemovePlugin = useCallback(
+    (name: string) => {
+      removePlugin(name)
+      const cur = loadConfig(agent.cwd)
+      const enabled = cur.plugins?.enabled ?? []
+      if (enabled.includes(name)) {
+        saveConfig({ plugins: { enabled: enabled.filter((n) => n !== name) } })
+      }
+      setInstalledPlugins(listInstalledPlugins())
+      setSetupConfig(loadConfig(agent.cwd))
+    },
+    [agent],
+  )
+
   const pickModel = useCallback(
     (ref: string) => {
       setPickerOpen(false)
@@ -1197,7 +1246,15 @@ export function App(props: AppProps) {
   )
 
   const empty = items.length === 0 || items.every((i) => i.kind === "info" && i.silent)
-  const focusInput = !pickerOpen && !permission && !confirmModel && !connect && !question
+  const focusInput =
+    !pickerOpen &&
+    !permission &&
+    !confirmModel &&
+    !connect &&
+    !question &&
+    !mcpSetupOpen &&
+    !skillsSetupOpen &&
+    !pluginSetupOpen
   const commandSuggestions = getSlashCommandSuggestions(promptValue)
   const completionOpen =
     focusInput && dismissedCompletionValue !== promptValue && commandSuggestions.length > 0
@@ -1600,6 +1657,34 @@ export function App(props: AppProps) {
             setPickerProvider(undefined)
             setPickerTarget("edit")
           }}
+        />
+      ) : null}
+      {mcpSetupOpen ? (
+        <McpSetup
+          servers={agent.resolveMcpServers()}
+          connections={agent.mcpStatus()}
+          onAdd={handleMcpAdd}
+          onRemove={handleMcpRemove}
+          onClose={() => setMcpSetupOpen(false)}
+        />
+      ) : null}
+      {skillsSetupOpen ? (
+        <SkillsSetup
+          skills={agent.skills}
+          alwaysLoad={setupConfig.skills?.alwaysLoad ?? []}
+          loadedNames={new Set(agent.skillBuffer.loaded().map((s) => s.name))}
+          onToggleAlwaysLoad={handleToggleAlwaysLoad}
+          onClose={() => setSkillsSetupOpen(false)}
+        />
+      ) : null}
+      {pluginSetupOpen ? (
+        <PluginSetup
+          plugins={installedPlugins}
+          enabledNames={setupConfig.plugins?.enabled ?? []}
+          onToggleEnabled={handleTogglePlugin}
+          onInstall={handleInstallPlugin}
+          onRemove={handleRemovePlugin}
+          onClose={() => setPluginSetupOpen(false)}
         />
       ) : null}
       {completionOpen ? (

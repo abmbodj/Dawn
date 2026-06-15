@@ -161,7 +161,7 @@ export class DawnAgent {
   /** Discovered skills for this working directory. */
   readonly skills: Skill[]
   /** Session-persistent buffer for dynamically loaded skill bodies. */
-  private readonly skillBuffer: SkillBuffer
+  readonly skillBuffer: SkillBuffer
   /** Active MCP server connections (populated by initMcp). */
   private mcpConnections: McpConnection[] = []
   /** Dynamic tools from MCP servers (merged into streamText per-turn). */
@@ -268,6 +268,10 @@ export class DawnAgent {
       toolCount: c.tools.length,
       error: c.error,
     }))
+  }
+
+  get cwd(): string {
+    return this.opts.cwd
   }
 
   get isBusy(): boolean {
