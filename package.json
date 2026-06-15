@@ -2,6 +2,7 @@
   "name": "dawn",
   "version": "0.1.0",
   "description": "Dawn — a token-frugal AI coding agent for the terminal",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "bin": {

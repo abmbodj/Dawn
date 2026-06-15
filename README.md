@@ -2,6 +2,9 @@
 
 **A token-frugal AI coding agent for the terminal.**
 
+[![CI](https://github.com/abmbodj/Dawn/actions/workflows/ci.yml/badge.svg)](https://github.com/abmbodj/Dawn/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 Dawn is an early Bun + TypeScript monorepo for running an AI coding agent from your shell. It has an
 interactive terminal UI, a one-shot `dawn run` mode, multi-provider model selection, persisted and
 resumable sessions, and permission prompts for side-effecting tools.
@@ -10,8 +13,10 @@ The thing that makes Dawn *Dawn* is the part most agents skip: it treats your co
 budget to spend carefully, not a bucket to refill every turn — and it shows you, live, exactly what
 that saved.
 
-> This project is currently private and early-stage (`"private": true` in `package.json`). Treat this
-> README as developer-facing setup and usage documentation, not a stability or registry promise.
+> Dawn is open-source (MIT) and public, but still early-stage (`0.1.0`). The `"private": true` in
+> `package.json` is intentional — Dawn isn't published to npm yet, so install it from source as shown in
+> [Quickstart](#quickstart). Treat this README as developer-facing setup and usage documentation, not a
+> stability or registry promise.
 
 ---
 
@@ -364,14 +369,21 @@ packages/tui         OpenTUI React interface.
 - Prefer provider environment variables or `dawn auth login <provider>` over inline credentials.
 - Stored API keys are written to Dawn's auth file with `0600` permissions.
 - `dawn run --yolo` allows side-effecting tools without prompts; use it only in trusted worktrees.
-- A dedicated `SECURITY.md`, `CONTRIBUTING.md`, license, and CI badges should be added once repository
-  hosting and contribution policy are finalized.
+- Dawn is MIT-licensed (see [LICENSE](./LICENSE)) and runs CI on every change. Dedicated `SECURITY.md`
+  and `CONTRIBUTING.md` files are still planned; until then, report security issues via a GitHub issue.
 
 ## Support
 
-Until hosting is available, the most reliable local reference is:
+Questions, bugs, and feature requests are welcome on the public repo:
+[github.com/abmbodj/Dawn/issues](https://github.com/abmbodj/Dawn/issues).
+
+The most reliable local reference is always:
 
 ```sh
 dawn --help
 dawn models
 ```
+
+## License
+
+Dawn is released under the [MIT License](./LICENSE).
