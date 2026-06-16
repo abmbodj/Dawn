@@ -23,7 +23,7 @@ import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
 import { loadEnabledPlugins, pluginMcpServers } from "../plugins/registry"
 import type { Catalog } from "../provider/catalog"
-import { normalizeModelRef, parseModelRef } from "../provider/catalog"
+import { modelCaches, normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
@@ -54,6 +54,8 @@ export interface AgentOptions {
   contextMode?: ContextMode
   tokenBudget?: number
   contextStore?: ContextStore
+  /** Baseline mode: disable summaries, history/working-set trimming, compaction, and caching. */
+  naive?: boolean
 }
 
 const MAX_STEPS = 40
@@ -144,6 +146,8 @@ export class DawnAgent {
   private readonly workingSet = new ContextWorkingSet()
   private readonly contextMode: ContextMode
   private readonly tokenBudget: number
+  /** When true, run a naive baseline: no summaries, trimming, compaction, or caching. */
+  private readonly naive: boolean
   private readonly bgProcs = new Map<
     string,
     { proc: ReturnType<typeof Bun.spawn>; chunks: string[]; done: boolean }
@@ -152,6 +156,12 @@ export class DawnAgent {
   private latestContextPlan: ContextPlan | undefined
   private estimatedSavedTokens = 0
   private inputTokenEstimates: number[] = []
+  /**
+   * Append-only, insertion-ordered set of summaries injected this session. Kept stable
+   * (no re-sort, no eviction) so the rendered summary block is byte-identical across turns
+   * and lands in the provider's cacheable prefix instead of being re-billed every turn.
+   */
+  private readonly sessionSummaries = new Map<string, FileSummary>()
   private highestCostTurn: ContextStats["highestCostTurn"]
   private busy = false
   /** Running tally of tokens saved by compacting tool outputs this session. */
@@ -178,6 +188,7 @@ export class DawnAgent {
     this.messages = opts.initialMessages ?? []
     this.contextMode = opts.contextMode ?? DEFAULT_CONTEXT_MODE
     this.tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+    this.naive = opts.naive ?? false
     this.contextStore = opts.contextStore ?? new ContextStore()
 
     // Load enabled plugins (skills, commands, MCP servers)
@@ -214,6 +225,7 @@ export class DawnAgent {
         this.compaction.savedTokens += before - after
         this.compaction.outputs += 1
       },
+      naive: this.naive,
       skills: this.skills,
       skillBuffer: this.skillBuffer,
     }
@@ -329,6 +341,7 @@ export class DawnAgent {
     this.highestCostTurn = undefined
     this.compaction = { savedTokens: 0, outputs: 0 }
     this.compactionPlanMark = 0
+    this.sessionSummaries.clear()
   }
 
   contextStats(): ContextStats {
@@ -353,7 +366,10 @@ export class DawnAgent {
     return this.contextStore.contextPlanTotals(sessionIds)
   }
 
-  private requestMessages(isAnthropic: boolean): {
+  private requestMessages(
+    isAnthropic: boolean,
+    caches: boolean,
+  ): {
     system: string | import("../context/budget").SystemModelMessage
     messages: ModelMessage[]
   } {
@@ -372,11 +388,13 @@ export class DawnAgent {
       budget: contextBudget(this.contextMode, this.tokenBudget),
       answerGuidance,
       isAnthropic,
+      caches,
       compactionSavings,
       loadedSkills: this.skillBuffer.loaded(),
+      naive: this.naive,
     })
     this.latestContextPlan = built.plan
-    if (built.plan.totalEstimatedTokens > this.tokenBudget) {
+    if (!this.naive && built.plan.totalEstimatedTokens > this.tokenBudget) {
       throw new Error(
         `Context budget exceeded: estimated ${built.plan.totalEstimatedTokens} tokens > budget ${this.tokenBudget}. ` +
           "Raise --budget or narrow the request.",
@@ -420,11 +438,14 @@ export class DawnAgent {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const { providerId } = parseModelRef(activeRef)
         const isAnthropic = providerId === "anthropic"
+        // Whether this model supports prompt caching (Anthropic/OpenAI/Google/…) — drives how
+        // generous the re-sent summary block can be, since caching amortizes it.
+        const caches = modelCaches(resolved.info)
         // Non-Anthropic providers (e.g. Groq) reject reasoning_content in messages
         // even when their own models produced it in a previous step.
         const needsReasoningStrip = !isAnthropic
 
-        const { system, messages: requestMsgs } = this.requestMessages(isAnthropic)
+        const { system, messages: requestMsgs } = this.requestMessages(isAnthropic, caches)
 
         const result = streamText({
           model: resolved.model,
@@ -636,21 +657,27 @@ export class DawnAgent {
   }
 
   private relevantSummaries(query: string): FileSummary[] {
-    const entries = this.contextStore.relevantEntries(
-      this.opts.cwd,
-      query,
-      this.contextMode === "deep" ? 12 : 6,
-    )
-    const summaries: FileSummary[] = []
-    for (const entry of entries) {
-      try {
-        summaries.push(getFileSummary({ cwd: this.opts.cwd, path: entry.path, store: this.contextStore }))
-      } catch {
-        // Ignore stale index rows for files that disappeared; the next `dawn index`
-        // refresh will remove them.
+    const cap = this.contextMode === "deep" ? 12 : 6
+    // Grow the stable session set with newly-relevant files (append-only, capped, no eviction
+    // or re-sort) so the rendered block stays byte-identical across turns. Once full, freeze it
+    // — keeping the cached prefix intact — and let the model read anything beyond the cap.
+    if (this.sessionSummaries.size < cap) {
+      const entries = this.contextStore.relevantEntries(this.opts.cwd, query, cap)
+      for (const entry of entries) {
+        if (this.sessionSummaries.size >= cap) break
+        if (this.sessionSummaries.has(entry.path)) continue
+        try {
+          this.sessionSummaries.set(
+            entry.path,
+            getFileSummary({ cwd: this.opts.cwd, path: entry.path, store: this.contextStore }),
+          )
+        } catch {
+          // Ignore stale index rows for files that disappeared; the next `dawn index`
+          // refresh will remove them.
+        }
       }
     }
-    return summaries
+    return [...this.sessionSummaries.values()]
   }
 }
 

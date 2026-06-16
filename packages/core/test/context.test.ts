@@ -300,7 +300,7 @@ describe("context budget", () => {
     ).toHaveLength(1)
   })
 
-  test("answer guidance does not replace the compact repo context message", () => {
+  test("answer guidance does not replace the repo summaries message", () => {
     const built = buildRequestMessages({
       system: "sys",
       messages: [
@@ -326,9 +326,7 @@ describe("context budget", () => {
     })
 
     expect(
-      built.messages.some(
-        (m) => typeof m.content === "string" && m.content.includes("compact repository context"),
-      ),
+      built.messages.some((m) => typeof m.content === "string" && m.content.includes("Repository summaries")),
     ).toBe(true)
     expect(
       built.messages.some(
@@ -337,7 +335,7 @@ describe("context budget", () => {
     ).toBe(true)
   })
 
-  test("Anthropic: context and answer guidance stay before the latest cached user message", () => {
+  test("Anthropic: summaries lead the cacheable prefix; guidance stays before the latest message", () => {
     const built = buildRequestMessages({
       system: "sys",
       messages: [
@@ -364,8 +362,8 @@ describe("context budget", () => {
     })
 
     const msgs = built.messages
-    const contextIdx = msgs.findIndex(
-      (m) => typeof m.content === "string" && m.content.includes("compact repository context"),
+    const summaryIdx = msgs.findIndex(
+      (m) => typeof m.content === "string" && m.content.includes("Repository summaries"),
     )
     const guidanceIdx = msgs.findIndex(
       (m) => typeof m.content === "string" && m.content.includes("Answer guidance for this turn"),
@@ -374,9 +372,11 @@ describe("context budget", () => {
       (m) => typeof m.content === "string" && m.content.includes("current question"),
     )
 
-    expect(contextIdx).not.toBe(-1)
-    expect(guidanceIdx).toBe(contextIdx + 1)
-    expect(latestIdx).toBe(guidanceIdx + 1)
+    expect(summaryIdx).toBe(0) // summaries lead the cacheable prefix
+    expect(latestIdx).toBe(msgs.length - 1) // latest user turn is last
+    expect(guidanceIdx).toBe(latestIdx - 1) // guidance immediately before it
+    // Cache breakpoints on both the summary block and the moving last message.
+    expect((msgs[0] as any)?.providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
     expect((msgs.at(-1) as any)?.providerOptions?.anthropic?.cacheControl?.type).toBe("ephemeral")
   })
 

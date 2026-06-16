@@ -17,7 +17,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "bench": "bun run bench/run.ts",
+    "bench:report": "bun run bench/report.ts"
   },
   "dependencies": {
     "@dawn/core": "workspace:*",

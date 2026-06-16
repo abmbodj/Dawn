@@ -15,6 +15,8 @@ export interface CompactToolContext {
   /** When present, the original is stashed so the `expand` tool can retrieve it. */
   store?: ContextStore
   sessionId?: string
+  /** Naive baseline: skip compaction entirely and return the raw output. */
+  naive?: boolean
 }
 
 export interface CompactOutcome {
@@ -34,6 +36,9 @@ export interface CompactOutcome {
  */
 export function compactToolOutput(raw: string, ctx: CompactToolContext): CompactOutcome {
   const beforeTokens = estimateTokens(raw)
+  if (ctx.naive) {
+    return { text: raw, kind: "text", beforeTokens, afterTokens: beforeTokens, compacted: false }
+  }
   if (beforeTokens < ctx.budget.threshold) {
     return { text: raw, kind: "text", beforeTokens, afterTokens: beforeTokens, compacted: false }
   }

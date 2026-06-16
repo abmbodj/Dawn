@@ -12,6 +12,11 @@ import type {
 export const DEFAULT_CONTEXT_MODE: ContextMode = "balanced"
 export const DEFAULT_TOKEN_BUDGET = 8000
 
+/** Share of the post-system budget spent on repo summaries when prompt caching amortizes it (Anthropic). */
+export const SUMMARY_SHARE_CACHED = 0.35
+/** Leaner share for providers without prompt caching, where re-sent summaries are paid in full each turn. */
+export const SUMMARY_SHARE_UNCACHED = 0.12
+
 export function contextBudget(
   mode: ContextMode = DEFAULT_CONTEXT_MODE,
   budget = DEFAULT_TOKEN_BUDGET,
@@ -250,28 +255,63 @@ export function buildRequestMessages(args: {
   budget: ContextBudget
   answerGuidance?: string
   isAnthropic?: boolean
+  /** Provider supports prompt caching (any provider, not just Anthropic) — see modelCaches(). */
+  caches?: boolean
   /** Tokens saved by tool-output compaction since the previous plan (recorded into the plan). */
   compactionSavings?: number
   /** Dynamically loaded skill bodies (model-invoked or auto-triggered this session). */
   loadedSkills?: Array<{ name: string; body: string }>
+  /** Naive baseline: send full files & history (no summaries, no trimming, no caching). */
+  naive?: boolean
 }): {
   system: SystemModelMessage
   messages: ModelMessage[]
   plan: ContextPlan
   workingSetKept: WorkingSetItem[]
 } {
+  const naive = args.naive ?? false
   const systemTokens = estimateTokens(args.system)
   const budgetAfterSystem = Math.max(0, args.budget.budget - systemTokens)
-  const summaries = trimSummaries(args.summaries, Math.floor(budgetAfterSystem * 0.35))
+  // Summaries are re-sent on every turn. A caching provider amortizes that (the stable
+  // summary block, placed in the cacheable prefix below, is billed at cache-read rates after
+  // the first turn), so cacheable models can afford a generous share. Without caching, the
+  // same injection is paid in full each turn — a generous share then becomes net overhead
+  // that can exceed what compaction saves — so non-caching providers get a much leaner share.
+  const summaryShare = args.caches ? SUMMARY_SHARE_CACHED : SUMMARY_SHARE_UNCACHED
+  // Naive baseline drops summaries entirely (it sends full files via the working set),
+  // keeps all history, and keeps the whole working set — so every "saved" figure is 0.
+  const summaries = naive
+    ? {
+        kept: [] as FileSummary[],
+        trimmed: [] as string[],
+        trimmedDetails: [] as ContextPlanItem[],
+        savedTokens: 0,
+      }
+    : trimSummaries(args.summaries, Math.floor(budgetAfterSystem * summaryShare))
   const summaryBlocks = summaries.kept.map(summaryText)
   const summaryTokensRaw = estimateTokens(summaryBlocks.join("\n\n"))
 
-  const history = trimHistory(
-    args.messages,
-    Math.max(0, budgetAfterSystem - Math.min(summaryTokensRaw, budgetAfterSystem)),
-  )
+  const history = naive
+    ? {
+        kept: args.messages,
+        trimmed: [] as string[],
+        trimmedDetails: [] as ContextPlanItem[],
+        tokens: args.messages.reduce((sum, m) => sum + messageTokens(m), 0),
+        savedTokens: 0,
+      }
+    : trimHistory(
+        args.messages,
+        Math.max(0, budgetAfterSystem - Math.min(summaryTokensRaw, budgetAfterSystem)),
+      )
   const budgetAfterHistoryAndSummaries = Math.max(0, budgetAfterSystem - history.tokens - summaryTokensRaw)
-  const working = trimWorkingSet(args.workingSet, budgetAfterHistoryAndSummaries)
+  const working = naive
+    ? {
+        kept: args.workingSet,
+        trimmed: [] as string[],
+        trimmedDetails: [] as ContextPlanItem[],
+        savedTokens: 0,
+      }
+    : trimWorkingSet(args.workingSet, budgetAfterHistoryAndSummaries)
 
   const keptWorkingText = working.kept.map(workingSetItemText)
   const summaryTextBody = summaryBlocks.join("\n\n")
@@ -280,8 +320,9 @@ export function buildRequestMessages(args: {
     args.loadedSkills && args.loadedSkills.length > 0
       ? args.loadedSkills.map((s) => `## ${s.name}\n${s.body}`).join("\n\n")
       : ""
-  const contextParts = [
-    summaryTextBody ? `Repository summaries:\n${summaryTextBody}` : "",
+  // Volatile per-turn context (working set, loaded skills) — stays in the tail near the latest
+  // turn. Summaries are split out below into the cacheable prefix so they don't churn this block.
+  const volatileParts = [
     workingTextBody ? `Working set:\n${workingTextBody}` : "",
     loadedSkillsBody ? `Loaded skill instructions:\n${loadedSkillsBody}` : "",
   ].filter(Boolean)
@@ -330,15 +371,30 @@ export function buildRequestMessages(args: {
     compactionSavings: args.compactionSavings ?? 0,
   })
 
-  // Context message placed immediately before the latest user message so it
-  // doesn't invalidate the Anthropic history-cache prefix on every turn.
-  const contextMessages: ModelMessage[] = contextParts.length
+  // Stable repo summaries: byte-stable across turns (the agent maintains an append-only set)
+  // and placed in the cacheable prefix — right after the system prompt, before the growing
+  // history — so a caching provider bills them at cache-read rates after the first turn. On
+  // Anthropic we mark a cache breakpoint here; OpenAI/Google cache the stable prefix automatically.
+  const cacheSummaries = Boolean(args.isAnthropic) && !naive
+  const summaryMessages: ModelMessage[] = summaryTextBody
     ? [
         {
           role: "user",
           content:
-            "Use this compact repository context for the current turn. Prefer these summaries over re-reading full files unless exact code is needed.\n\n" +
-            contextParts.join("\n\n"),
+            "Repository summaries (stable for this session). Prefer these over re-reading full files unless exact code is needed.\n\n" +
+            summaryTextBody,
+          ...(cacheSummaries ? { providerOptions: ANTHROPIC_CACHE } : {}),
+        },
+      ]
+    : []
+
+  // Volatile context placed immediately before the latest user message so it doesn't
+  // invalidate the cached prefix (system + summaries + history) on every turn.
+  const contextMessages: ModelMessage[] = volatileParts.length
+    ? [
+        {
+          role: "user",
+          content: `Use this compact repository context for the current turn.\n\n${volatileParts.join("\n\n")}`,
         },
       ]
     : []
@@ -358,18 +414,18 @@ export function buildRequestMessages(args: {
   const historyInit = kept.slice(0, -1)
   const historyLatest = kept[kept.length - 1]
   const requestMessages: ModelMessage[] = historyLatest
-    ? [...historyInit, ...contextMessages, ...answerGuidanceMessages, historyLatest]
-    : [...contextMessages, ...answerGuidanceMessages]
+    ? [...summaryMessages, ...historyInit, ...contextMessages, ...answerGuidanceMessages, historyLatest]
+    : [...summaryMessages, ...contextMessages, ...answerGuidanceMessages]
 
   const systemMessage: SystemModelMessage = {
     role: "system",
     content: args.system,
-    ...(args.isAnthropic ? { providerOptions: ANTHROPIC_CACHE } : {}),
+    ...(args.isAnthropic && !naive ? { providerOptions: ANTHROPIC_CACHE } : {}),
   }
 
   return {
     system: systemMessage,
-    messages: args.isAnthropic ? withMovingAnthropicBreakpoint(requestMessages) : requestMessages,
+    messages: args.isAnthropic && !naive ? withMovingAnthropicBreakpoint(requestMessages) : requestMessages,
     plan,
     workingSetKept: working.kept,
   }
