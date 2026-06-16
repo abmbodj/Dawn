@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["index.ts", "packages/*/src/**/*", "packages/*/test/**/*"]
+  "include": ["index.ts", "bench/**/*", "packages/*/src/**/*", "packages/*/test/**/*"]
 }

@@ -1,0 +1,9 @@
+{
+  "providers": {
+    "huggingface": {
+      "name": "Hugging Face",
+      "baseURL": "https://router.huggingface.co/v1",
+      "apiKeyEnv": "HF_TOKEN"
+    }
+  }
+}

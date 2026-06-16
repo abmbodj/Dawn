@@ -42,6 +42,16 @@ export interface ProviderInfo {
 
 export type Catalog = Record<string, ProviderInfo>
 
+/**
+ * Whether a model supports prompt caching, inferred from catalog pricing: a `cache_read`
+ * rate means the provider bills cached input separately (Anthropic, OpenAI, Google, …).
+ * Used to decide how aggressively to inject re-sent context like repo summaries — caching
+ * amortizes the per-turn re-send, so cacheable models can afford a more generous share.
+ */
+export function modelCaches(info?: ModelInfo): boolean {
+  return info?.cost?.cache_read != null
+}
+
 const CATALOG_URL = "https://models.dev/api.json"
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 

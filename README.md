@@ -162,7 +162,29 @@ Session:
 
 > **Illustrative only.** The figures above are plugged into Dawn's real formulas to show the shape of
 > the report — they are not a benchmark. Your actual numbers depend on your repo, model, and mode, and
-> show up live in `/savings`. Dollar savings appear only when the selected model has pricing data.
+> show up live in `/savings`; for *measured*, head-to-head numbers, see [Benchmark](#benchmark) below.
+> Dollar savings appear only when the selected model has pricing data.
+
+---
+
+## Benchmark
+
+The `/savings` readout above is modeled — Dawn estimates what a naive agent *would* have sent. The
+table below is the opposite: a committed harness ([bench/](bench/)) runs each task against an isolated
+checkout of this repo **twice** — once as normal Dawn, once with `--naive` (the identical agent with
+summaries, history trimming, output compaction, and prompt caching switched off) — and reads the token
+counts straight from each run's usage ledger. Where the `claude` CLI is installed, it adds Claude Code
+on the same model as an indicative third column.
+
+<!-- BENCH:START -->
+_Not yet generated in this checkout. Run `bun run bench && bun run bench:report -- --write-readme` to
+populate this table (real API spend — see [bench/README.md](bench/README.md))._
+<!-- BENCH:END -->
+
+`--naive` is a real, shippable mode (`dawn run --naive "…"`), so the comparison is reproducible by
+anyone. The harness is deliberately **not** a CI gate: it costs real API budget and is non-deterministic,
+so the numbers are representative and reproducible via the harness, not exact. Methodology, success
+checks, and the apples-to-apples caveat live in [bench/README.md](bench/README.md).
 
 ---
 

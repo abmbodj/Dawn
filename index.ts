@@ -46,6 +46,7 @@ Usage:
   dawn -m, --model <ref>     model as provider/model (e.g. anthropic/claude-opus-4-8)
   dawn --budget <tokens>     cap estimated prompt tokens (default 8000)
   dawn --context <mode>      minimal, balanced, or deep (default balanced)
+  dawn --naive               baseline mode: full files & history, no compaction or caching
   dawn run "<prompt>"        one-shot non-interactive run (add --yolo to allow edits/bash)
   dawn index                 build or refresh the repo context index
   dawn auth login <provider> store an API key (anthropic, openai, google, …)
@@ -62,6 +63,7 @@ interface Flags {
   yolo: boolean
   budget: number
   contextMode: ContextMode
+  naive: boolean
   refresh?: boolean
   positional: string[]
 }
@@ -73,6 +75,7 @@ function parseFlags(argv: string[]): Flags {
     yolo: false,
     budget: DEFAULT_TOKEN_BUDGET,
     contextMode: DEFAULT_CONTEXT_MODE,
+    naive: false,
     positional: [],
   }
   for (let i = 0; i < argv.length; i++) {
@@ -92,6 +95,9 @@ function parseFlags(argv: string[]): Flags {
         break
       case "--yolo":
         flags.yolo = true
+        break
+      case "--naive":
+        flags.naive = true
         break
       case "--budget": {
         const raw = argv[++i]
@@ -318,6 +324,7 @@ async function oneShot(flags: Flags): Promise<void> {
     contextStore,
     contextMode: flags.contextMode,
     tokenBudget: flags.budget,
+    naive: flags.naive,
   })
 
   const mcpServers = agent.resolveMcpServers()
@@ -394,6 +401,7 @@ async function interactive(flags: Flags): Promise<void> {
     contextStore,
     contextMode: flags.contextMode,
     tokenBudget: flags.budget,
+    naive: flags.naive,
   })
 
   const mcpServers = agent.resolveMcpServers()

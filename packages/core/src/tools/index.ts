@@ -36,6 +36,8 @@ export interface ToolContext {
   sessionId?: string
   /** Called when a heavy tool output is compacted, so the agent can tally savings. */
   onCompaction?: (beforeTokens: number, afterTokens: number) => void
+  /** Naive baseline: skip tool-output compaction. */
+  naive?: boolean
   /** Discovered skills — used by the skill() tool to load bodies on demand. */
   skills?: Skill[]
   /** Session-persistent buffer for dynamically loaded skill bodies. */
@@ -798,6 +800,7 @@ function withCompaction(tools: ToolSet, ctx: ToolContext): ToolSet {
           budget,
           store: ctx.contextStore,
           sessionId: ctx.sessionId,
+          naive: ctx.naive,
         })
         if (outcome.compacted) ctx.onCompaction?.(outcome.beforeTokens, outcome.afterTokens)
         return outcome.text

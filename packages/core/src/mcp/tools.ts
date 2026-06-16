@@ -57,6 +57,7 @@ export function mcpToolsToToolSet(connections: McpConnection[], ctx: ToolContext
               budget,
               store: ctx.contextStore,
               sessionId: ctx.sessionId,
+              naive: ctx.naive,
             })
             if (outcome.compacted) ctx.onCompaction?.(outcome.beforeTokens, outcome.afterTokens)
             return outcome.text
