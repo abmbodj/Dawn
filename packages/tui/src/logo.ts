@@ -177,33 +177,18 @@ export const RISE_DURATION_MS = 1200
 export const WORDMARK = "DAWN"
 export const TAGLINE = "reasoning, not memory"
 
-// Classic figlet "Standard" lettering for DAWN, colored top→bottom with the
-// sun gradient (light core → warm rim). Rows are padded to a uniform width so
-// the centered column in <Logo /> stays aligned.
-const DAWN_FIGLET: Array<[string, string]> = [
-  [" ____    _    __        __ _   _", "#FFF3C4"],
-  ["|  _ \\  / \\   \\ \\  /\\  / /| \\ | |", "#FFC36B"],
-  ["| | | |/ _ \\   \\ \\/  \\/ / |  \\| |", "#FFB45C"],
-  ["| |_| / ___ \\   \\  /\\  /  | |\\  |", "#FF8C42"],
-  ["|____/_/   \\_\\   \\/  \\/   |_| \\_|", "#E8501A"],
-]
-
-const DAWN_FIGLET_WIDTH = Math.max(...DAWN_FIGLET.map(([text]) => text.length))
-
-export const WIDE_WORDMARK_ROWS: Run[][] = DAWN_FIGLET.map(([text, color]) => [
-  { text: text.padEnd(DAWN_FIGLET_WIDTH), color },
-])
-
 export const COMPACT_WORDMARK_ROWS: Run[][] = [
   [
-    { text: "DA", color: "#FFF3C4" },
-    { text: "WN", color: "#FFB45C" },
+    { text: "D", color: "#FFF3C4" },
+    { text: "A", color: "#FFC36B" },
+    { text: "W", color: "#FFB45C" },
+    { text: "N", color: "#FF8C42" },
   ],
 ]
 
-export const WIDE_WORDMARK_MIN_COLS =
-  Math.max(...WIDE_WORDMARK_ROWS.map((row) => row.reduce((sum, run) => sum + run.text.length, 0))) + 4
+export const WIDE_WORDMARK_ROWS = COMPACT_WORDMARK_ROWS
+export const WIDE_WORDMARK_MIN_COLS = WORDMARK.length + 4
 
 export function wordmarkRows(cols: number): Run[][] {
-  return cols >= WIDE_WORDMARK_MIN_COLS ? WIDE_WORDMARK_ROWS : COMPACT_WORDMARK_ROWS
+  return COMPACT_WORDMARK_ROWS
 }
