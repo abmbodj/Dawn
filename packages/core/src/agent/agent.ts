@@ -5,7 +5,6 @@ import {
   buildRequestMessages,
   contextBudget,
   DEFAULT_CONTEXT_MODE,
-  DEFAULT_TOKEN_BUDGET,
   estimateTokens,
   stripReasoningParts,
   ttlForKind,
@@ -23,8 +22,8 @@ import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
 import { loadEnabledPlugins, pluginMcpServers } from "../plugins/registry"
 import type { Catalog } from "../provider/catalog"
-import { BLESSED_MODELS, normalizeModelRef, parseModelRef } from "../provider/catalog"
-import { type ModelProfile, resolveProfile } from "../provider/profile"
+import { BLESSED_MODELS, getModelInfo, normalizeModelRef, parseModelRef } from "../provider/catalog"
+import { AMPLE_BUDGET_THRESHOLD, budgetFor, type ModelProfile, resolveProfile } from "../provider/profile"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
@@ -33,6 +32,9 @@ import type { Skill } from "../skills/types"
 import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
+import { CheckpointStore } from "../checkpoint/checkpoint"
+import { distillDroppedTurns } from "../context/session-memory"
+import { detectProjectProfile, formatProjectProfileSection } from "./project-profile"
 import { buildTurnGuidance } from "./answer-style"
 import { type ClassifiedFailure, classifyFailure } from "./errors"
 import { loadProjectMemory, type ProjectMemory } from "./project-memory"
@@ -59,7 +61,8 @@ export interface AgentOptions {
   naive?: boolean
 }
 
-const MAX_STEPS = 40
+const MAX_STEPS = 100
+const MAX_REPEATED_FAILURES = 3
 const REPO_OVERVIEW_TOOL = "repo_overview"
 const PLAN_MODE_REMINDER =
   "<system-reminder>Plan mode is active. Do not edit files or run side-effecting commands. " +
@@ -168,6 +171,8 @@ export class DawnAgent {
     string,
     { proc: ReturnType<typeof Bun.spawn>; chunks: string[]; done: boolean }
   >()
+  /** Maps absolute path → content hash at last read; enforces read-before-edit discipline. */
+  private readonly readRegistry = new Map<string, string>()
   readonly projectMemory: ProjectMemory
   private latestContextPlan: ContextPlan | undefined
   private estimatedSavedTokens = 0
@@ -182,6 +187,14 @@ export class DawnAgent {
   private busy = false
   /** Running tally of tokens saved by compacting tool outputs this session. */
   private compaction = { savedTokens: 0, outputs: 0 }
+  /** Accumulated session memory text from turns compacted out of the context window. */
+  private sessionMemoryText: string | undefined
+  /** Shadow checkpoint store for /rewind support. */
+  readonly checkpoints: CheckpointStore
+  /** Whether we've taken a checkpoint for the current turn yet. */
+  private turnCheckpointTaken = false
+  /** Running turn counter (incremented at the start of each send). */
+  private turnIndex = 0
   /** Mark of compaction savings already folded into a recorded context plan. */
   private compactionPlanMark = 0
   /** Discovered skills for this working directory. */
@@ -203,9 +216,19 @@ export class DawnAgent {
     this.planModelRef = opts.planModelRef ? normalizeModelRef(opts.planModelRef) : undefined
     this.messages = opts.initialMessages ?? []
     this.contextMode = opts.contextMode ?? DEFAULT_CONTEXT_MODE
-    this.tokenBudget = opts.tokenBudget ?? DEFAULT_TOKEN_BUDGET
     this.naive = opts.naive ?? false
+    // Adaptive budget: caching providers get a large fraction of the real context window
+    // (the stable prefix is billed at ~10% cost via cache-reads), so the model sees full
+    // files and recent history. Non-caching / local providers keep the lean default.
+    if (opts.tokenBudget !== undefined) {
+      this.tokenBudget = opts.tokenBudget
+    } else {
+      const initialProfile = resolveProfile(this.modelRef, opts.catalog)
+      const modelInfo = getModelInfo(opts.catalog, this.modelRef)
+      this.tokenBudget = budgetFor(initialProfile, modelInfo)
+    }
     this.contextStore = opts.contextStore ?? new ContextStore()
+    this.checkpoints = new CheckpointStore(opts.cwd)
 
     // Load enabled plugins (skills, commands, MCP servers)
     const enabledPlugins = loadEnabledPlugins(opts.config)
@@ -235,6 +258,8 @@ export class DawnAgent {
       contextStore: this.contextStore,
       workingSet: this.workingSet,
       contextMode: this.contextMode,
+      ampleBudget: this.tokenBudget >= AMPLE_BUDGET_THRESHOLD,
+      readRegistry: this.readRegistry,
       bgProcs: this.bgProcs,
       sessionId: opts.sessionId,
       onCompaction: (before, after) => {
@@ -249,11 +274,14 @@ export class DawnAgent {
     // Captured once: a byte-stable system prompt is what keeps the provider
     // prompt-cache prefix valid across turns.
     this.projectMemory = loadProjectMemory(opts.cwd)
+    const projectProfile = detectProjectProfile(opts.cwd)
+    const projectProfileSection = formatProjectProfileSection(projectProfile) || undefined
     this.system = buildSystemPrompt(
       opts.cwd,
       this.projectMemory.text || undefined,
       buildSkillCatalog(this.skills) || undefined,
       pinnedSkillBodies.length > 0 ? pinnedSkillBodies : undefined,
+      projectProfileSection,
     )
   }
 
@@ -421,6 +449,23 @@ export class DawnAgent {
     this.estimatedSavedTokens += built.plan.savingsEstimate + built.plan.substitutionSavings
     this.inputTokenEstimates.push(built.plan.totalEstimatedTokens)
     this.contextStore.recordContextPlan(this.opts.sessionId, built.plan)
+
+    // If history turns were dropped, distill them into session memory so the thread isn't lost.
+    if (!this.naive && built.keptHistoryMessages.length < this.messages.length) {
+      const newMemory = distillDroppedTurns(this.messages, built.keptHistoryMessages, this.sessionMemoryText)
+      if (newMemory && newMemory !== this.sessionMemoryText) {
+        this.sessionMemoryText = newMemory
+        this.workingSet.add({
+          kind: "summary",
+          summary: newMemory,
+          reason: "session memory",
+          ttl: 9999,
+          estimatedTokens: estimateTokens(newMemory),
+        })
+        this.bus.emit({ type: "status", message: "compacted earlier turns into session memory" })
+      }
+    }
+
     return { system: built.system, messages: built.messages }
   }
 
@@ -429,10 +474,15 @@ export class DawnAgent {
     this.busy = true
     const { bus, opts } = this
 
+    this.turnIndex++
+    this.turnCheckpointTaken = false
     const effectiveText = opts.gate.mode === "plan" ? `${text}\n\n${PLAN_MODE_REMINDER}` : text
     this.messages.push({ role: "user", content: effectiveText })
     this.persist()
     bus.emit({ type: "turn-start" })
+    // Snapshot working tree before this turn makes any changes
+    const label = text.slice(0, 60).replace(/\n/g, " ")
+    this.checkpoints.snapshot(this.turnIndex, label, this.messages)
 
     try {
       // Auto-trigger: load skill bodies whose patterns match this turn before building the request
@@ -453,6 +503,13 @@ export class DawnAgent {
       // 2 retries (same model) + up to MAX_SWITCHES model switches
       const MAX_ATTEMPTS = 2 + MAX_SWITCHES
 
+      // Hoisted outside the attempt loop so all paths can unsubscribe
+      let latestTodos: import("../bus/bus").TodoItem[] = []
+      const unsubTodos = bus.subscribe((ev) => {
+        if (ev.type === "todos") latestTodos = ev.items
+      })
+
+      try {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const { providerId } = parseModelRef(activeRef)
         // Behavior (reasoning handling, tool repair, caching, prompt scaffolding)
@@ -502,6 +559,9 @@ export class DawnAgent {
         let hasOutput = false
         // Stash inputs at tool-call time so tool-result can build a semantic summary
         const toolInputs = new Map<string, unknown>()
+        // Loop-detection: count failures per unique (tool, input) signature
+        const failureCounts = new Map<string, number>()
+        let stepCount = 0
 
         for await (const part of result.fullStream) {
           switch (part.type) {
@@ -547,17 +607,42 @@ export class DawnAgent {
               })
               break
             }
-            case "tool-error":
+            case "tool-error": {
+              const errMsg = part.error instanceof Error ? part.error.message : String(part.error)
+              // Track repeated failures: same tool + same input args = same signature
+              const sig = `${part.toolName}:${JSON.stringify(toolInputs.get(part.toolCallId) ?? part.input)}`
+              const prevCount = failureCounts.get(sig) ?? 0
+              failureCounts.set(sig, prevCount + 1)
               bus.emit({
                 type: "tool-end",
                 id: part.toolCallId,
                 name: part.toolName,
                 title: toolTitle(part.toolName, toolInputs.get(part.toolCallId) ?? part.input),
-                summary: part.error instanceof Error ? part.error.message : String(part.error),
+                summary: errMsg,
                 isError: true,
               })
+              if (prevCount + 1 >= MAX_REPEATED_FAILURES) {
+                // Break the loop — inject a reconsider message so the model can try a different approach
+                bus.emit({
+                  type: "status",
+                  message: `${part.toolName} failed ${prevCount + 1} times in a row — asking the model to reconsider`,
+                })
+                // This surfaces as a visible error to the model in its next step
+                this.workingSet.add({
+                  kind: "tool-result",
+                  content:
+                    `[Dawn loop-break] "${part.toolName}" has failed ${prevCount + 1} times with the same arguments. ` +
+                    `Stop repeating this call. Step back, reconsider your approach, and try a meaningfully different strategy. ` +
+                    `If you're stuck, surface the blocker to the user with ask_user instead of retrying.`,
+                  reason: "loop-break injection",
+                  ttl: 2,
+                  estimatedTokens: 100,
+                })
+              }
               break
+            }
             case "finish-step": {
+              stepCount++
               const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
               this.ledger.record(usage)
               if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
@@ -608,6 +693,7 @@ export class DawnAgent {
             bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
             continue
           }
+          unsubTodos()
           bus.emit({
             type: "error",
             message: retryableFailure instanceof Error ? retryableFailure.message : String(retryableFailure),
@@ -638,6 +724,7 @@ export class DawnAgent {
             }
           }
           // No fallback available or cap reached
+          unsubTodos()
           bus.emit({ type: "error", message: switchFailure.message })
           this.workingSet.decrementLeases()
           bus.emit({ type: "turn-end" })
@@ -645,10 +732,16 @@ export class DawnAgent {
         }
 
         // ── Success ───────────────────────────────────────────────────────────
+        unsubTodos()
         const response = await result.response
         this.messages.push(...response.messages)
         this.persist()
         this.workingSet.decrementLeases()
+        // If the model ran out of steps with unfinished work, surface it so the user can continue
+        const hasOpenTodos = latestTodos.some((t) => t.status === "pending" || t.status === "in_progress")
+        if (stepCount >= MAX_STEPS) {
+          bus.emit({ type: "step-limit", stepCount, hasOpenTodos })
+        }
         bus.emit({ type: "turn-end" })
         return
       }
@@ -656,6 +749,9 @@ export class DawnAgent {
       // All attempts exhausted without completing
       this.workingSet.decrementLeases()
       bus.emit({ type: "turn-end" })
+      } finally {
+        unsubTodos()
+      }
     } catch (err) {
       if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
         bus.emit({ type: "turn-end", aborted: true })

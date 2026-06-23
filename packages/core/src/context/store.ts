@@ -129,6 +129,12 @@ export class ContextStore {
     return row ? rowToEntry(row) : undefined
   }
 
+  /** All indexed entries for a working directory (for repo_map and find_symbol). */
+  allIndexEntries(cwd: string): RepoIndexEntry[] {
+    const rows = this.db.query("SELECT * FROM repo_index WHERE cwd = ? LIMIT 5000").all(cwd) as any[]
+    return rows.map(rowToEntry)
+  }
+
   relevantEntries(cwd: string, query: string, limit = 8): RepoIndexEntry[] {
     const terms = query
       .toLowerCase()

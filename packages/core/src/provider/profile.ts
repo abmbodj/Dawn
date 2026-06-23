@@ -7,6 +7,26 @@ import {
   normalizeModelRef,
   parseModelRef,
 } from "./catalog"
+/** Tokens used above this threshold are considered "ample" — TTL eviction becomes a last resort. */
+export const AMPLE_BUDGET_THRESHOLD = 20_000
+/** Lean budget for non-caching providers (matches the original tight default). */
+export const LEAN_TOKEN_BUDGET = 8_000
+/** Never request more than this many tokens even on huge-window models (API sanity cap). */
+const MAX_ADAPTIVE_BUDGET = 200_000
+
+/**
+ * Compute the effective token budget for a model. On providers that support prompt
+ * caching the stable prefix is billed at cache-read rates (~10% cost), so it's
+ * economical to give the model a large fraction of its real context window and let
+ * it see complete files and full history. On non-caching / local providers we keep
+ * a lean budget so each turn doesn't pay full price for a large re-send.
+ */
+export function budgetFor(profile: Pick<ModelProfile, "supportsCaching">, info?: ModelInfo): number {
+  if (!profile.supportsCaching) return LEAN_TOKEN_BUDGET
+  const windowTokens = info?.limit?.context
+  if (!windowTokens) return LEAN_TOKEN_BUDGET
+  return Math.min(MAX_ADAPTIVE_BUDGET, Math.floor(windowTokens * 0.65))
+}
 
 /**
  * How a model's "thinking"/reasoning parts are handled in request messages.

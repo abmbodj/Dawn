@@ -834,6 +834,12 @@ export function App(props: AppProps) {
         // Keep the displayed model ref in sync when the agent auto-switches
         setModelRef(event.to)
       }
+      if (event.type === "step-limit") {
+        const msg = event.hasOpenTodos
+          ? `paused at step ${event.stepCount} — unfinished tasks remain. Say "continue" to keep going.`
+          : `reached ${event.stepCount} steps — say "continue" if there's more to do.`
+        dispatch({ type: "push", item: { kind: "info", text: msg } })
+      }
     })
     gate.setHandler(
       (req) =>
@@ -1000,6 +1006,52 @@ export function App(props: AppProps) {
           setSetupConfig(loadConfig(agent.cwd))
           setPluginSetupOpen(true)
           break
+        case "rewind": {
+          if (busy) {
+            dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt first" } })
+            break
+          }
+          // Parse optional index arg: "/rewind 2" → rewind to checkpoint 2
+          const rewindArg = cmd.trim().split(/\s+/)[1]
+          const checkpoints = agent.checkpoints.list()
+          if (checkpoints.length === 0) {
+            dispatch({ type: "push", item: { kind: "info", text: "no checkpoints yet — checkpoints are taken at the start of each turn" } })
+            break
+          }
+          if (!rewindArg) {
+            // Show list
+            const lines = checkpoints.map(
+              (cp, i) =>
+                `  ${i}  turn ${cp.turnIndex}  ${new Date(cp.timestamp).toLocaleTimeString()}  "${cp.label}"`,
+            )
+            dispatch({
+              type: "push",
+              item: { kind: "info", text: `Recent checkpoints (use /rewind N to restore):\n${lines.join("\n")}` },
+            })
+            break
+          }
+          const cpIndex = Number.parseInt(rewindArg, 10)
+          const target = checkpoints[cpIndex]
+          if (!target) {
+            dispatch({ type: "push", item: { kind: "error", text: `no checkpoint ${cpIndex} — run /rewind to list them` } })
+            break
+          }
+          const restored = agent.checkpoints.restore(target)
+          if (!restored) {
+            dispatch({ type: "push", item: { kind: "error", text: `failed to restore checkpoint ${cpIndex}` } })
+            break
+          }
+          agent.startSession(session.id, restored.messages)
+          dispatch({ type: "reset", items: [] })
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: `Restored to checkpoint ${cpIndex} — turn ${target.turnIndex}, "${target.label}". Files and conversation rewound.`,
+            },
+          })
+          break
+        }
         default: {
           // Check if this is a dynamic plugin command
           if (busy) {

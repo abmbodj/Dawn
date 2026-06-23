@@ -30,8 +30,16 @@ export function estimateTokens(value: unknown): number {
   return Math.ceil(text.length / 4)
 }
 
-export function ttlForKind(mode: ContextMode, kind: WorkingSetItem["kind"]): number {
+/**
+ * TTL (turns until eviction) for a working-set item. With an ample budget
+ * (caching provider with a large context window) we rely on budget-based trimming
+ * rather than TTL expiry, so file/range reads stay resident until evicted for space
+ * rather than being eagerly dropped after N turns.
+ */
+export function ttlForKind(mode: ContextMode, kind: WorkingSetItem["kind"], ampleBudget = false): number {
   if (kind === "summary") return mode === "minimal" ? 6 : mode === "balanced" ? 10 : 14
+  // On large-budget caching providers, reads stay until evicted for space (effectively infinite TTL).
+  if (ampleBudget && (kind === "file" || kind === "file-range")) return 9999
   if (kind === "tool-result") return mode === "minimal" ? 1 : mode === "balanced" ? 2 : 3
   return mode === "minimal" ? 1 : mode === "balanced" ? 2 : 4
 }
@@ -275,6 +283,8 @@ export function buildRequestMessages(args: {
   messages: ModelMessage[]
   plan: ContextPlan
   workingSetKept: WorkingSetItem[]
+  /** The messages from args.messages that were kept in the request (subset, for session memory). */
+  keptHistoryMessages: ModelMessage[]
 } {
   const naive = args.naive ?? false
   const systemTokens = estimateTokens(args.system)
@@ -388,7 +398,7 @@ export function buildRequestMessages(args: {
         {
           role: "user",
           content:
-            "Repository summaries (stable for this session). Prefer these over re-reading full files unless exact code is needed.\n\n" +
+            "Repository summaries (stable for this session). Use these as a navigation index to locate files and symbols quickly — read the actual file with the read tool whenever you need exact code, especially before any edit.\n\n" +
             summaryTextBody,
           ...(cacheSummaries ? { providerOptions: ANTHROPIC_CACHE } : {}),
         },
@@ -437,6 +447,7 @@ export function buildRequestMessages(args: {
     messages: args.isAnthropic && !naive ? withMovingAnthropicBreakpoint(requestMessages) : requestMessages,
     plan,
     workingSetKept: working.kept,
+    keptHistoryMessages: history.kept,
   }
 }
 

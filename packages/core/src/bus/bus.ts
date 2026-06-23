@@ -28,6 +28,8 @@ export type AgentEvent =
   | { type: "status"; message: string }
   | { type: "todos"; items: TodoItem[] }
   | { type: "model-switched"; from: string; to: string; reason: string }
+  /** Emitted when the agent hits MAX_STEPS with unfinished todos — invites the user to continue. */
+  | { type: "step-limit"; stepCount: number; hasOpenTodos: boolean }
 
 export type AgentEventHandler = (event: AgentEvent) => void
 

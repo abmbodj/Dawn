@@ -17,6 +17,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },
   { name: "savings", description: "Show session, project, and lifetime token savings." },
+  { name: "rewind", description: "Restore files and conversation to a previous checkpoint.", args: "[index]" },
   { name: "new", description: "Start a fresh session." },
   { name: "clear", description: "Clear the visible transcript while keeping the conversation." },
   { name: "reset", description: "Wipe all Dawn data and return to setup wizard." },

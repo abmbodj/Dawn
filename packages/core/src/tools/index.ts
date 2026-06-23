@@ -38,6 +38,19 @@ export interface ToolContext {
   onCompaction?: (beforeTokens: number, afterTokens: number) => void
   /** Naive baseline: skip tool-output compaction. */
   naive?: boolean
+  /**
+   * When true (caching provider with a large context window), file/range reads use
+   * a very high TTL so they stay resident until evicted by budget pressure rather
+   * than expiring after N turns. Defaults to false (lean/tight eviction).
+   */
+  ampleBudget?: boolean
+  /**
+   * Per-session read registry: maps absolute file path → hash of content at read time.
+   * Populated by the `read` tool; checked by `edit` to enforce read-before-edit discipline.
+   * Persists across turns so a file read three turns ago is still considered "known" as long
+   * as the on-disk content hasn't changed.
+   */
+  readRegistry?: Map<string, string>
   /** Discovered skills — used by the skill() tool to load bodies on demand. */
   skills?: Skill[]
   /** Session-persistent buffer for dynamically loaded skill bodies. */
@@ -54,6 +67,30 @@ function resolvePath(cwd: string, p: string): string {
 function relative(cwd: string, p: string): string {
   const rel = path.relative(cwd, p)
   return rel.startsWith("..") ? p : rel || "."
+}
+
+/** Fast content fingerprint for change detection (not cryptographic — just drift detection). */
+function contentHash(content: string): string {
+  return String(Bun.hash(content))
+}
+
+/**
+ * Given a string that wasn't found as an exact match, find the closest region in
+ * the file and return it with line numbers so the model can self-correct.
+ */
+function findNearestMatch(content: string, oldString: string): string | undefined {
+  const needle = oldString.split("\n")[0]?.trim()
+  if (!needle || needle.length < 4) return undefined
+  const lines = content.split("\n")
+  const idx = lines.findIndex((l) => l.trim() === needle || (needle.length > 8 && l.includes(needle)))
+  if (idx === -1) return undefined
+  const windowLines = oldString.split("\n").length
+  const start = Math.max(0, idx - 2)
+  const end = Math.min(lines.length - 1, idx + windowLines + 1)
+  return lines
+    .slice(start, end + 1)
+    .map((l, i) => `${String(start + i + 1).padStart(5)}→${l}`)
+    .join("\n")
 }
 
 function numberLines(content: string, offset: number): string {
@@ -113,6 +150,10 @@ export function toolTitle(toolName: string, input: any): string {
   switch (toolName) {
     case "repo_overview":
       return "project snapshot"
+    case "repo_map":
+      return input?.dirFilter ? `map of ${input.dirFilter}` : "repo map"
+    case "find_symbol":
+      return String(input?.symbol ?? "")
     case "bash":
       return String(input?.command ?? "").slice(0, 80)
     case "read":
@@ -177,6 +218,14 @@ export function toolResultSummary(toolName: string, input: any, output: unknown)
     }
     case "repo_overview":
       return "snapshot"
+    case "repo_map": {
+      const fileCount = out.split("\n").filter((l) => l && !l.startsWith("Repository")).length
+      return `${fileCount} file${fileCount === 1 ? "" : "s"}`
+    }
+    case "find_symbol": {
+      const hits = out.split("\n").filter((l) => /:\d+:/.test(l)).length
+      return hits > 0 ? `${hits} site${hits === 1 ? "" : "s"}` : "not found"
+    }
     case "web_fetch": {
       const domain = (() => {
         try {
@@ -249,6 +298,7 @@ const rgAvailable: Promise<boolean> = (async () => {
 export function createTools(ctx: ToolContext): ToolSet {
   const { cwd, gate } = ctx
   const mode = ctx.contextMode ?? "balanced"
+  const ampleBudget = ctx.ampleBudget ?? false
 
   const repo_overview = tool({
     description:
@@ -270,7 +320,10 @@ export function createTools(ctx: ToolContext): ToolSet {
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) throw new Error(`${filePath} is a directory — use ls`)
       if (stat.size > 10_000_000) throw new Error(`${filePath} is ${stat.size} bytes — too large to read`)
-      const lines = fs.readFileSync(abs, "utf8").split("\n")
+      const rawContent = fs.readFileSync(abs, "utf8")
+      // Register content hash so edit can verify the file hasn't drifted since this read
+      if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(rawContent))
+      const lines = rawContent.split("\n")
       const cappedLimit = Math.min(limit, maxReadLines(mode))
       const slice = lines.slice(offset - 1, offset - 1 + cappedLimit)
       if (slice.length === 0) return `[file has ${lines.length} lines — offset ${offset} is past the end]`
@@ -282,7 +335,7 @@ export function createTools(ctx: ToolContext): ToolSet {
         endLine: offset + slice.length - 1,
         content: body,
         reason: "read tool",
-        ttl: ttlForKind(mode, "file-range"),
+        ttl: ttlForKind(mode, "file-range", ampleBudget),
         estimatedTokens: estimateTokens(body),
       })
       if (ctx.contextStore) {
@@ -335,15 +388,49 @@ export function createTools(ctx: ToolContext): ToolSet {
     }),
     execute: async ({ filePath, oldString, newString, replaceAll }) => {
       const abs = resolvePath(cwd, filePath)
+      if (!fs.existsSync(abs)) throw new Error(`File not found: ${filePath} — use write to create it`)
       const content = fs.readFileSync(abs, "utf8")
-      const updated = applyEdit(content, oldString, newString, replaceAll)
+      // Read-before-edit discipline: the model must have read the file this session
+      // and the content must not have drifted since then.
+      if (ctx.readRegistry) {
+        const knownHash = ctx.readRegistry.get(abs)
+        if (!knownHash) {
+          throw new Error(
+            `You haven't read ${relative(cwd, abs)} yet this session. Use the read tool on it first, then retry the edit.`,
+          )
+        }
+        const currentHash = contentHash(content)
+        if (currentHash !== knownHash) {
+          // Update the registry so the next edit attempt doesn't re-flag this
+          ctx.readRegistry.set(abs, currentHash)
+          throw new Error(
+            `${relative(cwd, abs)} has changed since you last read it. Re-read it with the read tool, then retry the edit.`,
+          )
+        }
+      }
+      let updated: string
+      try {
+        updated = applyEdit(content, oldString, newString, replaceAll)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes("not found")) {
+          const nearest = findNearestMatch(content, oldString)
+          const hint = nearest
+            ? `\n\nClosest match found in ${relative(cwd, abs)}:\n${nearest}\n\nCheck indentation and whitespace — oldString must match the file exactly.`
+            : `\n\nNo similar region found. Verify the file path and re-read the file before retrying.`
+          throw new Error(`${msg}${hint}`)
+        }
+        throw err
+      }
       const ok = await gate.ask({
         tool: "edit",
         title: `Edit ${relative(cwd, abs)}`,
         detail: toolPreview("edit", { oldString, newString }),
       })
       if (!ok) return DENIED
+      // Update registry with new hash after the edit is written
       fs.writeFileSync(abs, updated)
+      if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(updated))
       return `Edited ${relative(cwd, abs)}`
     },
   })
@@ -750,8 +837,104 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
+  const repo_map = tool({
+    description:
+      "Return an importance-ranked map of this repository: directories, files, and their key exported symbols. " +
+      "Use this to orient in a large codebase — find where things live before using grep/read for details. " +
+      "Pass expand=true to include more files or a dirFilter to focus on a subdirectory.",
+    inputSchema: z.object({
+      dirFilter: z.string().optional().describe("Limit output to files under this directory (relative to cwd)"),
+      expand: z.boolean().optional().describe("Include more files and symbols (default: concise view)"),
+    }),
+    execute: async ({ dirFilter, expand: expandView }) => {
+      if (!ctx.contextStore) return "no index available — run `dawn index` first"
+      const maxFiles = expandView ? 150 : 60
+      const maxSymbolsPerFile = expandView ? 12 : 6
+      const entries = ctx.contextStore.allIndexEntries(cwd)
+      if (entries.length === 0) return "repo index is empty — run `dawn index` to build it"
+      const filter = dirFilter ? path.resolve(cwd, dirFilter) : null
+      const filtered = filter
+        ? entries.filter((e) => path.resolve(cwd, e.path).startsWith(filter))
+        : entries
+      // Rank by: has symbols > has imports > file size (larger = more important)
+      const ranked = [...filtered].sort((a, b) => {
+        const aScore = a.symbols.length * 10 + a.imports.length + Math.min(a.size / 1000, 5)
+        const bScore = b.symbols.length * 10 + b.imports.length + Math.min(b.size / 1000, 5)
+        return bScore - aScore
+      })
+      const lines = [`Repository map (${filtered.length} files, top ${Math.min(maxFiles, ranked.length)} shown):`]
+      for (const entry of ranked.slice(0, maxFiles)) {
+        const syms = entry.symbols.slice(0, maxSymbolsPerFile)
+        const symStr = syms.length > 0 ? `  → ${syms.join(", ")}` : ""
+        lines.push(`${entry.path}${symStr}`)
+      }
+      return lines.join("\n")
+    },
+  })
+
+  const find_symbol = tool({
+    description:
+      "Find where a symbol (function, class, type, variable, …) is defined and referenced across the repo. " +
+      "Returns definition sites first, then usage sites. Use this before reading a file to jump directly to the right lines.",
+    inputSchema: z.object({
+      symbol: z.string().describe("Symbol name to search for"),
+      definitionOnly: z.boolean().optional().describe("Only return definition sites, not all usages"),
+    }),
+    execute: async ({ symbol, definitionOnly }) => {
+      // First: check the symbol index for known definitions
+      const symbolPattern = definitionOnly
+        ? `(export\\s+)?(function|class|const|let|var|type|interface|enum)\\s+${symbol}\\b`
+        : symbol
+      const maxResults = 40
+
+      if (await rgAvailable) {
+        const defArgs = ["--no-heading", "-n", "--color=never", "-S", "-m", String(maxResults)]
+        const defPattern = `(export\\s+)?(function|class|const|let|var|type|interface|enum|def|fn|pub fn)\\s+${symbol}\\b`
+        defArgs.push("--", defPattern, ".")
+        const defProc = Bun.spawn(["rg", ...defArgs], { cwd, stdout: "pipe", stderr: "pipe" })
+        const [defOut, , defCode] = await Promise.all([
+          new Response(defProc.stdout).text(),
+          new Response(defProc.stderr).text(),
+          defProc.exited,
+        ])
+        const defs = defCode === 0 ? defOut.trimEnd() : ""
+
+        if (definitionOnly) {
+          return defs || `no definition of '${symbol}' found`
+        }
+
+        // Also search for all usages
+        const useArgs = ["--no-heading", "-n", "--color=never", "-S", "-m", "20", "--", symbol, "."]
+        const useProc = Bun.spawn(["rg", ...useArgs], { cwd, stdout: "pipe", stderr: "pipe" })
+        const [useOut, , useCode] = await Promise.all([
+          new Response(useProc.stdout).text(),
+          new Response(useProc.stderr).text(),
+          useProc.exited,
+        ])
+        const usages = useCode === 0 ? useOut.trimEnd() : ""
+
+        const parts: string[] = []
+        if (defs) parts.push(`Definitions of '${symbol}':\n${defs}`)
+        if (usages && !definitionOnly) parts.push(`Usages of '${symbol}':\n${truncateMiddle(usages, 5000)}`)
+        return parts.join("\n\n") || `'${symbol}' not found`
+      }
+
+      // Fallback to grep
+      const grepArgs = ["-rn", "-m", String(maxResults), "--", symbolPattern, "."]
+      const proc = Bun.spawn(["grep", ...grepArgs], { cwd, stdout: "pipe", stderr: "pipe" })
+      const [out, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      return code === 0 ? truncateMiddle(out.trimEnd(), 8000) : `'${symbol}' not found`
+    },
+  })
+
   const tools: ToolSet = {
     repo_overview,
+    repo_map,
+    find_symbol,
     read,
     write,
     edit,
