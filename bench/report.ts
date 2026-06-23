@@ -75,71 +75,135 @@ function fmtInt(n: number): string {
   return Math.round(n).toLocaleString("en-US")
 }
 
+function taskRow(
+  r: TaskResult,
+  hasClaude: boolean,
+): { cells: string[]; dawnIn: number; dawnCost: number; naiveIn: number; naiveCost: number; bothOk: boolean } {
+  const dawnIn = pick(r.modes.dawn, "inputTokens")
+  const dawnCached = pick(r.modes.dawn, "cachedInputTokens")
+  const dawnCost = pick(r.modes.dawn, "cost")
+  const naiveIn = pick(r.modes.naive, "inputTokens")
+  const naiveCost = pick(r.modes.naive, "cost")
+  const ds = successCount(r.modes.dawn)
+  const ns = successCount(r.modes.naive)
+  const bothOk = ds.ok > 0 && ns.ok > 0
+
+  // Append pass/total to the task label so success rate is always visible
+  const passTag = `(d:${ds.ok}/${ds.total} n:${ns.ok}/${ns.total})`
+  const label = bothOk ? `${r.task} ${passTag}` : `${r.task} ⚠️ ${passTag}`
+
+  const cells = [
+    label,
+    `${fmtInt(dawnIn)} (${fmtInt(dawnCached)})`,
+    fmtInt(naiveIn),
+    reduction(naiveIn, dawnIn),
+    `$${dawnCost.toFixed(4)}`,
+    `$${naiveCost.toFixed(4)}`,
+    reduction(naiveCost, dawnCost),
+  ]
+  if (hasClaude) {
+    const cs = successCount(r.modes.claude)
+    const claudeIn = pick(r.modes.claude, "inputTokens")
+    const claudeCost = pick(r.modes.claude, "cost")
+    cells.push(`${fmtInt(claudeIn)} (c:${cs.ok}/${cs.total})`, `$${claudeCost.toFixed(4)}`)
+  }
+  return { cells, dawnIn, dawnCost, naiveIn, naiveCost, bothOk }
+}
+
 function render(data: Results): string {
   const { provenance: p, results } = data
   const hasClaude = results.some((r) => r.modes.claude && r.modes.claude.length > 0)
 
   const header = hasClaude
-    ? "| Task | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |"
-    : "| Task | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |"
+    ? "| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |"
+    : "| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |"
   const sep = hasClaude
     ? "| --- | --: | --: | --: | --: | --: | --: | --: | --: |"
     : "| --- | --: | --: | --: | --: | --: | --: |"
 
-  const rows: string[] = []
-  let naiveInSum = 0
-  let dawnInSum = 0
-  let naiveCostSum = 0
-  let dawnCostSum = 0
-  const perTaskInputRed: number[] = []
-  const perTaskCostRed: number[] = []
-
-  for (const r of results) {
-    const dawnIn = pick(r.modes.dawn, "inputTokens")
-    const dawnCached = pick(r.modes.dawn, "cachedInputTokens")
-    const dawnCost = pick(r.modes.dawn, "cost")
-    const naiveIn = pick(r.modes.naive, "inputTokens")
-    const naiveCost = pick(r.modes.naive, "cost")
-    const ds = successCount(r.modes.dawn)
-    const ns = successCount(r.modes.naive)
-    const bothOk = ds.ok > 0 && ns.ok > 0
-
-    if (bothOk && naiveIn > 0) {
-      naiveInSum += naiveIn
-      dawnInSum += dawnIn
-      naiveCostSum += naiveCost
-      dawnCostSum += dawnCost
-      perTaskInputRed.push(((naiveIn - dawnIn) / naiveIn) * 100)
-      if (naiveCost > 0) perTaskCostRed.push(((naiveCost - dawnCost) / naiveCost) * 100)
-    }
-
-    const label = bothOk ? r.task : `${r.task} ⚠️`
-    const cells = [
-      label,
-      `${fmtInt(dawnIn)} (${fmtInt(dawnCached)})`,
-      fmtInt(naiveIn),
-      reduction(naiveIn, dawnIn),
-      `$${dawnCost.toFixed(4)}`,
-      `$${naiveCost.toFixed(4)}`,
-      reduction(naiveCost, dawnCost),
-    ]
-    if (hasClaude) {
-      const claudeIn = pick(r.modes.claude, "inputTokens")
-      const claudeCost = pick(r.modes.claude, "cost")
-      cells.push(fmtInt(claudeIn), `$${claudeCost.toFixed(4)}`)
-    }
-    rows.push(`| ${cells.join(" | ")} |`)
+  // Group tasks by category
+  const categories = [...new Set(results.map((r) => r.category))]
+  const grouped = new Map<string, TaskResult[]>()
+  for (const cat of categories) {
+    grouped.set(cat, results.filter((r) => r.category === cat))
   }
 
-  const medInput = median(perTaskInputRed)
-  const medCost = median(perTaskCostRed)
-  const pooledInput = naiveInSum > 0 ? ((naiveInSum - dawnInSum) / naiveInSum) * 100 : 0
-  const pooledCost = naiveCostSum > 0 ? ((naiveCostSum - dawnCostSum) / naiveCostSum) * 100 : 0
+  // Per-category and overall accumulators
+  let totalNaiveIn = 0
+  let totalDawnIn = 0
+  let totalNaiveCost = 0
+  let totalDawnCost = 0
+  const overallInputRed: number[] = []
+  const overallCostRed: number[] = []
 
+  const sections: string[] = []
+
+  for (const [cat, catResults] of grouped) {
+    let catNaiveIn = 0
+    let catDawnIn = 0
+    let catNaiveCost = 0
+    let catDawnCost = 0
+    const catInputRed: number[] = []
+    const catCostRed: number[] = []
+    const rows: string[] = []
+
+    for (const r of catResults) {
+      const { cells, dawnIn, dawnCost, naiveIn, naiveCost, bothOk } = taskRow(r, hasClaude)
+      rows.push(`| ${cells.join(" | ")} |`)
+
+      if (bothOk && naiveIn > 0) {
+        catNaiveIn += naiveIn
+        catDawnIn += dawnIn
+        catNaiveCost += naiveCost
+        catDawnCost += dawnCost
+        catInputRed.push(((naiveIn - dawnIn) / naiveIn) * 100)
+        if (naiveCost > 0) catCostRed.push(((naiveCost - dawnCost) / naiveCost) * 100)
+        totalNaiveIn += naiveIn
+        totalDawnIn += dawnIn
+        totalNaiveCost += naiveCost
+        totalDawnCost += dawnCost
+        overallInputRed.push(((naiveIn - dawnIn) / naiveIn) * 100)
+        if (naiveCost > 0) overallCostRed.push(((naiveCost - dawnCost) / naiveCost) * 100)
+      }
+    }
+
+    const catMedIn = median(catInputRed)
+    const catMedCost = median(catCostRed)
+    const catInLabel =
+      catMedIn >= 0
+        ? `**${catMedIn.toFixed(0)}% fewer input tokens**`
+        : catMedCost >= 0
+          ? `**${Math.abs(catMedIn).toFixed(0)}% more input tokens** (caching discount offsets cost)`
+          : `**${Math.abs(catMedIn).toFixed(0)}% more input tokens**`
+    const catCostLabel =
+      catMedCost >= 0
+        ? `**${catMedCost.toFixed(0)}% less cost**`
+        : `**${Math.abs(catMedCost).toFixed(0)}% more cost**`
+    const catSummary =
+      catInputRed.length > 0
+        ? `_${cat}: median ${catInLabel}, ${catCostLabel} (${catInputRed.length} task(s) at equal success)_`
+        : `_${cat}: no comparable task(s) passed in both modes_`
+
+    sections.push(`### ${cat}\n\n${catSummary}\n\n${header}\n${sep}\n${rows.join("\n")}`)
+  }
+
+  const medInput = median(overallInputRed)
+  const medCost = median(overallCostRed)
+  const pooledInput = totalNaiveIn > 0 ? ((totalNaiveIn - totalDawnIn) / totalNaiveIn) * 100 : 0
+  const pooledCost = totalNaiveCost > 0 ? ((totalNaiveCost - totalDawnCost) / totalNaiveCost) * 100 : 0
+
+  const inSummary =
+    medInput >= 0
+      ? `${medInput.toFixed(0)}% fewer input tokens`
+      : medCost >= 0
+        ? `${Math.abs(medInput).toFixed(0)}% more input tokens (caching discount offsets cost)`
+        : `${Math.abs(medInput).toFixed(0)}% more input tokens`
+  const costSummary =
+    medCost >= 0 ? `${medCost.toFixed(0)}% less cost` : `${Math.abs(medCost).toFixed(0)}% more cost`
   const summary =
-    `**Across ${perTaskInputRed.length} comparable task(s), Dawn used a median ` +
-    `${medInput.toFixed(0)}% fewer input tokens and ${medCost.toFixed(0)}% less cost than the naive baseline ` +
-    `(pooled: ${pooledInput.toFixed(0)}% tokens, ${pooledCost.toFixed(0)}% cost).**`
+    `**Across ${overallInputRed.length} comparable task(s) at equal success, Dawn used a median ` +
+    `${inSummary} and ${costSummary} than the naive baseline ` +
+    `(pooled: ${pooledInput >= 0 ? "" : "+"}${(-pooledInput).toFixed(0)}% tokens vs naive, ${pooledCost >= 0 ? "−" : "+"}${Math.abs(pooledCost).toFixed(0)}% cost).**`
 
   const caption =
     `_Measured by ${data.provenance.model}` +
@@ -148,13 +212,13 @@ function render(data: Results): string {
     (p.smoke ? " _(smoke subset)_" : "")
 
   const caveat = hasClaude
-    ? "\n_The Claude Code column is **indicative, not apples-to-apples**: same model and task, but a different agent (its own system prompt, tools, and loop). The rigorous comparison is Dawn vs. `--naive` — the identical agent with context management turned off. ⚠️ marks tasks where a mode did not pass its success check; those are excluded from the medians._"
-    : "\n_⚠️ marks tasks where a mode did not pass its success check; those are excluded from the medians._"
+    ? "\n_The Claude Code column is **indicative, not apples-to-apples**: same model and task, but a different agent (its own system prompt, tools, and loop). The rigorous comparison is Dawn vs. `--naive` — the identical agent with context management turned off. ⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._"
+    : "\n_⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._"
 
   const reproduce =
-    "\n```bash\nbun run bench        # run it yourself (real API spend, non-deterministic)\nbun run bench:report # regenerate this table\n```"
+    "\n```bash\n# Reproduce (requires Anthropic key + `claude` CLI for the Claude column):\nbun run bench        # real API spend, non-deterministic\nbun run bench:report # regenerate this table\n\n# Free local verification of the mechanism delta (Dawn vs --naive only):\nbun run bench --no-claude --model ollama/<model>   # or groq/<model>\n```"
 
-  return [summary, "", header, sep, ...rows, "", caption, caveat, reproduce].join("\n")
+  return [summary, "", ...sections, "", caption, caveat, reproduce].join("\n\n")
 }
 
 function argValue(flag: string): string | undefined {

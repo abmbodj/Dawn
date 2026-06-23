@@ -15,7 +15,7 @@ import path from "node:path"
  */
 export interface BenchTask {
   id: string
-  category: "read-heavy" | "diagnosis" | "edit"
+  category: "read-heavy" | "diagnosis" | "edit" | "large-output"
   prompt: string
   /** When true the agent edits files, so the run needs write permissions + a writable worktree. */
   edits?: boolean
@@ -125,5 +125,39 @@ export const TASKS: BenchTask[] = [
     prompt:
       'Read the root package.json, then add an npm script named "bench:hello" whose command is `echo hello`. Do not change any other script.',
     check: ({ workdir }) => fileHas(workdir, "package.json", "bench:hello", "echo hello"),
+  },
+
+  // ── Pilot tasks (correctness-gated) ──────────────────────────────────────
+  // These four tasks each have a single unambiguous correct answer verified
+  // programmatically. Tokens are only counted for runs that PASS the check.
+  {
+    id: "pilot-read-exact-exports",
+    category: "read-heavy",
+    prompt:
+      "Use the bash tool to run `grep -c '^export' packages/core/src/context/budget.ts` and report the exact number you see in the output.",
+    check: ({ transcript }) => has(transcript, "19", ["export", "grep", "found", "result", "count"]),
+  },
+  {
+    id: "pilot-diagnosis-maxreadlines",
+    category: "diagnosis",
+    prompt:
+      "Read packages/core/src/context/budget.ts and find the function `maxReadLines`. When Dawn is in `minimal` context mode, what is the exact maximum number of lines the read tool returns per call? Trace the code and report only the number.",
+    check: ({ transcript }) => has(transcript, "120"),
+  },
+  {
+    id: "pilot-edit-export-constant",
+    category: "edit",
+    edits: true,
+    prompt:
+      "Read packages/core/src/context/budget.ts. Add an exported constant `PILOT_BUDGET_CHECK = true` on the line immediately after the `DEFAULT_TOKEN_BUDGET` constant. Do not change anything else.",
+    check: ({ workdir }) =>
+      fileHas(workdir, "packages/core/src/context/budget.ts", "PILOT_BUDGET_CHECK", "true"),
+  },
+  {
+    id: "pilot-large-output-unique-files",
+    category: "large-output",
+    prompt:
+      "Use the bash tool to run `grep -rn '^export' packages/core/src`. Count the number of unique file paths in the output (each path is the part before the first colon on each line) and report the exact count.",
+    check: ({ transcript }) => has(transcript, "59", ["file", "unique", "path", "export"]),
   },
 ]

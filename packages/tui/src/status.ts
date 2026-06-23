@@ -173,8 +173,9 @@ export function formatSavingsReport(args: {
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
   const cacheReadPrice = modelCacheReadPrice(args.catalog, args.modelRef)
   const lines = [
-    "Savings",
-    "Compared to: reading full files, no prompt caching",
+    "Savings (estimated)",
+    "Baseline: reading full files, full history, no prompt caching",
+    "Note: these are model-based estimates (chars÷4). For measured numbers: `bun run bench`",
     inputPrice === undefined
       ? "Pricing: — (no pricing data)"
       : `Pricing: input ${formatCost(inputPrice)} / 1M tokens` +
@@ -190,13 +191,13 @@ export function formatSavingsReport(args: {
         : undefined
     lines.push("")
     lines.push(`${scope.label}:`)
-    lines.push(`  saved: ${formatWholeTokens(totalSaved)} tokens`)
+    lines.push(`  est. saved: ${formatWholeTokens(totalSaved)} tokens`)
     lines.push(`    summaries + trim: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
     lines.push(`    tool-output compaction: ${formatWholeTokens(scope.context.compactionSavedTokens)} tokens`)
-    lines.push(`  input cut: ${metrics.savedPercent}%`)
+    lines.push(`  est. input cut: ~${metrics.savedPercent}% vs naive baseline`)
     lines.push(`  Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
-    lines.push(`  would send: ${formatTokens(metrics.wouldSendTokens)} input`)
-    lines.push(`  est $ saved: ${metrics.estimatedCostSaved}`)
+    lines.push(`  est. would send (naive): ${formatTokens(metrics.wouldSendTokens)} input`)
+    lines.push(`  est. $ saved: ${metrics.estimatedCostSaved}`)
     lines.push(
       `  cache $ saved: ${cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved)}` +
         (cacheDollarsSaved !== undefined && cacheReadPrice === undefined ? " (est)" : ""),

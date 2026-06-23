@@ -238,13 +238,13 @@ describe("formatSavingsReport", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(report).toContain("Compared to: reading full files, no prompt caching")
+    expect(report).toContain("Baseline: reading full files, full history, no prompt caching")
     expect(report).toContain("session:")
-    expect(report).toContain("saved: 1,200 tokens")
-    expect(report).toContain("input cut: 29%")
+    expect(report).toContain("est. saved: 1,200 tokens")
+    expect(report).toContain("est. input cut: ~29%")
     expect(report).toContain("Dawn sent: 3.0k input")
-    expect(report).toContain("would send: 4.2k input")
-    expect(report).toContain("est $ saved: $0.001")
+    expect(report).toContain("est. would send (naive): 4.2k input")
+    expect(report).toContain("est. $ saved: $0.001")
     expect(report).toContain("context items: 4 included / 3 skipped")
     expect(report).toContain("highest-saving turn: 900 tokens saved (1.8k / 8.0k, balanced)")
     expect(report).toContain("project:")
@@ -272,7 +272,7 @@ describe("formatSavingsReport", () => {
     })
 
     expect(report).toContain("Pricing: —")
-    expect(report).toContain("est $ saved: —")
+    expect(report).toContain("est. $ saved: —")
   })
 })
 
