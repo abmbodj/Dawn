@@ -7,120 +7,104 @@ import {
   localModelFit,
   type ModelTier,
   modelTier,
+  resolveProfile,
 } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
 import { type ProviderOption, SETUP_PROVIDERS } from "./ProviderConnect"
 
-const TIER_RANK: Record<ModelTier, number> = { blessed: 0, standard: 1, experimental: 2 }
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-/** Short capability/tier marker prefixed to a model's description line. */
-function tierMarker(tier: ModelTier): string {
-  if (tier === "blessed") return "★ recommended · "
-  if (tier === "experimental") return "⚠ experimental · "
-  return ""
-}
+export type PriceInfo =
+  | { kind: "per-tok"; in: number; out: number }
+  | { kind: "free" }
+  | { kind: "unknown" }
+  | { kind: "premium" }
 
-export interface ModelPickerProps {
-  catalog: Catalog
-  config: DawnConfig
-  current: string
-  width: number
-  /** Preselect a provider on open (e.g., after a /connect round-trip). */
-  initialProviderId?: string
-  onPick: (ref: string) => void
-  onConnect: (provider: ProviderOption) => void
-  onClose: () => void
-}
-
-interface RecommendedEntry {
-  kind: "recommended"
-  modelCount: number
-}
-
-interface ProviderEntry {
-  kind: "connected"
-  id: string
-  name: string
-  modelCount: number
-}
-
-interface ConnectEntry {
-  kind: "connect"
-  provider: ProviderOption
-}
-
-type LeftEntry = RecommendedEntry | ProviderEntry | ConnectEntry
-
-/** Build left-pane entries. Re-reads auth.json on every call via connectedProviders. */
-export function buildLeftEntries(catalog: Catalog, config: DawnConfig, current: string): LeftEntry[] {
-  const connected = connectedProviders(catalog, config)
-  const currentProviderId = current.split("/")[0] ?? ""
-
-  const recommendedCount = buildRecommendedEntries(catalog, config, current).length
-  const recommendedEntry: LeftEntry[] =
-    recommendedCount > 0 ? [{ kind: "recommended", modelCount: recommendedCount }] : []
-
-  const connectedEntries: LeftEntry[] = connected.map((p) => {
-    const models = catalog[p.id]?.models ?? {}
-    const count = Object.values(models).filter((m) => m.tool_call !== false).length
-    return {
-      kind: "connected",
-      id: p.id,
-      name: p.id === currentProviderId ? `${p.name} ✓` : p.name,
-      modelCount: count,
-    }
-  })
-
-  const connectedIds = new Set(connected.map((p) => p.id))
-  const connectEntries: LeftEntry[] = SETUP_PROVIDERS.filter((p) => !connectedIds.has(p.id)).map((p) => ({
-    kind: "connect",
-    provider: p,
-  }))
-
-  return [...recommendedEntry, ...connectedEntries, ...connectEntries]
-}
-
-interface ModelEntry {
+export interface ModelEntry {
   id: string
   ref: string
+  /** Bare display name — no ✓/✦ decorators. */
   name: string
-  description: string
-  isCurrent: boolean
+  providerId: string
   tier: ModelTier
+  isCurrent: boolean
+  /** e.g. "200k" or "" */
+  contextLabel: string
+  price: PriceInfo
+  reasoning: boolean
+  vision: boolean
+  ram?: { status: "fits" | "tight" | "oversized"; label: string }
 }
 
-/** Format the description line (tier marker + cost + limits + RAM fit) for a model. */
-function modelDescription(
+export type Row =
+  | { kind: "header"; label: string; count: number }
+  | { kind: "model"; entry: ModelEntry }
+  | { kind: "connect"; provider: ProviderOption }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const TIER_RANK: Record<ModelTier, number> = { blessed: 0, standard: 1, experimental: 2 }
+
+function buildEntry(
+  providerId: string,
   ref: string,
   model: Catalog[string]["models"][string],
-  qualifyProvider = false,
-): string {
-  let cost: string
+  isCurrent: boolean,
+  catalog: Catalog,
+): ModelEntry {
+  const contextLabel = model.limit?.context ? `${Math.round(model.limit.context / 1000)}k` : ""
+
+  let price: PriceInfo
   if (model.access === "premium") {
-    cost = "premium plan"
+    price = { kind: "premium" }
   } else if (!model.cost) {
-    cost = "price unknown"
+    price = { kind: "unknown" }
   } else if (model.cost.input === 0 && model.cost.output === 0) {
-    cost = model.access === "free" || !model.access ? "free" : "included"
+    price = { kind: "free" }
   } else {
-    cost = `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
+    price = { kind: "per-tok", in: model.cost.input ?? 0, out: model.cost.output ?? 0 }
   }
 
-  const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
-  const out = model.limit?.output ? ` · ${Math.round(model.limit.output / 1000)}k out` : ""
-  const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
-  const ram = fit
-    ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " tight on RAM" : ""}`
-    : ""
-  const provider = qualifyProvider ? `${ref.split("/")[0]} · ` : ""
-  return `${tierMarker(modelTier(ref, model))}${provider}${cost}${ctx}${out}${ram}`
+  const profile = resolveProfile(ref, catalog)
+
+  let ram: ModelEntry["ram"] | undefined
+  if (model.sizeBytes) {
+    const fit = localModelFit(model.sizeBytes)
+    ram = {
+      status: fit.status === "oversized" ? "oversized" : fit.status === "tight" ? "tight" : "fits",
+      label: formatBytes(model.sizeBytes),
+    }
+  }
+
+  return {
+    id: model.id,
+    ref,
+    name: model.name,
+    providerId,
+    tier: modelTier(ref, model),
+    isCurrent,
+    contextLabel,
+    price,
+    reasoning: profile.capabilities.reasoning,
+    vision: profile.capabilities.vision,
+    ram,
+  }
 }
 
+function priceLabel(price: PriceInfo): string {
+  if (price.kind === "free") return "free"
+  if (price.kind === "premium") return "premium"
+  if (price.kind === "unknown") return "?"
+  return `$${price.in}/$${price.out}`
+}
+
+// ─── Row data builders (exported for tests) ──────────────────────────────────
+
 /**
- * Build right-pane model rows for a connected provider. Sorted: current first,
- * then by tier (blessed → standard → experimental), then price asc, then name.
+ * Build model rows for a connected provider, sorted: current → tier → price → name.
+ * Excludes models with tool_call === false.
  */
 export function buildModelEntries(providerId: string, catalog: Catalog, current: string): ModelEntry[] {
   const models = catalog[providerId]?.models ?? {}
@@ -128,19 +112,8 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
   for (const model of Object.values(models)) {
     if (model.tool_call === false) continue
     const ref = `${providerId}/${model.id}`
-    const isCurrent = ref === current
-    const nameParts = [model.name, isCurrent ? "✓" : "", model.reasoning ? "✦" : ""].filter(Boolean).join(" ")
-
-    entries.push({
-      id: model.id,
-      ref,
-      name: nameParts,
-      description: modelDescription(ref, model),
-      isCurrent,
-      tier: modelTier(ref, model),
-    })
+    entries.push(buildEntry(providerId, ref, model, ref === current, catalog))
   }
-
   entries.sort((a, b) => {
     if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
     if (a.tier !== b.tier) return TIER_RANK[a.tier] - TIER_RANK[b.tier]
@@ -149,13 +122,12 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
     if (aPrice !== bPrice) return aPrice - bPrice
     return a.name.localeCompare(b.name)
   })
-
   return entries
 }
 
 /**
- * Build the cross-provider "Recommended" list: blessed flagships available on any
- * connected provider. Lets a user land on the best model without provider-hopping.
+ * Cross-provider "Recommended" list: blessed flagships on any connected provider.
+ * Sorted: current first, then cheapest first.
  */
 export function buildRecommendedEntries(catalog: Catalog, config: DawnConfig, current: string): ModelEntry[] {
   const connectedIds = new Set(connectedProviders(catalog, config).map((p) => p.id))
@@ -166,311 +138,314 @@ export function buildRecommendedEntries(catalog: Catalog, config: DawnConfig, cu
     if (!providerId || !connectedIds.has(providerId)) continue
     const model = catalog[providerId]?.models?.[modelId]
     if (!model || model.tool_call === false) continue
-    const isCurrent = ref === current
-    const nameParts = [model.name, isCurrent ? "✓" : "", model.reasoning ? "✦" : ""].filter(Boolean).join(" ")
-    entries.push({
-      id: modelId,
-      ref,
-      name: nameParts,
-      description: modelDescription(ref, model, true),
-      isCurrent,
-      tier: "blessed",
-    })
+    entries.push(buildEntry(providerId, ref, model, ref === current, catalog))
   }
   entries.sort((a, b) => {
     if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
-    const ap = catalog[a.ref.split("/")[0] ?? ""]?.models?.[a.id]?.cost?.input ?? Infinity
-    const bp = catalog[b.ref.split("/")[0] ?? ""]?.models?.[b.id]?.cost?.input ?? Infinity
+    const ap = catalog[a.providerId]?.models?.[a.id]?.cost?.input ?? Infinity
+    const bp = catalog[b.providerId]?.models?.[b.id]?.cost?.input ?? Infinity
     if (ap !== bp) return ap - bp
     return a.name.localeCompare(b.name)
   })
   return entries
 }
 
-const MODELS_LEGEND =
-  "★ recommended · ⚠ experimental · ✦ reasoning · free $0 · price/Mtok in/out · type to search"
+/**
+ * Build the unified flat Row list: Recommended → per-provider → "More providers".
+ * When `query` is set, fuzzy-filters model rows and hides the connect section.
+ */
+export function buildPickerRows(catalog: Catalog, config: DawnConfig, current: string, query: string): Row[] {
+  const rows: Row[] = []
+  const connected = connectedProviders(catalog, config)
+  const connectedIds = new Set(connected.map((p) => p.id))
+
+  const q = query.toLowerCase().trim()
+  const filter = (entries: ModelEntry[]): ModelEntry[] =>
+    q
+      ? entries.filter(
+          (e) =>
+            e.name.toLowerCase().includes(q) ||
+            e.id.toLowerCase().includes(q) ||
+            e.providerId.toLowerCase().includes(q),
+        )
+      : entries
+
+  // Recommended section
+  const recEntries = filter(buildRecommendedEntries(catalog, config, current))
+  if (recEntries.length > 0) {
+    rows.push({ kind: "header", label: "RECOMMENDED", count: recEntries.length })
+    for (const e of recEntries) rows.push({ kind: "model", entry: e })
+  }
+
+  // Per-provider sections
+  for (const p of connected) {
+    const entries = filter(buildModelEntries(p.id, catalog, current))
+    if (entries.length === 0) continue
+    rows.push({ kind: "header", label: p.name.toUpperCase(), count: entries.length })
+    for (const e of entries) rows.push({ kind: "model", entry: e })
+  }
+
+  // "More providers" section — hidden during search
+  if (!q) {
+    const unconnected = SETUP_PROVIDERS.filter((p) => !connectedIds.has(p.id))
+    if (unconnected.length > 0) {
+      rows.push({ kind: "header", label: "MORE PROVIDERS", count: unconnected.length })
+      for (const p of unconnected) rows.push({ kind: "connect", provider: p })
+    }
+  }
+
+  return rows
+}
+
+// ─── Navigation helpers ───────────────────────────────────────────────────────
+
+function isSelectable(row: Row | undefined): boolean {
+  return row?.kind === "model" || row?.kind === "connect"
+}
+
+/** Clamp idx to a selectable row, searching forward then backward if needed. */
+function safeSelection(rows: Row[], idx: number): number {
+  if (rows.length === 0) return 0
+  const clamped = Math.max(0, Math.min(idx, rows.length - 1))
+  if (isSelectable(rows[clamped])) return clamped
+  for (let i = clamped + 1; i < rows.length; i++) {
+    if (isSelectable(rows[i])) return i
+  }
+  for (let i = clamped - 1; i >= 0; i--) {
+    if (isSelectable(rows[i])) return i
+  }
+  return clamped
+}
+
+/** Move to the next selectable row in direction (+1 or -1), skipping headers. */
+function nextSel(rows: Row[], from: number, dir: 1 | -1): number {
+  let i = from + dir
+  while (i >= 0 && i < rows.length) {
+    if (isSelectable(rows[i])) return i
+    i += dir
+  }
+  return from
+}
+
+function rowKey(row: Row): string {
+  if (row.kind === "model") return `model-${row.entry.ref}`
+  if (row.kind === "connect") return `connect-${row.provider.id}`
+  return `header-${row.label}`
+}
+
+// ─── Row renderer ─────────────────────────────────────────────────────────────
+
+const VISIBLE_HEIGHT = 11
+
+interface PickerRowProps {
+  row: Row
+  selected: boolean
+  wide: boolean
+}
+
+function PickerRow({ row, selected, wide }: PickerRowProps) {
+  if (row.kind === "header") {
+    return (
+      <text fg={theme.dim} style={{ paddingLeft: 1 }}>
+        {`─ ${row.label} (${row.count})`}
+      </text>
+    )
+  }
+
+  if (row.kind === "connect") {
+    const { provider } = row
+    return (
+      <box style={{ flexDirection: "row", backgroundColor: selected ? theme.statusBg : undefined }}>
+        <text fg={selected ? theme.accent : theme.dim}>{selected ? "❯ " : "  "}</text>
+        <text fg={theme.dim}>{`+ Connect ${provider.label.split("  ")[0]}`}</text>
+      </box>
+    )
+  }
+
+  const { entry } = row
+  const bg = selected ? theme.statusBg : undefined
+  const caret = selected ? "❯ " : "  "
+  const caretColor = selected ? theme.accent : theme.dim
+
+  const tierBadge = entry.tier === "blessed" ? "★ " : entry.tier === "experimental" ? "⚠ " : "  "
+  const tierColor =
+    entry.tier === "blessed" ? theme.accent : entry.tier === "experimental" ? theme.error : theme.dim
+
+  const ctx = entry.contextLabel ? entry.contextLabel.padStart(5) : "     "
+
+  if (!wide) {
+    return (
+      <box style={{ flexDirection: "row", backgroundColor: bg }}>
+        <text fg={caretColor}>{caret}</text>
+        <text fg={tierColor}>{tierBadge}</text>
+        <text fg={theme.text} style={{ flexGrow: 1 }}>
+          {entry.name}
+        </text>
+        {entry.isCurrent ? <text fg={theme.toolOk}>{"✓ "}</text> : null}
+        <text fg={theme.dim}>{ctx}</text>
+      </box>
+    )
+  }
+
+  const priceStr = priceLabel(entry.price).padEnd(12)
+  const thinkColor = entry.reasoning ? theme.accent : theme.dim
+  const visionColor = entry.vision ? theme.accent : theme.dim
+
+  const ramEl = entry.ram ? (
+    <text
+      fg={
+        entry.ram.status === "oversized"
+          ? theme.error
+          : entry.ram.status === "tight"
+            ? theme.accent
+            : theme.toolOk
+      }
+    >
+      {entry.ram.status === "oversized" ? " ⚠RAM" : entry.ram.status === "tight" ? " ~RAM" : " ✓RAM"}
+    </text>
+  ) : null
+
+  return (
+    <box style={{ flexDirection: "row", backgroundColor: bg }}>
+      <text fg={caretColor}>{caret}</text>
+      <text fg={tierColor}>{tierBadge}</text>
+      <text fg={theme.text} style={{ flexGrow: 1 }}>
+        {entry.name}
+      </text>
+      {entry.isCurrent ? <text fg={theme.toolOk}>{"✓ "}</text> : null}
+      <text fg={theme.dim}>{`${ctx} `}</text>
+      <text fg={theme.dim}>{priceStr}</text>
+      <text fg={thinkColor}>{"think "}</text>
+      <text fg={visionColor}>{"vision"}</text>
+      {ramEl}
+    </box>
+  )
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+export interface ModelPickerProps {
+  catalog: Catalog
+  config: DawnConfig
+  current: string
+  width: number
+  /** Unused in unified layout; kept for prop-compatibility with app.tsx. */
+  initialProviderId?: string
+  onPick: (ref: string) => void
+  onConnect: (provider: ProviderOption) => void
+  onClose: () => void
+}
+
+// ─── Main component ──────────────────────────────────────────────────────────
 
 export function ModelPicker({
   catalog,
   config,
   current,
   width,
-  initialProviderId,
   onPick,
   onConnect,
   onClose,
 }: ModelPickerProps) {
-  const entries = buildLeftEntries(catalog, config, current)
-  const currentProviderId = current.split("/")[0] ?? ""
-
-  const initialLeftIndex = (() => {
-    if (initialProviderId) {
-      const idx = entries.findIndex((e) => e.kind === "connected" && e.id === initialProviderId)
-      if (idx >= 0) return idx
-    }
-    const idx = entries.findIndex((e) => e.kind === "connected" && e.id === currentProviderId)
-    return Math.max(0, idx)
-  })()
-
-  const [pane, setPane] = useState<"providers" | "models">("providers")
-  const [highlightedIndex, setHighlightedIndex] = useState(initialLeftIndex)
-  const [leftIndex] = useState(initialLeftIndex)
   const [query, setQuery] = useState("")
-  const [modelIndex, setModelIndex] = useState(0)
+  const [selectedFlatIdx, setSelectedFlatIdx] = useState(() => {
+    const r = buildPickerRows(catalog, config, current, "")
+    const i = r.findIndex((row) => row.kind === "model" && row.entry.ref === current)
+    return i >= 0 ? i : safeSelection(r, 0)
+  })
+  const [scrollTop, setScrollTop] = useState(() => {
+    const r = buildPickerRows(catalog, config, current, "")
+    const i = r.findIndex((row) => row.kind === "model" && row.entry.ref === current)
+    const sel = i >= 0 ? i : safeSelection(r, 0)
+    return Math.max(0, sel - Math.floor(VISIBLE_HEIGHT / 2))
+  })
 
-  const highlighted = entries[highlightedIndex]
-  const isConnectEntry = highlighted?.kind === "connect"
-  const isRecommended = highlighted?.kind === "recommended"
-  const highlightedProviderId = highlighted?.kind === "connected" ? highlighted.id : null
-  // A pane key that's stable per highlighted source, used to reset the search input.
-  const paneKey = isRecommended ? "recommended" : (highlightedProviderId ?? "none")
-  /** Whether the right pane shows a model list (a provider or the Recommended group). */
-  const showModels = isRecommended || highlightedProviderId !== null
+  const rows = buildPickerRows(catalog, config, current, query)
+  const wide = width >= 70
 
-  const modelEntries = isRecommended
-    ? buildRecommendedEntries(catalog, config, current)
-    : highlightedProviderId
-      ? buildModelEntries(highlightedProviderId, catalog, current)
-      : []
+  const sel = safeSelection(rows, selectedFlatIdx)
+  const safeScrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, rows.length - VISIBLE_HEIGHT)))
+  const visibleRows = rows.slice(safeScrollTop, safeScrollTop + VISIBLE_HEIGHT)
 
-  const filteredEntries = query
-    ? modelEntries.filter((m) => {
-        const q = query.toLowerCase()
-        return (
-          m.name.toLowerCase().includes(q) ||
-          m.id.toLowerCase().includes(q) ||
-          m.description.toLowerCase().includes(q)
-        )
-      })
-    : modelEntries
+  const moveSel = (dir: 1 | -1) => {
+    const next = nextSel(rows, sel, dir)
+    if (next === sel) return
+    setSelectedFlatIdx(next)
+    if (next < safeScrollTop) setScrollTop(next)
+    else if (next >= safeScrollTop + VISIBLE_HEIGHT) setScrollTop(next - VISIBLE_HEIGHT + 1)
+  }
 
   useKeyboard((key) => {
-    const name = key.name
-
-    if (pane === "models") {
-      if (name === "up") {
-        setModelIndex((i) => Math.max(0, i - 1))
+    if (key.ctrl && key.name === "c") process.exit(0)
+    if (key.name === "up") {
+      moveSel(-1)
+      return
+    }
+    if (key.name === "down") {
+      moveSel(1)
+      return
+    }
+    if (key.name === "pageup") {
+      for (let i = 0; i < VISIBLE_HEIGHT; i++) moveSel(-1)
+      return
+    }
+    if (key.name === "pagedown") {
+      for (let i = 0; i < VISIBLE_HEIGHT; i++) moveSel(1)
+      return
+    }
+    if (key.name === "return") {
+      const row = rows[sel]
+      if (row?.kind === "model") {
+        onPick(row.entry.ref)
         return
       }
-      if (name === "down") {
-        setModelIndex((i) => Math.min(filteredEntries.length - 1, i + 1))
-        return
-      }
-      if (name === "return") {
-        const entry = filteredEntries[modelIndex]
-        if (entry) onPick(entry.ref)
-        return
-      }
-      if (name === "escape") {
-        if (query) {
-          setQuery("")
-          setModelIndex(0)
-        } else {
-          setPane("providers")
-        }
-        return
-      }
-      if (name === "left" || (key.shift && name === "tab")) {
-        setPane("providers")
+      if (row?.kind === "connect") {
+        onConnect(row.provider)
         return
       }
       return
     }
-
-    // providers pane
-    if (name === "right" || name === "tab") {
-      if (!isConnectEntry) setPane("models")
-    } else if (name === "left" || (key.shift && name === "tab")) {
-      setPane("providers")
-    } else if (name === "escape") {
+    if (key.name === "escape") {
+      if (query) {
+        setQuery("")
+        setSelectedFlatIdx(0)
+        setScrollTop(0)
+        return
+      }
       onClose()
+      return
     }
   })
 
-  const leftOptions = entries.map((e) => {
-    if (e.kind === "recommended") {
-      return {
-        name: "★ Recommended",
-        value: "r:",
-        description: `${e.modelCount} blessed model${e.modelCount !== 1 ? "s" : ""}`,
-      }
-    }
-    if (e.kind === "connected") {
-      return {
-        name: e.name,
-        value: `p:${e.id}`,
-        description: `${e.modelCount} model${e.modelCount !== 1 ? "s" : ""}`,
-      }
-    }
-    const authHint =
-      e.provider.id === "github-copilot" ? "OAuth (GitHub device flow)" : `API key · ${e.provider.envVar}`
-    return {
-      name: `+ Connect ${e.provider.label.split("  ")[0]}`,
-      value: `c:${e.provider.id}`,
-      description: authHint,
-    }
-  })
-
-  const rightOptions = filteredEntries.map((m) => ({
-    name: m.name,
-    description: m.description,
-    value: m.ref,
-  }))
-
-  const narrow = width < 70
-
-  const handleLeftSelect = (_i: number, opt: any) => {
-    const value: string | undefined = opt?.value
-    if (!value) return
-    if (value.startsWith("r:") || value.startsWith("p:")) {
-      setPane("models")
-    } else if (value.startsWith("c:")) {
-      const providerId = value.slice(2)
-      const prov = SETUP_PROVIDERS.find((p) => p.id === providerId)
-      if (prov) onConnect(prov)
-    }
+  const handleInput = (val: unknown) => {
+    const q = typeof val === "string" ? val : String((val as any)?.value ?? "")
+    setQuery(q)
+    setSelectedFlatIdx(0)
+    setScrollTop(0)
   }
 
-  const handleLeftChange = (i: number) => {
-    setHighlightedIndex(i)
-    setQuery("")
-    setModelIndex(0)
-    if (entries[i]?.kind === "connect") setPane("providers")
-  }
+  const title = query
+    ? `model · searching: ${query} · Esc clear`
+    : `model · ${current} · ↑↓ move · Enter pick · Esc close`
 
-  const noConnected = entries.every((e) => e.kind === "connect")
+  const footer = wide
+    ? "★ recommended · ⚠ exp · think/vision dim=no · ✓ active"
+    : "↑↓ navigate · Enter pick · Esc close"
 
-  const safeModelIndex = Math.min(modelIndex, Math.max(0, filteredEntries.length - 1))
-
-  const modelsRightPane = showModels ? (
-    <>
-      <box style={{ height: 1 }}>
-        <input
-          focused={pane === "models"}
-          value={query}
-          placeholder="search models…"
-          onInput={(val: unknown) => {
-            const q = typeof val === "string" ? val : String((val as any)?.value ?? "")
-            setQuery(q)
-            setModelIndex(0)
-          }}
-        />
-      </box>
-      {filteredEntries.length === 0 ? (
-        <text fg={theme.dim} style={{ paddingLeft: 1, flexGrow: 1 }}>
-          {"no models match"}
-        </text>
-      ) : (
-        <select
-          key={`${paneKey}-${query}`}
-          focused={false}
-          showScrollIndicator
-          options={rightOptions}
-          selectedIndex={safeModelIndex}
-          style={{ flexGrow: 1 }}
-        />
-      )}
-      <text fg={theme.dim} style={{ paddingLeft: 1 }}>
-        {MODELS_LEGEND}
-      </text>
-    </>
-  ) : (
-    <text fg={theme.dim} style={{ padding: 1 }}>
-      {"← select a provider"}
-    </text>
-  )
-
-  if (narrow) {
-    return (
-      <box
-        style={{ border: true, borderColor: theme.accent, height: 16, flexDirection: "column" }}
-        title={
-          pane === "models" && showModels
-            ? `${isRecommended ? "Recommended" : (catalog[highlightedProviderId ?? ""]?.name ?? highlightedProviderId)} models · Esc back`
-            : "switch model · Enter select · Esc close"
-        }
-      >
-        {pane === "providers" || !showModels ? (
-          <>
-            {noConnected ? (
-              <text fg={theme.dim} style={{ paddingLeft: 1 }}>
-                {"No providers connected yet"}
-              </text>
-            ) : null}
-            <select
-              focused
-              showScrollIndicator
-              options={leftOptions}
-              selectedIndex={leftIndex}
-              onChange={handleLeftChange}
-              onSelect={handleLeftSelect}
-              style={{ flexGrow: 1 }}
-            />
-            <text fg={theme.dim} style={{ paddingLeft: 1 }}>
-              {"Pick a provider to connect — or run /connect anytime"}
-            </text>
-          </>
-        ) : (
-          modelsRightPane
-        )}
-      </box>
-    )
-  }
-
-  // Wide two-pane layout
   return (
     <box
-      style={{ border: true, borderColor: theme.accent, height: 16, flexDirection: "row" }}
-      title="switch model · ←→ panes · Enter select · Esc close"
+      style={{ border: true, borderColor: theme.accent, height: 16, flexDirection: "column" }}
+      title={title}
     >
-      <box
-        style={{
-          width: 26,
-          flexShrink: 0,
-          flexDirection: "column",
-          paddingRight: 1,
-        }}
-      >
-        {noConnected ? (
-          <text fg={theme.dim} style={{ paddingLeft: 1, paddingTop: 1 }}>
-            {"No providers yet"}
-          </text>
-        ) : null}
-        <select
-          focused={pane === "providers"}
-          showScrollIndicator
-          options={leftOptions}
-          selectedIndex={leftIndex}
-          onChange={handleLeftChange}
-          onSelect={handleLeftSelect}
-          style={{ flexGrow: 1 }}
-        />
+      <box style={{ height: 1 }}>
+        <input focused value={query} placeholder="search models…" onInput={handleInput} />
       </box>
-      <box
-        style={{
-          flexGrow: 1,
-          flexDirection: "column",
-          paddingLeft: 1,
-        }}
-      >
-        {isConnectEntry && highlighted.kind === "connect" ? (
-          <box style={{ flexDirection: "column", padding: 1 }}>
-            <text fg={theme.text}>{highlighted.provider.label}</text>
-            <text fg={theme.dim}>{`Sign up: ${highlighted.provider.url}`}</text>
-            <text fg={theme.dim}>{`Env var: ${highlighted.provider.envVar}`}</text>
-            <text fg={theme.dim} style={{ marginTop: 1 }}>
-              {"Enter to connect"}
-            </text>
-          </box>
-        ) : (
-          modelsRightPane
-        )}
-        {noConnected ? (
-          <text fg={theme.dim} style={{ paddingLeft: 1, paddingBottom: 1 }}>
-            {"Pick a provider to connect — or run /connect anytime"}
-          </text>
-        ) : null}
-      </box>
+      {visibleRows.map((row, i) => (
+        <PickerRow key={rowKey(row)} row={row} selected={safeScrollTop + i === sel} wide={wide} />
+      ))}
+      <text fg={theme.dim} style={{ paddingLeft: 1 }}>
+        {footer}
+      </text>
     </box>
   )
 }

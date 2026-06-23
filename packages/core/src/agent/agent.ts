@@ -405,6 +405,7 @@ export class DawnAgent {
       budget: contextBudget(this.contextMode, this.tokenBudget),
       answerGuidance,
       isAnthropic: profile.supportsCaching,
+      caches: profile.supportsCaching,
       stripReasoning: profile.reasoning === "strip",
       compactionSavings,
       loadedSkills: this.skillBuffer.loaded(),

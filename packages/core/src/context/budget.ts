@@ -256,6 +256,8 @@ export function buildRequestMessages(args: {
   answerGuidance?: string
   /** Whether the provider supports Anthropic-style prompt caching (cacheControl breakpoints). */
   isAnthropic?: boolean
+  /** Provider supports prompt caching (any provider, not just Anthropic) — see modelCaches(). */
+  caches?: boolean
   /**
    * Whether to strip reasoning parts from assistant history. Defaults to `!isAnthropic`
    * for backward compatibility; pass explicitly to decouple reasoning handling from
