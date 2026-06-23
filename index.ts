@@ -13,6 +13,8 @@ import {
   type DawnConfig,
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
+  type DoctorMode,
+  type DoctorResult,
   listAuthProviders,
   listInstalledPlugins,
   loadCatalog,
@@ -25,6 +27,7 @@ import {
   removeApiKey,
   removePlugin,
   resolveGithubClientId,
+  runModelDoctor,
   SessionStore,
   saveConfig,
   selectInitialModel,
@@ -54,6 +57,9 @@ Usage:
   dawn auth logout <provider>
   dawn models [provider]     list known models for connected providers
   dawn models --refresh      re-fetch model list from models.dev
+  dawn doctor models         smoke-test that models actually run (blessed by default)
+  dawn doctor models --all   test every floor-passing model on connected providers
+  dawn doctor models --provider <id>
   dawn --version | --help`
 
 interface Flags {
@@ -286,6 +292,49 @@ async function modelsCommand(
   }
 }
 
+async function doctorCommand(args: string[], cwd: string): Promise<void> {
+  const [subject, ...rest] = args
+  if (subject !== "models") {
+    console.error("usage: dawn doctor models [--all | --provider <id>]")
+    process.exit(1)
+  }
+
+  let mode: DoctorMode = "blessed"
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--all") mode = "all"
+    else if (rest[i] === "--provider") {
+      const provider = rest[++i]
+      if (!provider) {
+        console.error("usage: dawn doctor models --provider <id>")
+        process.exit(1)
+      }
+      mode = { provider }
+    }
+  }
+
+  const config = loadConfig(cwd)
+  const catalog = await loadCatalog()
+  await Promise.all([withOllama(catalog), withLMStudio(catalog)])
+  await withAllLiveModels(catalog, config)
+
+  const label = typeof mode === "object" ? mode.provider : mode
+  console.log(`Running model doctor (${label})… one canonical tool-call task per model.\n`)
+
+  const fmt = (r: DoctorResult) =>
+    `${r.ok ? "✓ PASS" : "✗ FAIL"}  ${r.ref}  ·  ${r.failureKind}  (${(r.durationMs / 1000).toFixed(1)}s)` +
+    (r.ok ? "" : `\n         ${r.detail}`)
+
+  const results = await runModelDoctor(catalog, config, mode, (r) => console.log(fmt(r)))
+
+  if (results.length === 0) {
+    console.log("No matching connected models to test. Connect a provider or pass --provider <id>.")
+    return
+  }
+  const passed = results.filter((r) => r.ok).length
+  console.log(`\n${passed}/${results.length} passed.`)
+  process.exit(passed === results.length ? 0 : 1)
+}
+
 async function oneShot(flags: Flags): Promise<void> {
   const prompt = flags.positional.join(" ").trim()
   if (!prompt) {
@@ -442,6 +491,11 @@ async function main(): Promise<void> {
     case "index":
       await indexCommand(parseFlags(rest))
       return
+    case "doctor": {
+      const flags = parseFlags(rest)
+      await doctorCommand(flags.positional, flags.cwd)
+      return
+    }
     case "plugin": {
       const [subCmd, ...pluginArgs] = rest
       switch (subCmd) {

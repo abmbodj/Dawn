@@ -1,6 +1,6 @@
 import type { DawnConfig } from "../config/config"
 import type { Catalog, ModelInfo } from "./catalog"
-import { normalizeModelRef, parseModelRef } from "./catalog"
+import { BLESSED_MODELS, normalizeModelRef, parseModelRef } from "./catalog"
 import { connectedProviders, type ProviderStatus } from "./provider"
 
 export type ModelSelectionReason = "requested" | "configured" | "repaired" | "connected" | "provider"
@@ -44,8 +44,25 @@ function isToolCapable(model: ModelInfo | undefined): model is ModelInfo {
   return model !== undefined && model.tool_call !== false
 }
 
+/** Blessed model ids for a provider, derived from the BLESSED_MODELS allowlist. */
+function blessedModelIds(providerId: string): string[] {
+  const ids: string[] = []
+  for (const ref of BLESSED_MODELS) {
+    const { providerId: p, modelId } = parseModelRef(ref)
+    if (p === providerId) ids.push(modelId)
+  }
+  return ids
+}
+
+/**
+ * Preference order for a provider's models: blessed ids first (authoritative,
+ * derived from BLESSED_MODELS so the two can't drift), then the hand-tuned
+ * breadth list for providers/models that aren't blessed.
+ */
 function preferredModelIds(providerId: string): string[] {
-  return PREFERRED_MODELS.find(([id]) => id === providerId)?.[1] ?? []
+  const hand = PREFERRED_MODELS.find(([id]) => id === providerId)?.[1] ?? []
+  const blessed = blessedModelIds(providerId)
+  return [...blessed, ...hand.filter((id) => !blessed.includes(id))]
 }
 
 function firstUsableModelId(providerId: string, catalog: Catalog): string | undefined {

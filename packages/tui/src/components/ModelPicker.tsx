@@ -1,8 +1,26 @@
-import { type Catalog, connectedProviders, type DawnConfig, formatBytes, localModelFit } from "@dawn/core"
+import {
+  BLESSED_MODELS,
+  type Catalog,
+  connectedProviders,
+  type DawnConfig,
+  formatBytes,
+  localModelFit,
+  type ModelTier,
+  modelTier,
+} from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
 import { type ProviderOption, SETUP_PROVIDERS } from "./ProviderConnect"
+
+const TIER_RANK: Record<ModelTier, number> = { blessed: 0, standard: 1, experimental: 2 }
+
+/** Short capability/tier marker prefixed to a model's description line. */
+function tierMarker(tier: ModelTier): string {
+  if (tier === "blessed") return "★ recommended · "
+  if (tier === "experimental") return "⚠ experimental · "
+  return ""
+}
 
 export interface ModelPickerProps {
   catalog: Catalog
@@ -14,6 +32,11 @@ export interface ModelPickerProps {
   onPick: (ref: string) => void
   onConnect: (provider: ProviderOption) => void
   onClose: () => void
+}
+
+interface RecommendedEntry {
+  kind: "recommended"
+  modelCount: number
 }
 
 interface ProviderEntry {
@@ -28,12 +51,16 @@ interface ConnectEntry {
   provider: ProviderOption
 }
 
-type LeftEntry = ProviderEntry | ConnectEntry
+type LeftEntry = RecommendedEntry | ProviderEntry | ConnectEntry
 
 /** Build left-pane entries. Re-reads auth.json on every call via connectedProviders. */
 export function buildLeftEntries(catalog: Catalog, config: DawnConfig, current: string): LeftEntry[] {
   const connected = connectedProviders(catalog, config)
   const currentProviderId = current.split("/")[0] ?? ""
+
+  const recommendedCount = buildRecommendedEntries(catalog, config, current).length
+  const recommendedEntry: LeftEntry[] =
+    recommendedCount > 0 ? [{ kind: "recommended", modelCount: recommendedCount }] : []
 
   const connectedEntries: LeftEntry[] = connected.map((p) => {
     const models = catalog[p.id]?.models ?? {}
@@ -52,7 +79,7 @@ export function buildLeftEntries(catalog: Catalog, config: DawnConfig, current: 
     provider: p,
   }))
 
-  return [...connectedEntries, ...connectEntries]
+  return [...recommendedEntry, ...connectedEntries, ...connectEntries]
 }
 
 interface ModelEntry {
@@ -61,9 +88,40 @@ interface ModelEntry {
   name: string
   description: string
   isCurrent: boolean
+  tier: ModelTier
 }
 
-/** Build right-pane model rows for a connected provider. Sorted: current first, then by price asc, then name. */
+/** Format the description line (tier marker + cost + limits + RAM fit) for a model. */
+function modelDescription(
+  ref: string,
+  model: Catalog[string]["models"][string],
+  qualifyProvider = false,
+): string {
+  let cost: string
+  if (model.access === "premium") {
+    cost = "premium plan"
+  } else if (!model.cost) {
+    cost = "price unknown"
+  } else if (model.cost.input === 0 && model.cost.output === 0) {
+    cost = model.access === "free" || !model.access ? "free" : "included"
+  } else {
+    cost = `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
+  }
+
+  const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
+  const out = model.limit?.output ? ` · ${Math.round(model.limit.output / 1000)}k out` : ""
+  const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
+  const ram = fit
+    ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " tight on RAM" : ""}`
+    : ""
+  const provider = qualifyProvider ? `${ref.split("/")[0]} · ` : ""
+  return `${tierMarker(modelTier(ref, model))}${provider}${cost}${ctx}${out}${ram}`
+}
+
+/**
+ * Build right-pane model rows for a connected provider. Sorted: current first,
+ * then by tier (blessed → standard → experimental), then price asc, then name.
+ */
 export function buildModelEntries(providerId: string, catalog: Catalog, current: string): ModelEntry[] {
   const models = catalog[providerId]?.models ?? {}
   const entries: ModelEntry[] = []
@@ -71,42 +129,23 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
     if (model.tool_call === false) continue
     const ref = `${providerId}/${model.id}`
     const isCurrent = ref === current
-
-    let cost: string
-    if (model.access === "premium") {
-      cost = "premium plan"
-    } else if (!model.cost) {
-      cost = "price unknown"
-    } else if (model.cost.input === 0 && model.cost.output === 0) {
-      cost = model.access === "free" || !model.access ? "free" : "included"
-    } else {
-      cost = `$${model.cost.input ?? "?"}/$${model.cost.output ?? "?"} per Mtok`
-    }
-
-    const ctx = model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k ctx` : ""
-    const out = model.limit?.output ? ` · ${Math.round(model.limit.output / 1000)}k out` : ""
-    const fit = model.sizeBytes ? localModelFit(model.sizeBytes) : undefined
-    const ram = fit
-      ? ` · ${formatBytes(model.sizeBytes)}${fit.status === "oversized" ? " ⚠ exceeds RAM" : fit.status === "tight" ? " tight on RAM" : ""}`
-      : ""
-
     const nameParts = [model.name, isCurrent ? "✓" : "", model.reasoning ? "✦" : ""].filter(Boolean).join(" ")
 
     entries.push({
       id: model.id,
       ref,
       name: nameParts,
-      description: `${cost}${ctx}${out}${ram}`,
+      description: modelDescription(ref, model),
       isCurrent,
+      tier: modelTier(ref, model),
     })
   }
 
   entries.sort((a, b) => {
     if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
-    const aModel = models[a.id]
-    const bModel = models[b.id]
-    const aPrice = typeof aModel?.cost?.input === "number" ? aModel.cost.input : Infinity
-    const bPrice = typeof bModel?.cost?.input === "number" ? bModel.cost.input : Infinity
+    if (a.tier !== b.tier) return TIER_RANK[a.tier] - TIER_RANK[b.tier]
+    const aPrice = models[a.id]?.cost?.input ?? Infinity
+    const bPrice = models[b.id]?.cost?.input ?? Infinity
     if (aPrice !== bPrice) return aPrice - bPrice
     return a.name.localeCompare(b.name)
   })
@@ -114,7 +153,42 @@ export function buildModelEntries(providerId: string, catalog: Catalog, current:
   return entries
 }
 
-const MODELS_LEGEND = "✦ reasoning · free $0 · premium = add-on plan · price/Mtok in/out · type to search"
+/**
+ * Build the cross-provider "Recommended" list: blessed flagships available on any
+ * connected provider. Lets a user land on the best model without provider-hopping.
+ */
+export function buildRecommendedEntries(catalog: Catalog, config: DawnConfig, current: string): ModelEntry[] {
+  const connectedIds = new Set(connectedProviders(catalog, config).map((p) => p.id))
+  const entries: ModelEntry[] = []
+  for (const ref of BLESSED_MODELS) {
+    const [providerId, ...rest] = ref.split("/")
+    const modelId = rest.join("/")
+    if (!providerId || !connectedIds.has(providerId)) continue
+    const model = catalog[providerId]?.models?.[modelId]
+    if (!model || model.tool_call === false) continue
+    const isCurrent = ref === current
+    const nameParts = [model.name, isCurrent ? "✓" : "", model.reasoning ? "✦" : ""].filter(Boolean).join(" ")
+    entries.push({
+      id: modelId,
+      ref,
+      name: nameParts,
+      description: modelDescription(ref, model, true),
+      isCurrent,
+      tier: "blessed",
+    })
+  }
+  entries.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
+    const ap = catalog[a.ref.split("/")[0] ?? ""]?.models?.[a.id]?.cost?.input ?? Infinity
+    const bp = catalog[b.ref.split("/")[0] ?? ""]?.models?.[b.id]?.cost?.input ?? Infinity
+    if (ap !== bp) return ap - bp
+    return a.name.localeCompare(b.name)
+  })
+  return entries
+}
+
+const MODELS_LEGEND =
+  "★ recommended · ⚠ experimental · ✦ reasoning · free $0 · price/Mtok in/out · type to search"
 
 export function ModelPicker({
   catalog,
@@ -146,9 +220,18 @@ export function ModelPicker({
 
   const highlighted = entries[highlightedIndex]
   const isConnectEntry = highlighted?.kind === "connect"
+  const isRecommended = highlighted?.kind === "recommended"
   const highlightedProviderId = highlighted?.kind === "connected" ? highlighted.id : null
+  // A pane key that's stable per highlighted source, used to reset the search input.
+  const paneKey = isRecommended ? "recommended" : (highlightedProviderId ?? "none")
+  /** Whether the right pane shows a model list (a provider or the Recommended group). */
+  const showModels = isRecommended || highlightedProviderId !== null
 
-  const modelEntries = highlightedProviderId ? buildModelEntries(highlightedProviderId, catalog, current) : []
+  const modelEntries = isRecommended
+    ? buildRecommendedEntries(catalog, config, current)
+    : highlightedProviderId
+      ? buildModelEntries(highlightedProviderId, catalog, current)
+      : []
 
   const filteredEntries = query
     ? modelEntries.filter((m) => {
@@ -205,6 +288,13 @@ export function ModelPicker({
   })
 
   const leftOptions = entries.map((e) => {
+    if (e.kind === "recommended") {
+      return {
+        name: "★ Recommended",
+        value: "r:",
+        description: `${e.modelCount} blessed model${e.modelCount !== 1 ? "s" : ""}`,
+      }
+    }
     if (e.kind === "connected") {
       return {
         name: e.name,
@@ -232,7 +322,7 @@ export function ModelPicker({
   const handleLeftSelect = (_i: number, opt: any) => {
     const value: string | undefined = opt?.value
     if (!value) return
-    if (value.startsWith("p:")) {
+    if (value.startsWith("r:") || value.startsWith("p:")) {
       setPane("models")
     } else if (value.startsWith("c:")) {
       const providerId = value.slice(2)
@@ -252,7 +342,7 @@ export function ModelPicker({
 
   const safeModelIndex = Math.min(modelIndex, Math.max(0, filteredEntries.length - 1))
 
-  const modelsRightPane = highlightedProviderId ? (
+  const modelsRightPane = showModels ? (
     <>
       <box style={{ height: 1 }}>
         <input
@@ -272,7 +362,7 @@ export function ModelPicker({
         </text>
       ) : (
         <select
-          key={`${highlightedProviderId}-${query}`}
+          key={`${paneKey}-${query}`}
           focused={false}
           showScrollIndicator
           options={rightOptions}
@@ -295,12 +385,12 @@ export function ModelPicker({
       <box
         style={{ border: true, borderColor: theme.accent, height: 16, flexDirection: "column" }}
         title={
-          pane === "models" && highlightedProviderId
-            ? `${catalog[highlightedProviderId]?.name ?? highlightedProviderId} models · Esc back`
+          pane === "models" && showModels
+            ? `${isRecommended ? "Recommended" : (catalog[highlightedProviderId ?? ""]?.name ?? highlightedProviderId)} models · Esc back`
             : "switch model · Enter select · Esc close"
         }
       >
-        {pane === "providers" || !highlightedProviderId ? (
+        {pane === "providers" || !showModels ? (
           <>
             {noConnected ? (
               <text fg={theme.dim} style={{ paddingLeft: 1 }}>

@@ -323,6 +323,60 @@ export const FALLBACK_CATALOG: Catalog = {
     },
   },
 
+  // ── AWS Bedrock (enterprise gateway) ──────────────────────────────────────
+  // Auth via the AWS credential chain (env/profile/SSO) or a Bedrock API key.
+  bedrock: {
+    id: "bedrock",
+    name: "AWS Bedrock",
+    env: ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE"],
+    npm: "@ai-sdk/amazon-bedrock",
+    models: {
+      "anthropic.claude-sonnet-4-6": {
+        id: "anthropic.claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6 (Bedrock)",
+        limit: { context: 1_000_000, output: 64_000 },
+        tool_call: true,
+        access: "standard",
+      },
+    },
+  },
+
+  // ── Google Vertex AI (enterprise gateway) ─────────────────────────────────
+  // Auth via Google ADC (GOOGLE_APPLICATION_CREDENTIALS) + a project.
+  vertex: {
+    id: "vertex",
+    name: "Google Vertex AI",
+    env: ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_VERTEX_PROJECT"],
+    npm: "@ai-sdk/google-vertex",
+    models: {
+      "gemini-3.5-pro": {
+        id: "gemini-3.5-pro",
+        name: "Gemini 3.5 Pro (Vertex)",
+        limit: { context: 1_048_576, output: 65_536 },
+        tool_call: true,
+        access: "standard",
+      },
+    },
+  },
+
+  // ── Azure OpenAI (enterprise gateway) ─────────────────────────────────────
+  // Auth via AZURE_API_KEY + AZURE_RESOURCE_NAME (or a custom baseURL/deployment).
+  azure: {
+    id: "azure",
+    name: "Azure OpenAI",
+    env: ["AZURE_API_KEY"],
+    npm: "@ai-sdk/azure",
+    models: {
+      "gpt-5.5": {
+        id: "gpt-5.5",
+        name: "GPT-5.5 (Azure)",
+        limit: { context: 400_000, output: 128_000 },
+        tool_call: true,
+        access: "standard",
+      },
+    },
+  },
+
   // Ollama is intentionally not static here — it's injected at runtime by
   // withOllama() only when an actual local server is detected (see provider/ollama.ts).
 }
@@ -417,4 +471,52 @@ export function parseModelRef(ref: string): { providerId: string; modelId: strin
 export function getModelInfo(catalog: Catalog, ref: string): ModelInfo | undefined {
   const { providerId, modelId } = parseModelRef(ref)
   return catalog[providerId]?.models?.[modelId]
+}
+
+/** Quality tier for a model: hand-curated flagship, viable, or below-floor. */
+export type ModelTier = "blessed" | "standard" | "experimental"
+
+/**
+ * Hand-curated "blessed" flagships: verified tool-calling, tuned profiles, and
+ * regression-tested (`dawn doctor models`). The single source of truth for the
+ * Recommended tier and the model-selection preference order. Local models are
+ * intentionally never blessed — per-machine quant/hardware variance makes a
+ * perfection guarantee impossible.
+ */
+export const BLESSED_MODELS: ReadonlySet<string> = new Set<string>([
+  "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.5",
+  "openai/gpt-5.4-mini",
+  "google/gemini-3.5-pro",
+  "google/gemini-3.5-flash",
+  // Same blessed flagships over enterprise gateways (different transport/auth).
+  "bedrock/anthropic.claude-sonnet-4-6",
+  "vertex/gemini-3.5-pro",
+  "azure/gpt-5.5",
+])
+
+/** Minimum context window (tokens) a model needs to be a viable coding agent. */
+export const FLOOR_CONTEXT_TOKENS = 32_000
+
+/**
+ * Whether a model clears the capability floor: tool-calling + a coding-viable
+ * context window. (Streaming is assumed — every provider Dawn supports streams
+ * via the AI SDK; there is no per-model streaming flag to check.) A model with
+ * an unknown context window is given the benefit of the doubt, since many live
+ * provider listings omit limits; only a *known* too-small window fails.
+ */
+export function meetsFloor(model: ModelInfo | undefined): boolean {
+  if (!model) return false
+  if (model.tool_call === false) return false
+  const context = model.limit?.context
+  if (context !== undefined && context < FLOOR_CONTEXT_TOKENS) return false
+  return true
+}
+
+/** Tier for a model ref: blessed allowlist → floor-passing standard → experimental. */
+export function modelTier(ref: string, model: ModelInfo | undefined): ModelTier {
+  if (BLESSED_MODELS.has(normalizeModelRef(ref))) return "blessed"
+  return meetsFloor(model) ? "standard" : "experimental"
 }

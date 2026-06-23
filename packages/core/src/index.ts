@@ -10,6 +10,17 @@ export { estimateMemoryTokens, loadProjectMemory, type ProjectMemory } from "./a
 export { buildSystemPrompt } from "./agent/system"
 export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
 export {
+  type CredentialSource,
+  type DiscoveredCredential,
+  discoverCredentials,
+  envToProvider,
+  maskKey,
+  parseCodexAuth,
+  parseEnvAssignments,
+  parseOpencodeAuth,
+  persistDiscovered,
+} from "./auth/discover"
+export {
   BUILT_IN_GITHUB_CLIENT_ID,
   type DeviceFlowStart,
   GITHUB_CLIENT_ID_ENV,
@@ -56,6 +67,16 @@ export type {
   WorkingSetKind,
 } from "./context/types"
 export { ContextWorkingSet } from "./context/working-set"
+export {
+  classifyDoctorOutcome,
+  DOCTOR_PROMPT,
+  type DoctorMode,
+  type DoctorResult,
+  type DoctorSignals,
+  evaluateModel,
+  runModelDoctor,
+  selectDoctorTargets,
+} from "./doctor/models"
 export { connectMcpServers, type McpConnection, type McpToolInfo } from "./mcp/client"
 export { loadMcpServers, type McpServerConfig, McpServerSchema } from "./mcp/config"
 export { cacheDir, configDir, dataDir } from "./paths"
@@ -79,12 +100,17 @@ export {
   removePlugin,
 } from "./plugins/registry"
 export {
+  BLESSED_MODELS,
   type Catalog,
   FALLBACK_CATALOG,
+  FLOOR_CONTEXT_TOKENS,
   getModelInfo,
   loadCatalog,
   type ModelCost,
   type ModelInfo,
+  type ModelTier,
+  meetsFloor,
+  modelTier,
   normalizeModelRef,
   type ProviderInfo,
   parseModelRef,
@@ -107,11 +133,30 @@ export {
 } from "./provider/model-selection"
 export { detectOllama, ollamaBaseURL, withOllama } from "./provider/ollama"
 export {
+  isOllamaReachable,
+  type LocalModelRec,
+  type PullProgress,
+  parsePullProgress,
+  pullOllamaModel,
+  RECOMMENDED_LOCAL_MODELS,
+  recommendLocalModel,
+} from "./provider/ollama-pull"
+export {
+  detectFamily,
+  type ModelFamily,
+  type ModelProfile,
+  type ReasoningHandling,
+  resolveProfile,
+} from "./provider/profile"
+export {
   connectedProviders,
+  ENTERPRISE_PROVIDERS,
+  enterpriseConfigured,
   type ProviderStatus,
   type ResolvedModel,
   resolveModel,
 } from "./provider/provider"
+export { type ModelRole, resolveRoleModel } from "./provider/roles"
 export { resetDawnData } from "./reset"
 export { type SessionMeta, SessionStore } from "./session/store"
 export { type LoadedSkill, SkillBuffer } from "./skills/buffer"

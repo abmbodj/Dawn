@@ -254,9 +254,14 @@ export function buildRequestMessages(args: {
   summaries: FileSummary[]
   budget: ContextBudget
   answerGuidance?: string
+  /** Whether the provider supports Anthropic-style prompt caching (cacheControl breakpoints). */
   isAnthropic?: boolean
-  /** Provider supports prompt caching (any provider, not just Anthropic) — see modelCaches(). */
-  caches?: boolean
+  /**
+   * Whether to strip reasoning parts from assistant history. Defaults to `!isAnthropic`
+   * for backward compatibility; pass explicitly to decouple reasoning handling from
+   * caching (driven by the model profile).
+   */
+  stripReasoning?: boolean
   /** Tokens saved by tool-output compaction since the previous plan (recorded into the plan). */
   compactionSavings?: number
   /** Dynamically loaded skill bodies (model-invoked or auto-triggered this session). */
@@ -407,10 +412,12 @@ export function buildRequestMessages(args: {
       ]
     : []
 
-  // Strip reasoning parts from assistant messages before sending to non-Anthropic
-  // providers — e.g. Groq's OpenAI-compatible API rejects 'reasoning_content' in
-  // request messages even though its own models emit it.
-  const kept = args.isAnthropic ? history.kept : stripReasoningParts(history.kept)
+  // Strip reasoning parts from assistant messages before sending to providers that
+  // reject them — e.g. Groq's OpenAI-compatible API rejects 'reasoning_content' in
+  // request messages even though its own models emit it. Driven by the model profile;
+  // defaults to !isAnthropic when not specified.
+  const stripReasoning = args.stripReasoning ?? !args.isAnthropic
+  const kept = stripReasoning ? stripReasoningParts(history.kept) : history.kept
   const historyInit = kept.slice(0, -1)
   const historyLatest = kept[kept.length - 1]
   const requestMessages: ModelMessage[] = historyLatest

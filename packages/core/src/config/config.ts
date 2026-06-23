@@ -29,6 +29,17 @@ export const DawnConfigSchema = z.object({
   model: z.string().optional(),
   /** Model used while in plan mode, as "provider/model". */
   planModel: z.string().optional(),
+  /**
+   * Model for cheap background/housekeeping work (summarization, compaction, titles,
+   * skill-trigger classification), as "provider/model". Defaults to the cheapest
+   * blessed model on the primary's provider when unset.
+   */
+  utilityModel: z.string().optional(),
+  /**
+   * Whether to silently switch to a fallback model when the active model fails
+   * mid-task. Defaults to true; set false for reproducible, single-model runs.
+   */
+  autoFallback: z.boolean().optional(),
   /** GitHub OAuth App client id for Copilot device authorization. */
   githubOAuthClientId: z.string().optional(),
   /** Extra OpenAI-compatible providers (local models, routers, …) */

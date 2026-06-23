@@ -23,7 +23,8 @@ import type { Asker } from "../permission/asker"
 import type { PermissionGate } from "../permission/permission"
 import { loadEnabledPlugins, pluginMcpServers } from "../plugins/registry"
 import type { Catalog } from "../provider/catalog"
-import { modelCaches, normalizeModelRef, parseModelRef } from "../provider/catalog"
+import { BLESSED_MODELS, normalizeModelRef, parseModelRef } from "../provider/catalog"
+import { type ModelProfile, resolveProfile } from "../provider/profile"
 import { resolveModel } from "../provider/provider"
 import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
@@ -87,11 +88,14 @@ export function isRepoOverviewQuestion(text: string): boolean {
 }
 
 /**
- * Pick the best fallback model when the active model fails.
- * Priority: provider-suggested slug → cheapest same-provider model with tool-call support.
+ * Pick the best fallback model when the active model fails. Priority:
+ *   1. provider-suggested slug (e.g. OpenRouter's "use this slug instead"),
+ *   2. cheapest accessible tool-capable model on the SAME provider (least surprising),
+ *   3. a blessed flagship on another connected provider (only cross providers as a
+ *      last resort, and only to a verified-good model).
  * Returns undefined if no accessible alternative exists.
  */
-function chooseFallback(
+export function chooseFallback(
   activeRef: string,
   catalog: Catalog,
   config: import("../config/config").DawnConfig,
@@ -99,7 +103,7 @@ function chooseFallback(
 ): string | undefined {
   const { providerId } = parseModelRef(activeRef)
 
-  // Try the provider-suggested slug first (e.g. from OpenRouter's "use this slug instead")
+  // 1. Provider-suggested slug
   if (suggestedSlug) {
     const normalized = suggestedSlug.includes("/") ? suggestedSlug : `${providerId}/${suggestedSlug}`
     try {
@@ -110,7 +114,7 @@ function chooseFallback(
     }
   }
 
-  // Find the cheapest accessible model on the same provider
+  // 2. Cheapest accessible tool-capable model on the same provider
   const models = catalog[providerId]?.models ?? {}
   const candidates = Object.values(models)
     .filter((m) => m.tool_call !== false)
@@ -130,6 +134,18 @@ function chooseFallback(
       /* key missing or provider broken */
     }
   }
+
+  // 3. Last resort: a blessed flagship on another connected provider
+  for (const ref of BLESSED_MODELS) {
+    if (ref === activeRef || parseModelRef(ref).providerId === providerId) continue
+    try {
+      resolveModel(ref, catalog, config)
+      return ref
+    } catch {
+      /* provider not connected */
+    }
+  }
+
   return undefined
 }
 
@@ -366,17 +382,18 @@ export class DawnAgent {
     return this.contextStore.contextPlanTotals(sessionIds)
   }
 
-  private requestMessages(
-    isAnthropic: boolean,
-    caches: boolean,
-  ): {
+  private requestMessages(profile: ModelProfile): {
     system: string | import("../context/budget").SystemModelMessage
     messages: ModelMessage[]
   } {
     const latest = this.messages[this.messages.length - 1]
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
-    const answerGuidance = buildTurnGuidance(query, { currentDate: new Date().toISOString().slice(0, 10) })
+    const turnGuidance = buildTurnGuidance(query, { currentDate: new Date().toISOString().slice(0, 10) })
+    // The model-profile delta rides along with per-turn guidance (after the cached
+    // prompt prefix) so it never invalidates the prompt cache and tracks plan/build
+    // model switches correctly.
+    const answerGuidance = [turnGuidance, profile.promptDelta].filter(Boolean).join("\n\n") || undefined
     // Fold compaction savings accrued since the last plan into this one (persisted for /savings).
     const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
     this.compactionPlanMark = this.compaction.savedTokens
@@ -387,8 +404,8 @@ export class DawnAgent {
       summaries,
       budget: contextBudget(this.contextMode, this.tokenBudget),
       answerGuidance,
-      isAnthropic,
-      caches,
+      isAnthropic: profile.supportsCaching,
+      stripReasoning: profile.reasoning === "strip",
       compactionSavings,
       loadedSkills: this.skillBuffer.loaded(),
       naive: this.naive,
@@ -437,22 +454,22 @@ export class DawnAgent {
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const { providerId } = parseModelRef(activeRef)
-        const isAnthropic = providerId === "anthropic"
-        // Whether this model supports prompt caching (Anthropic/OpenAI/Google/…) — drives how
-        // generous the re-sent summary block can be, since caching amortizes it.
-        const caches = modelCaches(resolved.info)
-        // Non-Anthropic providers (e.g. Groq) reject reasoning_content in messages
-        // even when their own models produced it in a previous step.
-        const needsReasoningStrip = !isAnthropic
+        // Behavior (reasoning handling, tool repair, caching, prompt scaffolding)
+        // is driven by the model's profile, resolved per attempt so an auto-switch
+        // to a different model picks up the right behavior.
+        const profile = resolveProfile(activeRef, opts.catalog)
+        // Models on OpenAI-compatible providers (e.g. Groq) reject reasoning_content
+        // in messages even when their own models produced it in a previous step.
+        const needsReasoningStrip = profile.reasoning === "strip"
 
-        const { system, messages: requestMsgs } = this.requestMessages(isAnthropic, caches)
+        const { system, messages: requestMsgs } = this.requestMessages(profile)
 
         const result = streamText({
           model: resolved.model,
           system: system as any,
           messages: requestMsgs,
           tools: { ...this.tools, ...this.mcpTools },
-          experimental_repairToolCall: makeRepairToolCall(),
+          experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
           prepareStep:
             needsReasoningStrip || forceRepoOverview
               ? ({ stepNumber, messages }) => {
@@ -601,7 +618,8 @@ export class DawnAgent {
 
         // ── Auto-switch to a different model ─────────────────────────────────
         if (switchFailure !== undefined) {
-          if (switchCount < MAX_SWITCHES) {
+          // Reproducibility-sensitive teams can opt out of silent model switching.
+          if (opts.config.autoFallback !== false && switchCount < MAX_SWITCHES) {
             const fallback = chooseFallback(activeRef, opts.catalog, opts.config, switchFailure.suggestedSlug)
             if (fallback) {
               const fromRef = activeRef
