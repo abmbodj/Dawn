@@ -1485,13 +1485,13 @@ export function App(props: AppProps) {
       if (key.name === "pageup" || (key.name === "up" && key.shift)) {
         key.preventDefault()
         key.stopPropagation()
-        detailScrollRef.current?.scrollBy(-10)
+        detailScrollRef.current?.scrollBy(-SCROLL_STEP)
         return
       }
       if (key.name === "pagedown" || (key.name === "down" && key.shift)) {
         key.preventDefault()
         key.stopPropagation()
-        detailScrollRef.current?.scrollBy(10)
+        detailScrollRef.current?.scrollBy(SCROLL_STEP)
         return
       }
       if (key.name === "y") permission.resolve("allow")
@@ -1514,13 +1514,13 @@ export function App(props: AppProps) {
       if (key.name === "pageup" || (key.name === "up" && key.shift)) {
         key.preventDefault()
         key.stopPropagation()
-        detailScrollRef.current?.scrollBy(-10)
+        detailScrollRef.current?.scrollBy(-SCROLL_STEP)
         return
       }
       if (key.name === "pagedown" || (key.name === "down" && key.shift)) {
         key.preventDefault()
         key.stopPropagation()
-        detailScrollRef.current?.scrollBy(10)
+        detailScrollRef.current?.scrollBy(SCROLL_STEP)
         return
       }
       if (key.name === "down") {
