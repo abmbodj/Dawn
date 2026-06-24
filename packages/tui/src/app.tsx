@@ -812,6 +812,8 @@ export function App(props: AppProps) {
   const [pluginSetupOpen, setPluginSetupOpen] = useState(false)
   const [setupConfig, setSetupConfig] = useState<DawnConfig>(config)
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>(() => listInstalledPlugins())
+  const [pendingImages, setPendingImages] = useState<Array<{ base64: string; mimeType: string; name: string }>>([])
+
 
   // Register plugin commands as dynamic slash commands once on mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps

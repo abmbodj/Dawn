@@ -52,6 +52,17 @@ export const DawnConfigSchema = z.object({
   mcpServers: z.record(z.string(), McpServerSchema).optional(),
   /** Plugin configuration. */
   plugins: z.object({ enabled: z.array(z.string()).optional() }).optional(),
+  /**
+   * Lifecycle hooks — shell commands run at key points in the agent's turn.
+   * "pre-send": runs before each user message is sent; stdout is injected as context.
+   * "on-turn-end": runs after each turn completes; stdout is shown in transcript.
+   */
+  hooks: z
+    .object({
+      "pre-send": z.array(z.string()).optional(),
+      "on-turn-end": z.array(z.string()).optional(),
+    })
+    .optional(),
 })
 
 export type DawnConfig = z.infer<typeof DawnConfigSchema>

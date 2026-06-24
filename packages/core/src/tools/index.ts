@@ -15,6 +15,7 @@ import type { SkillBuffer } from "../skills/buffer"
 import { findSkill } from "../skills/registry"
 import type { Skill } from "../skills/types"
 import { applyEdit } from "./edit"
+import { createGitTools } from "./git"
 import { capLine, capLines, truncateMiddle } from "./truncate"
 
 export interface BgProcess {
@@ -172,6 +173,18 @@ export function toolTitle(toolName: string, input: any): string {
         : undefined
       return active?.content ?? "task list"
     }
+    case "git_status":
+      return ""
+    case "git_diff":
+      return input?.staged ? "staged" : input?.path ? String(input.path) : "unstaged"
+    case "git_log":
+      return input?.path ? String(input.path) : `last ${input?.limit ?? 10}`
+    case "git_commit":
+      return String(input?.message ?? "").slice(0, 60)
+    case "git_push":
+      return `${input?.remote ?? "origin"}${input?.branch ? `/${input.branch}` : ""}`
+    case "gh_pr_create":
+      return String(input?.title ?? "").slice(0, 60)
     default:
       return ""
   }
@@ -255,6 +268,27 @@ export function toolResultSummary(toolName: string, input: any, output: unknown)
       const done = todos.filter((t: any) => t?.status === "completed").length
       return `${todos.length} task${todos.length === 1 ? "" : "s"} · ${done} done`
     }
+    case "git_status": {
+      if (out.startsWith("Not a git")) return "not a git repo"
+      const changed = (out.match(/^[MADRCU?!]/gm) ?? []).length
+      return changed === 0 ? "clean" : `${changed} file${changed === 1 ? "" : "s"} changed`
+    }
+    case "git_diff": {
+      const insertions = Number(out.match(/(\d+) insertion/)?.[1] ?? 0)
+      const deletions = Number(out.match(/(\d+) deletion/)?.[1] ?? 0)
+      if (!insertions && !deletions) return "no diff"
+      return `+${insertions} −${deletions}`
+    }
+    case "git_log": {
+      const lines = out.split("\n").filter(Boolean).length
+      return `${lines} commit${lines === 1 ? "" : "s"}`
+    }
+    case "git_commit":
+      return out.startsWith("Permission denied") ? "denied" : out.split("\n")[0] ?? "committed"
+    case "git_push":
+      return out.startsWith("Permission denied") ? "denied" : "pushed"
+    case "gh_pr_create":
+      return out.startsWith("Permission denied") ? "denied" : out.startsWith("http") ? "PR created" : out.split("\n")[0] ?? "done"
     default: {
       const first = out.split("\n")[0] ?? ""
       return first.length > 80 ? `${first.slice(0, 80)}…` : first
@@ -938,6 +972,8 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
+  const gitTools = createGitTools(cwd, gate)
+
   const tools: ToolSet = {
     repo_overview,
     repo_map,
@@ -958,6 +994,7 @@ export function createTools(ctx: ToolContext): ToolSet {
     web_fetch,
     web_search,
     expand,
+    ...gitTools,
     ...(ctx.skills && ctx.skills.length > 0 ? { skill } : {}),
   }
   return withCompaction(tools, ctx)

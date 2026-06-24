@@ -34,6 +34,7 @@ import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { CheckpointStore } from "../checkpoint/checkpoint"
 import { distillDroppedTurns } from "../context/session-memory"
+import { formatHookResults, runHooks } from "../hooks/hooks"
 import { detectProjectProfile, formatProjectProfileSection } from "./project-profile"
 import { buildTurnGuidance } from "./answer-style"
 import { type ClassifiedFailure, classifyFailure } from "./errors"
@@ -469,7 +470,11 @@ export class DawnAgent {
     return { system: built.system, messages: built.messages }
   }
 
-  async send(text: string, signal?: AbortSignal): Promise<void> {
+  async send(
+    text: string,
+    signal?: AbortSignal,
+    images?: Array<{ base64: string; mimeType: string }>,
+  ): Promise<void> {
     if (this.busy) throw new Error("Agent is already processing a turn")
     this.busy = true
     const { bus, opts } = this
@@ -477,7 +482,20 @@ export class DawnAgent {
     this.turnIndex++
     this.turnCheckpointTaken = false
     const effectiveText = opts.gate.mode === "plan" ? `${text}\n\n${PLAN_MODE_REMINDER}` : text
-    this.messages.push({ role: "user", content: effectiveText })
+
+    if (images && images.length > 0) {
+      const content: Array<{ type: "text"; text: string } | { type: "image"; image: string; mediaType: string }> = [
+        { type: "text", text: effectiveText },
+        ...images.map((img) => ({
+          type: "image" as const,
+          image: img.base64,
+          mediaType: img.mimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+        })),
+      ]
+      this.messages.push({ role: "user", content })
+    } else {
+      this.messages.push({ role: "user", content: effectiveText })
+    }
     this.persist()
     bus.emit({ type: "turn-start" })
     // Snapshot working tree before this turn makes any changes
@@ -493,6 +511,22 @@ export class DawnAgent {
       }
 
       const forceRepoOverview = isRepoOverviewQuestion(text)
+
+      // pre-send hooks: run shell commands, inject output as context
+      const preSendCmds = opts.config.hooks?.["pre-send"]
+      if (preSendCmds && preSendCmds.length > 0) {
+        const hookResults = await runHooks(preSendCmds, this.cwd)
+        const hookOutput = formatHookResults(hookResults)
+        if (hookOutput.trim()) {
+          this.workingSet.set({
+            kind: "summary",
+            content: `Hook output (pre-send):\n${hookOutput}`,
+            reason: "pre-send hook",
+            ttl: 1,
+            estimatedTokens: estimateTokens(hookOutput),
+          })
+        }
+      }
 
       // Active model ref — may change on auto-switch; updated on this.modelRef/planModelRef too.
       let activeRef = opts.gate.mode === "plan" && this.planModelRef ? this.planModelRef : this.modelRef
@@ -741,6 +775,15 @@ export class DawnAgent {
         const hasOpenTodos = latestTodos.some((t) => t.status === "pending" || t.status === "in_progress")
         if (stepCount >= MAX_STEPS) {
           bus.emit({ type: "step-limit", stepCount, hasOpenTodos })
+        }
+        // on-turn-end hooks: run after turn completes, show output in transcript
+        const onTurnEndCmds = opts.config.hooks?.["on-turn-end"]
+        if (onTurnEndCmds && onTurnEndCmds.length > 0) {
+          const hookResults = await runHooks(onTurnEndCmds, this.cwd)
+          const hookOutput = formatHookResults(hookResults)
+          if (hookOutput.trim()) {
+            bus.emit({ type: "status", message: hookOutput })
+          }
         }
         bus.emit({ type: "turn-end" })
         return
