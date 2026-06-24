@@ -13,6 +13,8 @@ const CustomProviderSchema = z.object({
   baseURL: z.string().optional(),
   /** Env var holding the API key (preferred over inline keys) */
   apiKeyEnv: z.string().optional(),
+  /** Extra HTTP headers sent on every request to this provider. */
+  headers: z.record(z.string(), z.string()).optional(),
 })
 
 const SkillsConfigSchema = z.object({

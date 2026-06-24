@@ -75,8 +75,17 @@ export interface ModelProfile {
    * never invalidates the cache. Undefined for strong models that need no scaffolding.
    */
   promptDelta?: string
-  /** Generation defaults; undefined fields leave the provider/SDK default in place. */
-  params: { temperature?: number; maxTokens?: number }
+  /**
+   * Generation defaults; undefined fields leave the provider/SDK default in place.
+   * For reasoning models: temperature is undefined (omit from request), maxTokens
+   * is set via max_completion_tokens on OpenAI-compatible providers.
+   */
+  params: {
+    temperature?: number
+    maxTokens?: number
+    /** True when the model requires max_completion_tokens instead of max_tokens. */
+    useMaxCompletionTokens?: boolean
+  }
   /** Capability flags surfaced in the picker and used for routing decisions. */
   capabilities: { vision: boolean; reasoning: boolean }
 }
@@ -124,6 +133,23 @@ export function detectFamily(providerId: string, modelId: string): ModelFamily {
 }
 
 /**
+ * Whether a model is reasoning-class and needs special request shaping:
+ * - Omit temperature (these models don't accept it)
+ * - Use max_completion_tokens instead of max_tokens on OpenAI-compatible providers
+ * Detected via catalog flag first, then id heuristics for known families.
+ */
+function isReasoningModel(modelId: string, info: ModelInfo | undefined): boolean {
+  if (info?.reasoning === true) return true
+  const id = modelId.toLowerCase()
+  // OpenAI o-series, GPT-5.x, codex
+  if (/\bo[1345](?:-|$)/.test(id) || id.startsWith("o1") || id.startsWith("o3")) return true
+  if (id.startsWith("gpt-5") || id.includes("codex")) return true
+  // DeepSeek-R1 / Qwen-QwQ reasoning models
+  if (id.includes("deepseek-r") || id.includes("qwq")) return true
+  return false
+}
+
+/**
  * Resolve the behavior profile for a model ref. Order: blessed tier (hand-tuned)
  * → family inference → safe generic default. Pure and data-driven; unit-tested in
  * profile.test.ts.
@@ -145,6 +171,13 @@ export function resolveProfile(ref: string, catalog: Catalog): ModelProfile {
   const wantsStructure = tier === "experimental" || (tier === "standard" && STRUCTURED_FAMILIES.has(family))
   const promptDelta = wantsStructure ? STRUCTURED_DELTA : undefined
 
+  const isReasoning = isReasoningModel(modelId, info)
+  // Reasoning models (o-series, codex, deepseek-r1, etc.) reject temperature and
+  // expect max_completion_tokens on OpenAI-compatible transports.
+  const params: ModelProfile["params"] = isReasoning
+    ? { useMaxCompletionTokens: true }
+    : {}
+
   return {
     ref,
     providerId,
@@ -157,10 +190,10 @@ export function resolveProfile(ref: string, catalog: Catalog): ModelProfile {
     toolRepair: true,
     supportsCaching,
     promptDelta,
-    params: {},
+    params,
     capabilities: {
       vision: VISION_FAMILIES.has(family),
-      reasoning: info?.reasoning ?? false,
+      reasoning: isReasoning,
     },
   }
 }

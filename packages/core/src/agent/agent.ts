@@ -536,6 +536,8 @@ export class DawnAgent {
       const MAX_SWITCHES = 2
       // 2 retries (same model) + up to MAX_SWITCHES model switches
       const MAX_ATTEMPTS = 2 + MAX_SWITCHES
+      // Count empty-stream occurrences to allow one retry before surfacing the error.
+      let noOutputRetries = 0
 
       // Hoisted outside the attempt loop so all paths can unsubscribe
       let latestTodos: import("../bus/bus").TodoItem[] = []
@@ -556,7 +558,9 @@ export class DawnAgent {
 
         const { system, messages: requestMsgs } = this.requestMessages(profile)
 
-        const result = streamText({
+        // Thread reasoning-aware params. Reasoning models (o-series, codex, deepseek-r1, …)
+        // reject temperature and expect max_completion_tokens on OpenAI-compatible transports.
+        const streamParams: Parameters<typeof streamText>[0] = {
           model: resolved.model,
           system: system as any,
           messages: requestMsgs,
@@ -586,11 +590,33 @@ export class DawnAgent {
               : undefined,
           stopWhen: stepCountIs(MAX_STEPS),
           abortSignal: signal,
-        })
+        }
+        if (profile.params.temperature !== undefined) {
+          streamParams.temperature = profile.params.temperature
+        }
+        if (profile.params.maxTokens !== undefined) {
+          streamParams.maxOutputTokens = profile.params.maxTokens
+        }
+        if (profile.params.useMaxCompletionTokens) {
+          // OpenAI reasoning models require max_completion_tokens; pass via providerOptions
+          // so it reaches the underlying SDK without conflicting with maxOutputTokens.
+          streamParams.providerOptions = {
+            ...streamParams.providerOptions,
+            openai: { ...(streamParams.providerOptions?.openai as object | undefined), maxCompletionTokens: 16384 },
+            "openai-compatible": {
+              ...(streamParams.providerOptions?.["openai-compatible"] as object | undefined),
+              max_completion_tokens: 16384,
+            },
+          }
+        }
+        const result = streamText(streamParams)
 
         let retryableFailure: unknown
         let switchFailure: ClassifiedFailure | undefined
         let hasOutput = false
+        // Set when a stream error is emitted directly (not retryable, not a switch trigger).
+        // Prevents falling through to the success path after a visible error.
+        let hadStreamError = false
         // Stash inputs at tool-call time so tool-result can build a semantic summary
         const toolInputs = new Map<string, unknown>()
         // Loop-detection: count failures per unique (tool, input) signature
@@ -698,12 +724,18 @@ export class DawnAgent {
                 retryableFailure = part.error
               } else if (
                 classified.kind === "free-tier-deprecated" ||
-                classified.kind === "model-unavailable" ||
-                classified.kind === "no-output"
+                classified.kind === "model-unavailable"
               ) {
+                // Trigger silent switch only when the provider explicitly says the model
+                // is gone or suggests a replacement — not on an empty response, which is
+                // almost always a request-shaping bug on our side.
                 switchFailure = classified
               } else {
+                // plan-restricted, auth, rate-limit, context-overflow, unknown: surface
+                // directly and mark that we had a real stream error so we don't fall
+                // through to the success path after this.
                 bus.emit({ type: "error", message: classified.message })
+                hadStreamError = true
               }
               break
             }
@@ -712,12 +744,47 @@ export class DawnAgent {
           }
         }
 
-        // A clean stream that produced nothing is treated as no-output → trigger switch.
+        // A real stream error was already emitted — don't fall through to the success path.
+        if (hadStreamError) {
+          unsubTodos()
+          this.workingSet.decrementLeases()
+          bus.emit({ type: "turn-end" })
+          return
+        }
+
+        // A clean stream that produced nothing: retry the same model once, then surface
+        // a diagnostic error. Empty responses are almost always a request-shaping issue
+        // (missing headers, wrong params) — not a reason to silently swap models.
         if (!hasOutput && !retryableFailure && !switchFailure) {
-          switchFailure = {
-            kind: "no-output",
-            message: `${activeRef} returned no output — switching to an available alternative.`,
+          if (noOutputRetries === 0) {
+            noOutputRetries++
+            bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+            bus.emit({ type: "status", message: `${activeRef} returned an empty response — retrying…` })
+            continue
           }
+          // Second empty response: gather diagnostics and surface a real error.
+          let finishReason: string | undefined
+          let warnings: string | undefined
+          try {
+            finishReason = (await result.finishReason) ?? undefined
+            const w = await result.warnings
+            if (w && w.length > 0) {
+              warnings = w.map((x) => ("message" in x ? x.message : JSON.stringify(x))).join("; ")
+            }
+          } catch {
+            // Diagnostics are best-effort; don't let them block the error path.
+          }
+          const parts = [`\`${activeRef}\` returned an empty response`]
+          if (finishReason && finishReason !== "unknown") parts.push(`finish reason: ${finishReason}`)
+          if (warnings) parts.push(`provider warnings: ${warnings}`)
+          parts.push(
+            "Check that this model is available on your account and that your API key has access to it.",
+          )
+          unsubTodos()
+          bus.emit({ type: "error", message: parts.join(" — ") })
+          this.workingSet.decrementLeases()
+          bus.emit({ type: "turn-end" })
+          return
         }
 
         // ── Same-model retry (Groq tool-call 400) ────────────────────────────

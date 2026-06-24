@@ -35,6 +35,8 @@ export interface ProviderInfo {
   env?: string[]
   npm?: string
   api?: string
+  /** Extra HTTP headers sent on every request to this provider (both chat and model listing). */
+  headers?: Record<string, string>
   /** Whether this model list came from a live provider probe/list call or static catalog metadata. */
   modelsSource?: "live" | "catalog"
   models: Record<string, ModelInfo>
@@ -131,6 +133,11 @@ export const FALLBACK_CATALOG: Catalog = {
     name: "GitHub Copilot",
     env: ["GITHUB_COPILOT_TOKEN"],
     api: "https://api.githubcopilot.com",
+    headers: {
+      "Copilot-Integration-Id": "copilot-4-cli",
+      "Editor-Version": "vscode/1.95.0",
+      "Editor-Plugin-Version": "copilot-chat/0.22.4",
+    },
     models: {
       "gpt-4o": {
         id: "gpt-4o",

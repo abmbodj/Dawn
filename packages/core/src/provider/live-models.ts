@@ -80,19 +80,15 @@ async function fetchOpenAICompatible(
   baseURL: string,
   apiKey: string | undefined,
   providerId: string,
+  providerHeaders?: Record<string, string>,
 ): Promise<LiveModel[]> {
   const url = `${baseURL.replace(/\/$/, "")}/models`
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // Spread provider-specific headers (e.g. Copilot identity headers from catalog).
+    ...providerHeaders,
   }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-
-  // GitHub Copilot requires extra identity headers
-  if (providerId === "github-copilot") {
-    headers["Copilot-Integration-Id"] = "vscode-chat"
-    headers["Editor-Version"] = "vscode/1.95.0"
-    headers["Editor-Plugin-Version"] = "copilot-chat/0.22.4"
-  }
 
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) })
   if (!res.ok) return []
@@ -105,11 +101,12 @@ async function fetchOpenAICompatible(
       supported_parameters?: string[]
       per_request_limits?: { completion_tokens?: number | null } | null
       pricing?: { prompt?: string | number; completion?: string | number }
-      // GitHub Copilot fields
+      // GitHub Copilot / OpenAI-compatible extended fields
       capabilities?: { supports_tool_calling?: boolean; type?: string }
       billing_type?: string
       policy?: { state?: string }
       is_premium?: boolean
+      deprecated?: boolean
     }>
     models?: Array<{ id: string; name?: string }>
   }
@@ -120,11 +117,10 @@ async function fetchOpenAICompatible(
 
   return items
     .filter((m) => {
-      // Skip Copilot models that are disabled by policy or text-only
-      if (providerId === "github-copilot") {
-        if (m.policy?.state === "disabled") return false
-        if (m.capabilities?.type === "embeddings") return false
-      }
+      // Drop models the provider itself marks as disabled, deprecated, or embedding-only.
+      if (m.deprecated === true) return false
+      if (m.policy?.state === "disabled") return false
+      if (m.capabilities?.type === "embeddings") return false
       return true
     })
     .map((m) => {
@@ -241,7 +237,8 @@ export async function withLiveModels(
       if (!apiKey) return catalog
       liveModels = await fetchGoogle(apiKey)
     } else if (baseURL) {
-      liveModels = await fetchOpenAICompatible(baseURL, apiKey, providerId)
+      const providerHeaders = { ...(providerInfo?.headers ?? {}), ...(custom?.headers ?? {}) }
+      liveModels = await fetchOpenAICompatible(baseURL, apiKey, providerId, providerHeaders)
     } else {
       return catalog
     }

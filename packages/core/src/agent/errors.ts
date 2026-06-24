@@ -3,6 +3,7 @@ import { APICallError } from "ai"
 export type FailureKind =
   | "free-tier-deprecated" // provider suggests a replacement slug
   | "model-unavailable" // model not found / not supported / decommissioned
+  | "plan-restricted" // model exists but is not in the user's plan/subscription
   | "no-output" // stream finished with nothing produced
   | "auth" // bad / missing API key
   | "rate-limit" // 429 / quota exceeded
@@ -73,6 +74,14 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
       }
     }
 
+    // Model exists but not in the user's plan/subscription (e.g. Copilot integrator restriction)
+    if (h.includes("not available for integrator") || h.includes("not available for your plan")) {
+      return {
+        kind: "plan-restricted",
+        message: `This model is not included in your current plan or subscription — ${e.message ?? `HTTP ${status}`}.`,
+      }
+    }
+
     // Model unavailable / not found
     if (
       status === 404 ||
@@ -111,7 +120,7 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     if (lower.includes("no output") || lower.includes("no content") || lower.includes("empty response")) {
-      return { kind: "no-output", message: "Model returned no output — switching to an alternative." }
+      return { kind: "no-output", message: "Model returned an empty response. Check that this model is available on your account and that your API key has access to it." }
     }
 
     if (lower.includes("unauthorized") || lower.includes("invalid api key")) {
