@@ -123,7 +123,7 @@ describe("ItemView", () => {
       await setup.flush()
 
       const frame = setup.captureCharFrame()
-      expect(frame).toContain("✗ bash echo broken")
+      expect(frame).toContain("⏺ bash(echo broken)")
       expect(frame).toContain("line1")
       expect(frame).toContain("line2")
       expect(frame).toContain("line3")

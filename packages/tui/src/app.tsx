@@ -62,7 +62,6 @@ import {
   formatContextReport,
   formatSavingsReport,
   formatUsageReport,
-  type ModeChip,
   modelLabel,
   savingsBoxRows,
   statusFooterParts,
@@ -316,13 +315,14 @@ export function ItemView({
     }
     case "tool": {
       const color = !item.done ? theme.accent : item.isError ? theme.toolErr : theme.toolOk
-      const mark = !item.done ? (isLastRunningTool ? spinnerFrame : "⚒") : item.isError ? "✗" : "✓"
+      const mark = !item.done ? (isLastRunningTool ? spinnerFrame : "⏺") : item.isError ? "⏺" : "⏺"
       if (item.done && item.isError && item.summary) {
         return (
           <box style={{ flexDirection: "column" }}>
             <text>
-              <span fg={color}>{`${mark} ${item.name}`}</span>
-              <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
+              <span fg={color}>{`${mark} `}</span>
+              <span fg={color}>{item.name}</span>
+              <span fg={theme.dim}>{item.title ? `(${item.title})` : ""}</span>
             </text>
             <text fg={theme.toolErr}>{`  ${firstLines(item.summary, 3)}`}</text>
           </box>
@@ -330,8 +330,9 @@ export function ItemView({
       }
       const toolLine = (
         <text>
-          <span fg={color}>{`${mark} ${item.name}`}</span>
-          <span fg={theme.dim}>{item.title ? ` ${item.title}` : ""}</span>
+          <span fg={color}>{`${mark} `}</span>
+          <span fg={color}>{item.name}</span>
+          <span fg={theme.dim}>{item.title ? `(${item.title})` : ""}</span>
           <span fg={theme.dim}>{item.done && item.summary ? ` — ${firstLine(item.summary)}` : ""}</span>
         </text>
       )
@@ -354,7 +355,7 @@ export function ItemView({
             if (todo.status === "completed") {
               return (
                 <text key={todo.content}>
-                  <span fg={theme.toolOk}>{"✓ "}</span>
+                  <span fg={theme.toolOk}>{"[✓] "}</span>
                   <span fg={theme.dim}>{todo.content}</span>
                 </text>
               )
@@ -362,14 +363,15 @@ export function ItemView({
             if (todo.status === "in_progress") {
               return (
                 <text key={todo.content}>
-                  <span fg={theme.accent}>{"▶ "}</span>
-                  <span fg={theme.text}>{todo.activeForm}</span>
+                  <span fg={theme.accent}>{"[→] "}</span>
+                  <span fg={theme.text}>{todo.activeForm ?? todo.content}</span>
                 </text>
               )
             }
             return (
               <text key={todo.content}>
-                <span fg={theme.dim}>{`○ ${todo.content}`}</span>
+                <span fg={theme.dim}>{"[ ] "}</span>
+                <span fg={theme.dim}>{todo.content}</span>
               </text>
             )
           })}
@@ -447,6 +449,52 @@ function ModelFitWarning({ modelRef, sizeBytes }: { modelRef: string; sizeBytes?
   )
 }
 
+function PlanReviewPanel({
+  pending,
+  selectedIndex,
+  scrollRef,
+}: {
+  pending: PendingQuestion
+  selectedIndex: number
+  scrollRef?: RefObject<ScrollBoxRenderable | null>
+}) {
+  const { q } = pending
+  return (
+    <box
+      style={{
+        border: true,
+        borderColor: theme.user,
+        padding: 1,
+        flexDirection: "column",
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: "hidden",
+      }}
+      title="plan ready — review & approve"
+    >
+      {q.detail ? (
+        <scrollbox ref={scrollRef} style={{ flexShrink: 1, minHeight: 0 }} stickyStart="top">
+          <markdown content={q.detail} syntaxStyle={dawnSyntaxStyle()} />
+        </scrollbox>
+      ) : (
+        <text fg={theme.text}>{q.question}</text>
+      )}
+      <text fg={theme.dim}>{"─".repeat(30)}</text>
+      {q.options.map((opt, i) => {
+        const selected = i === selectedIndex
+        return (
+          <text key={opt.label}>
+            <span fg={selected ? theme.user : theme.dim}>{`${i + 1} `}</span>
+            <span fg={selected ? theme.accent : theme.text}>{opt.label}</span>
+          </text>
+        )
+      })}
+      <text fg={theme.dim}>{"─".repeat(30)}</text>
+      <text fg={theme.dim}>{"1–3 quick-pick · ↑↓ navigate · Enter select · PgUp/PgDn scroll"}</text>
+    </box>
+  )
+}
+
 function QuestionView({
   pending,
   selectedIndex,
@@ -468,7 +516,7 @@ function QuestionView({
         minHeight: 0,
         overflow: "hidden",
       }}
-      title={q.kind === "plan-approval" ? "plan ready for review" : "question"}
+      title="question"
     >
       <text fg={theme.text}>{q.question}</text>
       {q.detail ? (
@@ -601,18 +649,20 @@ function WelcomeTips() {
   )
 }
 
-// Plan / auto-edit get their own row above the input so the chip can never
-// collide with the model + usage line in the footer.
-function modeChipColor(chip: ModeChip): string {
-  return chip.text === "AUTO-EDIT" ? theme.toolOk : theme.accent
+function modeColor(mode: PermissionMode): string {
+  if (mode === "acceptEdits") return theme.toolOk
+  if (mode === "plan") return theme.user
+  return theme.accent
 }
 
-function ModeChipRow({ chip }: { chip: ModeChip }) {
-  const color = modeChipColor(chip)
+// Always visible — shows current mode and the Shift+Tab hint.
+function ModeChipRow({ permMode }: { permMode: PermissionMode }) {
+  const color = modeColor(permMode)
+  const label = permMode === "acceptEdits" ? "AUTO-EDIT" : permMode === "plan" ? "PLAN" : "NORMAL"
   return (
     <box style={{ height: 1, paddingLeft: 1 }}>
       <text>
-        <span fg={color}>{`▌ ${chip.text} MODE`}</span>
+        <span fg={color}>{`▌ ${label}`}</span>
         <span fg={theme.dim}>{"  Shift+Tab to cycle"}</span>
       </text>
     </box>
@@ -1343,8 +1393,7 @@ export function App(props: AppProps) {
   // chrome off-screen. The transcript (flexGrow) absorbs whatever's left, so we
   // only reserve for the chip, input box, footer line, the box's own border +
   // hint, and a safety row.
-  const chipRows = footer.modeChip ? 1 : 0
-  const maxSuggestionRows = Math.max(1, Math.min(8, height - chipRows - inputBoxHeight - 1 - 2 - 1 - 1))
+  const maxSuggestionRows = Math.max(1, Math.min(8, height - 1 - inputBoxHeight - 1 - 2 - 1 - 1))
   const inputHint = busy
     ? "Esc to stop"
     : completionOpen
@@ -1421,11 +1470,11 @@ export function App(props: AppProps) {
       if (!permission && !confirmModel && !question && !pickerOpen && !connect) {
         key.preventDefault()
         key.stopPropagation()
-        setPermMode((m) => {
-          const next = cycleMode(m)
-          gate.setMode(next)
-          return next
-        })
+        const next = cycleMode(permMode)
+        gate.setMode(next)
+        setPermMode(next)
+        const label = next === "acceptEdits" ? "auto-edit" : next === "plan" ? "plan" : "normal"
+        dispatch({ type: "push", item: { kind: "info", text: `→ ${label} mode` } })
         return
       }
     }
@@ -1671,7 +1720,11 @@ export function App(props: AppProps) {
       ) : null}
 
       {question ? (
-        <QuestionView pending={question} selectedIndex={questionSel} scrollRef={detailScrollRef} />
+        question.q.kind === "plan-approval" ? (
+          <PlanReviewPanel pending={question} selectedIndex={questionSel} scrollRef={detailScrollRef} />
+        ) : (
+          <QuestionView pending={question} selectedIndex={questionSel} scrollRef={detailScrollRef} />
+        )
       ) : null}
       {permission ? <PermissionView pending={permission} scrollRef={detailScrollRef} /> : null}
       {confirmModel ? (
@@ -1753,12 +1806,12 @@ export function App(props: AppProps) {
         />
       ) : null}
 
-      {footer.modeChip ? <ModeChipRow chip={footer.modeChip} /> : null}
+      <ModeChipRow permMode={permMode} />
 
       <box
         style={{
           border: true,
-          borderColor: focusInput ? theme.accent : theme.border,
+          borderColor: focusInput ? modeColor(permMode) : theme.border,
           height: inputBoxHeight,
           flexShrink: 0,
         }}

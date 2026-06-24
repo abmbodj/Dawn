@@ -268,8 +268,15 @@ export function toolResultSummary(toolName: string, input: any, output: unknown)
  */
 export function toolPreview(toolName: string, input: any): string | undefined {
   switch (toolName) {
-    case "edit":
-      return `${capLines(`- ${input?.oldString ?? ""}`, 6, 80)}\n${capLines(`+ ${input?.newString ?? ""}`, 6, 80)}`
+    case "edit": {
+      const oldLines = String(input?.oldString ?? "")
+        .split("\n")
+        .map((l: string) => `- ${l}`)
+      const newLines = String(input?.newString ?? "")
+        .split("\n")
+        .map((l: string) => `+ ${l}`)
+      return capLines([...oldLines, ...newLines].join("\n"), 14, 80)
+    }
     case "write":
       return capLines(
         String(input?.content ?? "")
