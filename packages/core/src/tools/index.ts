@@ -461,6 +461,21 @@ export function createTools(ctx: ToolContext): ToolSet {
             : `\n\nNo similar region found. Verify the file path and re-read the file before retrying.`
           throw new Error(`${msg}${hint}`)
         }
+        if (msg.startsWith("oldString matches")) {
+          // Find line numbers of each occurrence to give the model precise re-read targets
+          const firstLine = (oldString.split("\n")[0] ?? "").trim()
+          const fileLines = content.split("\n")
+          const matchLines: number[] = []
+          for (let i = 0; i < fileLines.length; i++) {
+            if (firstLine && fileLines[i]?.includes(firstLine)) matchLines.push(i + 1)
+          }
+          const lineHint =
+            matchLines.length > 0
+              ? `\n\nOccurrences near lines: ${matchLines.join(", ")} in ${relative(cwd, abs)}. ` +
+                `Re-read the file around those lines, then extend oldString with 3–5 lines of surrounding context to make it unique.`
+              : `\n\nRe-read ${relative(cwd, abs)} around the target section and extend oldString with more surrounding context.`
+          throw new Error(`${msg}${lineHint}`)
+        }
         throw err
       }
       const ok = await gate.ask({

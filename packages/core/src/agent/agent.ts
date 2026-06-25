@@ -694,6 +694,21 @@ export class DawnAgent {
                 summary: errMsg,
                 isError: true,
               })
+              // Edit multi-match: inject re-read guidance immediately on first failure, don't wait for MAX_REPEATED_FAILURES
+              if (part.toolName === "edit" && errMsg.includes("matches") && errMsg.includes("times")) {
+                const input = toolInputs.get(part.toolCallId) ?? part.input
+                const fp = (input as Record<string, unknown>)?.filePath ?? "the file"
+                this.workingSet.add({
+                  kind: "tool-result",
+                  content:
+                    `[Dawn edit-hint] oldString appears multiple times in ${fp}. ` +
+                    `You must re-read the file around the target lines, then expand oldString to include ` +
+                    `3–5 lines of surrounding context that uniquely identify the location.`,
+                  reason: "edit multi-match hint",
+                  ttl: 1,
+                  estimatedTokens: 60,
+                })
+              }
               if (prevCount + 1 >= MAX_REPEATED_FAILURES) {
                 // Break the loop — inject a reconsider message so the model can try a different approach
                 bus.emit({

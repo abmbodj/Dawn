@@ -269,8 +269,9 @@ export function savingsBoxRows(args: {
     { label: "sent", value: `${formatTokens(args.usage.inputTokens)} tokens` },
     {
       label: "$ saved",
-      value: estimatedCostSaved === undefined ? "—" : formatCost(estimatedCostSaved),
-      tone: estimatedCostSaved && estimatedCostSaved > 0 ? "accent" : "dim",
+      value:
+        inputPrice === undefined ? "—" : inputPrice === 0 ? "free tier" : formatCost(estimatedCostSaved!),
+      tone: estimatedCostSaved !== undefined && estimatedCostSaved > 0 ? "accent" : "dim",
     },
     {
       label: "cache $",
