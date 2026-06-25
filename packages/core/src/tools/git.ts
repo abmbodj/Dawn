@@ -1,6 +1,6 @@
 import { tool } from "ai"
 import { z } from "zod"
-import type { PermissionGate } from "../permission/gate"
+import type { PermissionGate } from "../permission/permission"
 import { truncateMiddle } from "./truncate"
 
 const DENIED = "Permission denied by user. Ask before retrying, or propose an alternative."

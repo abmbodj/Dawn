@@ -356,6 +356,9 @@ async function oneShot(flags: Flags): Promise<void> {
   const gate = new PermissionGate()
   gate.preAllow("read")
   if (flags.yolo) gate.allowAll = true
+  for (const [toolName, perm] of Object.entries(activeConfig.permissions ?? {})) {
+    if (perm === "allow") gate.preAllow(toolName)
+  }
 
   const store = new SessionStore()
   const contextStore = new ContextStore()
@@ -434,6 +437,9 @@ async function interactive(flags: Flags): Promise<void> {
 
   const bus = new Bus()
   const gate = new PermissionGate()
+  for (const [toolName, perm] of Object.entries(activeConfig.permissions ?? {})) {
+    if (perm === "allow") gate.preAllow(toolName)
+  }
   const asker = new Asker()
   const agent = new DawnAgent({
     cwd: flags.cwd,

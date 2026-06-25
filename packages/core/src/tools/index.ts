@@ -1167,6 +1167,40 @@ function workspacePackageDirs(cwd: string, pkg: PackageJson): string[] {
   return [...dirs].sort()
 }
 
+/**
+ * Tools that have filesystem or shell side effects and must not be shown to the model
+ * while in plan mode. Non-destructive inspection tools and UX tools are excluded from
+ * this set and remain visible in all modes.
+ */
+const SIDE_EFFECTING_TOOLS = new Set([
+  "write",
+  "edit",
+  "bash",
+  "bash_background",
+  "bash_kill",
+  "git_commit",
+])
+
+/**
+ * Returns a filtered copy of the toolset that is appropriate for the current mode.
+ * In plan mode: side-effecting tools are removed so the model never attempts them.
+ * Config "deny" rules: those tools are removed entirely (saves tokens + prevents attempts).
+ * Config "allow" rules are handled at gate.preAllow() time; "ask" is the reactive default.
+ */
+export function visibleTools(
+  all: ToolSet,
+  mode: "normal" | "acceptEdits" | "plan",
+  permissions?: Record<string, "allow" | "ask" | "deny">,
+): ToolSet {
+  const result: ToolSet = {}
+  for (const [name, def] of Object.entries(all)) {
+    if (mode === "plan" && SIDE_EFFECTING_TOOLS.has(name)) continue
+    if (permissions?.[name] === "deny") continue
+    result[name] = def
+  }
+  return result
+}
+
 function readReadmeExcerpt(cwd: string, maxChars: number): string | undefined {
   const file = ["README.md", "Readme.md", "readme.md"]
     .map((name) => path.join(cwd, name))

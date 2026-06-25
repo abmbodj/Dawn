@@ -1,4 +1,6 @@
 import { type ModelMessage, stepCountIs, streamText, type ToolSet } from "ai"
+import { compactViaLlm } from "../context/compact-llm"
+import { resolveRoleModel } from "../provider/roles"
 import type { Bus } from "../bus/bus"
 import type { DawnConfig } from "../config/config"
 import {
@@ -29,7 +31,7 @@ import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
 import { buildSkillCatalog, discoverSkills, findSkill, matchAutoTriggers } from "../skills/registry"
 import type { Skill } from "../skills/types"
-import { createTools, toolPreview, toolResultSummary, toolTitle } from "../tools/index"
+import { createTools, toolPreview, toolResultSummary, toolTitle, visibleTools } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { CheckpointStore } from "../checkpoint/checkpoint"
@@ -518,7 +520,7 @@ export class DawnAgent {
         const hookResults = await runHooks(preSendCmds, this.cwd)
         const hookOutput = formatHookResults(hookResults)
         if (hookOutput.trim()) {
-          this.workingSet.set({
+          this.workingSet.add({
             kind: "summary",
             content: `Hook output (pre-send):\n${hookOutput}`,
             reason: "pre-send hook",
@@ -538,6 +540,9 @@ export class DawnAgent {
       const MAX_ATTEMPTS = 2 + MAX_SWITCHES
       // Count empty-stream occurrences to allow one retry before surfacing the error.
       let noOutputRetries = 0
+      // Compaction retries: on context-overflow we compact history and retry (max 2 times).
+      let compactionRetries = 0
+      const MAX_COMPACTIONS = 2
 
       // Hoisted outside the attempt loop so all paths can unsubscribe
       let latestTodos: import("../bus/bus").TodoItem[] = []
@@ -564,7 +569,7 @@ export class DawnAgent {
           model: resolved.model,
           system: system as any,
           messages: requestMsgs,
-          tools: { ...this.tools, ...this.mcpTools },
+          tools: visibleTools({ ...this.tools, ...this.mcpTools }, opts.gate.mode, opts.config.permissions),
           experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
           prepareStep:
             needsReasoningStrip || forceRepoOverview
@@ -590,6 +595,12 @@ export class DawnAgent {
               : undefined,
           stopWhen: stepCountIs(MAX_STEPS),
           abortSignal: signal,
+          onStepFinish: (step) => {
+            // Persist after every clean step boundary so a crash/abort never loses completed work.
+            this.messages.push(...step.response.messages)
+            stepMsgsPushed += step.response.messages.length
+            this.persist()
+          },
         }
         if (profile.params.temperature !== undefined) {
           streamParams.temperature = profile.params.temperature
@@ -613,7 +624,9 @@ export class DawnAgent {
 
         let retryableFailure: unknown
         let switchFailure: ClassifiedFailure | undefined
+        let overflowFailure = false
         let hasOutput = false
+        let stepMsgsPushed = 0
         // Set when a stream error is emitted directly (not retryable, not a switch trigger).
         // Prevents falling through to the success path after a visible error.
         let hadStreamError = false
@@ -730,8 +743,11 @@ export class DawnAgent {
                 // is gone or suggests a replacement — not on an empty response, which is
                 // almost always a request-shaping bug on our side.
                 switchFailure = classified
+              } else if (classified.kind === "context-overflow" && compactionRetries < MAX_COMPACTIONS) {
+                // Context overflow: attempt LLM-backed compaction then retry rather than dying.
+                overflowFailure = true
               } else {
-                // plan-restricted, auth, rate-limit, context-overflow, unknown: surface
+                // plan-restricted, auth, rate-limit, context-overflow (retries exhausted), unknown: surface
                 // directly and mark that we had a real stream error so we don't fall
                 // through to the success path after this.
                 bus.emit({ type: "error", message: classified.message })
@@ -742,6 +758,41 @@ export class DawnAgent {
             default:
               break
           }
+        }
+
+        // Context-overflow recovery: compact history via LLM and retry.
+        if (overflowFailure) {
+          compactionRetries++
+          bus.emit({ type: "status", message: "context overflow — compacting history and retrying…" })
+          try {
+            const { summary, messages: compacted } = await compactViaLlm(
+              this.messages,
+              this.modelRef,
+              opts.catalog,
+              opts.config,
+            )
+            this.messages = compacted
+            if (summary) {
+              this.sessionMemoryText = summary
+              this.workingSet.add({
+                kind: "summary",
+                summary,
+                reason: "overflow compaction",
+                ttl: 9999,
+                estimatedTokens: estimateTokens(summary),
+              })
+            }
+            this.persist()
+          } catch {
+            // Compaction itself failed; surface the original overflow error.
+            bus.emit({ type: "error", message: "Context window is full and compaction failed. Try a model with a larger context or clear history." })
+            this.workingSet.decrementLeases()
+            bus.emit({ type: "turn-end" })
+            unsubTodos()
+            return
+          }
+          bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+          continue
         }
 
         // A real stream error was already emitted — don't fall through to the success path.
@@ -835,8 +886,13 @@ export class DawnAgent {
         // ── Success ───────────────────────────────────────────────────────────
         unsubTodos()
         const response = await result.response
-        this.messages.push(...response.messages)
-        this.persist()
+        // onStepFinish persists incrementally; push any messages it didn't cover
+        // (e.g., single-step providers that don't fire onStepFinish for the last step).
+        const remaining = response.messages.slice(stepMsgsPushed)
+        if (remaining.length > 0) {
+          this.messages.push(...remaining)
+          this.persist()
+        }
         this.workingSet.decrementLeases()
         // If the model ran out of steps with unfinished work, surface it so the user can continue
         const hasOpenTodos = latestTodos.some((t) => t.status === "pending" || t.status === "in_progress")
