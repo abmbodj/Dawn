@@ -16,6 +16,11 @@ export class ContextWorkingSet {
     return [...this.items]
   }
 
+  hasFileRange(path: string, startLine: number, endLine: number): boolean {
+    const key = ["file-range", path, String(startLine), String(endLine)].join(":")
+    return this.items.some((item) => keyFor(item) === key)
+  }
+
   tokens(): number {
     return this.items.reduce((sum, item) => sum + item.estimatedTokens, 0)
   }

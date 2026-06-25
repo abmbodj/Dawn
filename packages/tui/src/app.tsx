@@ -113,7 +113,7 @@ export function reduceItems(items: Item[], action: Action): Item[] {
         case "text-delta": {
           const last = items[items.length - 1]
           if (last?.kind === "assistant") {
-            return [...items.slice(0, -1), { ...last, text: last.text + ev.text }]
+            return items.with(items.length - 1, { ...last, text: last.text + ev.text })
           }
           // A text-delta after reasoning marks the reasoning done
           const prevReasoning = last?.kind === "reasoning" ? last : undefined
@@ -129,14 +129,14 @@ export function reduceItems(items: Item[], action: Action): Item[] {
         case "text-end": {
           const last = items[items.length - 1]
           if (last?.kind === "assistant") {
-            return [...items.slice(0, -1), { ...last, done: true }]
+            return items.with(items.length - 1, { ...last, done: true })
           }
           return items
         }
         case "reasoning-delta": {
           const last = items[items.length - 1]
           if (last?.kind === "reasoning" && !last.done) {
-            return [...items.slice(0, -1), { ...last, text: last.text + ev.text }]
+            return items.with(items.length - 1, { ...last, text: last.text + ev.text })
           }
           return [...items, { kind: "reasoning", text: ev.text }]
         }
@@ -145,7 +145,7 @@ export function reduceItems(items: Item[], action: Action): Item[] {
           const last = items[items.length - 1]
           const base =
             last?.kind === "reasoning" && !last.done
-              ? [...items.slice(0, -1), { ...last, done: true }]
+              ? items.with(items.length - 1, { ...last, done: true })
               : items
           return [
             ...base,

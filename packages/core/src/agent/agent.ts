@@ -752,17 +752,18 @@ export class DawnAgent {
                 retryableFailure = part.error
               } else if (
                 classified.kind === "free-tier-deprecated" ||
-                classified.kind === "model-unavailable"
+                classified.kind === "model-unavailable" ||
+                classified.kind === "rate-limit"
               ) {
-                // Trigger silent switch only when the provider explicitly says the model
-                // is gone or suggests a replacement — not on an empty response, which is
-                // almost always a request-shaping bug on our side.
+                // Trigger silent switch when the provider says the model is gone, suggests a
+                // replacement, or has rate-limited this model — switching providers is the
+                // correct recovery for all three cases.
                 switchFailure = classified
               } else if (classified.kind === "context-overflow" && compactionRetries < MAX_COMPACTIONS) {
                 // Context overflow: attempt LLM-backed compaction then retry rather than dying.
                 overflowFailure = true
               } else {
-                // plan-restricted, auth, rate-limit, context-overflow (retries exhausted), unknown: surface
+                // plan-restricted, auth, context-overflow (retries exhausted), unknown: surface
                 // directly and mark that we had a real stream error so we don't fall
                 // through to the success path after this.
                 bus.emit({ type: "error", message: classified.message })

@@ -358,20 +358,35 @@ export function createTools(ctx: ToolContext): ToolSet {
     }),
     execute: async ({ filePath, offset = 1, limit = maxReadLines(mode) }) => {
       const abs = resolvePath(cwd, filePath)
-      const stat = fs.statSync(abs)
+      let stat: ReturnType<typeof fs.statSync>
+      try {
+        stat = fs.statSync(abs)
+      } catch {
+        // Try inserting /src/ after the package root (e.g. packages/foo/bar → packages/foo/src/bar)
+        const withSrc = filePath.replace(/^(packages\/[^/]+)\/(?!src\/)/, "$1/src/")
+        const absSrc = withSrc !== filePath ? resolvePath(cwd, withSrc) : null
+        if (absSrc && fs.existsSync(absSrc)) {
+          throw new Error(`File not found: ${filePath}\n\nDid you mean: ${withSrc}?`)
+        }
+        throw new Error(`File not found: ${filePath}\n\nVerify the path with ls or repo_map.`)
+      }
       if (stat.isDirectory()) throw new Error(`${filePath} is a directory — use ls`)
       if (stat.size > 10_000_000) throw new Error(`${filePath} is ${stat.size} bytes — too large to read`)
+      const cappedLimit = Math.min(limit, maxReadLines(mode))
+      const relPath = relative(cwd, abs)
+      if (ctx.workingSet?.hasFileRange(relPath, offset, offset + cappedLimit - 1)) {
+        return `[already in context: ${relPath} lines ${offset}–${offset + cappedLimit - 1}. No need to re-read unless you've edited it since.]`
+      }
       const rawContent = fs.readFileSync(abs, "utf8")
       // Register content hash so edit can verify the file hasn't drifted since this read
       if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(rawContent))
       const lines = rawContent.split("\n")
-      const cappedLimit = Math.min(limit, maxReadLines(mode))
       const slice = lines.slice(offset - 1, offset - 1 + cappedLimit)
       if (slice.length === 0) return `[file has ${lines.length} lines — offset ${offset} is past the end]`
       const body = numberLines(slice.join("\n"), offset)
       ctx.workingSet?.add({
         kind: "file-range",
-        path: relative(cwd, abs),
+        path: relPath,
         startLine: offset,
         endLine: offset + slice.length - 1,
         content: body,
@@ -380,7 +395,7 @@ export function createTools(ctx: ToolContext): ToolSet {
         estimatedTokens: estimateTokens(body),
       })
       if (ctx.contextStore) {
-        const summary = getFileSummary({ cwd, path: relative(cwd, abs), store: ctx.contextStore })
+        const summary = getFileSummary({ cwd, path: relPath, store: ctx.contextStore })
         ctx.workingSet?.add({
           kind: "summary",
           path: summary.path,
