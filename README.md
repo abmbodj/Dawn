@@ -348,9 +348,15 @@ Inside the TUI, submit these slash commands in the prompt:
 /plan-model Set the model used while in plan mode.
 /connect    Connect a model provider (API key or GitHub OAuth).
 /init       Scan the repo and generate an AGENTS.md with project conventions.
+/skills     Show discovered skills and which are loaded in context.
+/mcp        Show connected MCP servers and their tool counts.
+/plugin     Show enabled plugins and their commands.
 /context    Show context budget, working set, and savings.
 /usage      Show token and cost breakdown for this session.
 /savings    Show session, project, and lifetime token savings.
+/rewind     Restore files and conversation to a previous checkpoint.
+/image      Attach a local image file to your next message.
+/resume     List past sessions for this directory and switch to one.
 /new        Start a fresh session.
 /clear      Clear the visible transcript while keeping the conversation.
 /reset      Wipe all Dawn data and return to the setup wizard.
@@ -454,6 +460,7 @@ bun test           # run tests
 bun run typecheck  # tsc --noEmit
 bun run check      # biome check .
 bun run format     # biome format --write .
+bun run preflight  # test + typecheck + check — run before every push (CI runs the same three)
 ```
 
 The repository is organized as:
