@@ -270,7 +270,11 @@ export function savingsBoxRows(args: {
     {
       label: "$ saved",
       value:
-        inputPrice === undefined ? "—" : inputPrice === 0 ? "free tier" : formatCost(estimatedCostSaved!),
+        inputPrice === undefined || estimatedCostSaved === undefined
+          ? "—"
+          : inputPrice === 0
+            ? "free tier"
+            : formatCost(estimatedCostSaved),
       tone: estimatedCostSaved !== undefined && estimatedCostSaved > 0 ? "accent" : "dim",
     },
     {

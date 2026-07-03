@@ -23,7 +23,17 @@ describe("visibleTools", () => {
   })
 
   test("plan mode removes side-effecting tools", () => {
-    const all = fakeToolSet("read", "write", "bash", "bash_background", "bash_kill", "edit", "git_commit", "grep", "glob")
+    const all = fakeToolSet(
+      "read",
+      "write",
+      "bash",
+      "bash_background",
+      "bash_kill",
+      "edit",
+      "git_commit",
+      "grep",
+      "glob",
+    )
     const visible = visibleTools(all, "plan", {})
     const names = Object.keys(visible).sort()
     expect(names).not.toContain("write")
@@ -56,9 +66,9 @@ describe("visibleTools", () => {
     const visible = visibleTools(all, "plan", { grep: "deny" })
     const names = Object.keys(visible)
     expect(names).toContain("read")
-    expect(names).not.toContain("grep")   // denied by config
-    expect(names).not.toContain("bash")   // blocked by plan mode
-    expect(names).not.toContain("write")  // blocked by plan mode
+    expect(names).not.toContain("grep") // denied by config
+    expect(names).not.toContain("bash") // blocked by plan mode
+    expect(names).not.toContain("write") // blocked by plan mode
   })
 
   test("acceptEdits mode does not restrict side-effecting tools", () => {

@@ -41,7 +41,9 @@ export function ttlForKind(mode: ContextMode, kind: WorkingSetItem["kind"], ampl
   // On large-budget caching providers, reads stay until evicted for space (effectively infinite TTL).
   if (ampleBudget && (kind === "file" || kind === "file-range")) return 9999
   if (kind === "tool-result") return mode === "minimal" ? 1 : mode === "balanced" ? 2 : 3
-  return mode === "minimal" ? 1 : mode === "balanced" ? 2 : 4
+  // Lean-budget file reads: keep long enough to survive a multi-step edit (a file read
+  // two turns ago is usually still the one being edited); budget trimming evicts sooner if tight.
+  return mode === "minimal" ? 3 : mode === "balanced" ? 4 : 6
 }
 
 export function maxReadLines(mode: ContextMode): number {
@@ -278,6 +280,12 @@ export function buildRequestMessages(args: {
   loadedSkills?: Array<{ name: string; body: string }>
   /** Naive baseline: send full files & history (no summaries, no trimming, no caching). */
   naive?: boolean
+  /**
+   * Summary paths already credited as substitution savings this session. Substitution
+   * (summary sent instead of the full file) is a one-time saving per file, not a per-turn
+   * one — without this filter every turn would re-credit every resident summary.
+   */
+  creditedSummaryPaths?: ReadonlySet<string>
 }): {
   system: SystemModelMessage
   messages: ModelMessage[]
@@ -285,6 +293,8 @@ export function buildRequestMessages(args: {
   workingSetKept: WorkingSetItem[]
   /** The messages from args.messages that were kept in the request (subset, for session memory). */
   keptHistoryMessages: ModelMessage[]
+  /** Paths of summaries included in this request (for the caller's credited-substitution set). */
+  keptSummaryPaths: string[]
 } {
   const naive = args.naive ?? false
   const systemTokens = estimateTokens(args.system)
@@ -368,11 +378,12 @@ export function buildRequestMessages(args: {
   ]
   const skippedItems = [...summaries.trimmedDetails, ...history.trimmedDetails, ...working.trimmedDetails]
   const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens
-  // Tokens saved by sending a summary instead of reading the full source file
-  const substitutionSavings = summaries.kept.reduce(
-    (sum, s) => sum + Math.max(0, s.sourceTokens - s.tokenEstimate),
-    0,
-  )
+  // Tokens saved by sending a summary instead of reading the full source file.
+  // Credited once per file per session (via creditedSummaryPaths), matching how
+  // compaction savings are counted — not re-credited on every turn the summary stays resident.
+  const substitutionSavings = summaries.kept
+    .filter((s) => !args.creditedSummaryPaths?.has(s.path))
+    .reduce((sum, s) => sum + Math.max(0, s.sourceTokens - s.tokenEstimate), 0)
   const plan = buildContextPlan({
     systemTokens,
     historyTokens: history.tokens,
@@ -448,6 +459,7 @@ export function buildRequestMessages(args: {
     plan,
     workingSetKept: working.kept,
     keptHistoryMessages: history.kept,
+    keptSummaryPaths: summaries.kept.map((s) => s.path),
   }
 }
 

@@ -1,7 +1,6 @@
 import { type ModelMessage, stepCountIs, streamText, type ToolSet } from "ai"
-import { compactViaLlm } from "../context/compact-llm"
-import { resolveRoleModel } from "../provider/roles"
 import type { Bus } from "../bus/bus"
+import { CheckpointStore } from "../checkpoint/checkpoint"
 import type { DawnConfig } from "../config/config"
 import {
   buildRequestMessages,
@@ -11,10 +10,13 @@ import {
   stripReasoningParts,
   ttlForKind,
 } from "../context/budget"
+import { compactViaLlm } from "../context/compact-llm"
+import { distillDroppedTurns } from "../context/session-memory"
 import { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
 import type { ContextMode, ContextPlan, ContextPlanTotals, ContextStats, FileSummary } from "../context/types"
 import { ContextWorkingSet } from "../context/working-set"
+import { formatHookResults, runHooks } from "../hooks/hooks"
 import type { McpConnection } from "../mcp/client"
 import { connectMcpServers } from "../mcp/client"
 import type { McpServerConfig } from "../mcp/config"
@@ -34,13 +36,10 @@ import type { Skill } from "../skills/types"
 import { createTools, toolPreview, toolResultSummary, toolTitle, visibleTools } from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
-import { CheckpointStore } from "../checkpoint/checkpoint"
-import { distillDroppedTurns } from "../context/session-memory"
-import { formatHookResults, runHooks } from "../hooks/hooks"
-import { detectProjectProfile, formatProjectProfileSection } from "./project-profile"
 import { buildTurnGuidance } from "./answer-style"
 import { type ClassifiedFailure, classifyFailure } from "./errors"
 import { loadProjectMemory, type ProjectMemory } from "./project-memory"
+import { detectProjectProfile, formatProjectProfileSection } from "./project-profile"
 import { makeRepairToolCall } from "./repair"
 import { buildSystemPrompt } from "./system"
 
@@ -186,16 +185,23 @@ export class DawnAgent {
    * and lands in the provider's cacheable prefix instead of being re-billed every turn.
    */
   private readonly sessionSummaries = new Map<string, FileSummary>()
+  /** Summary paths whose substitution saving has been credited (once per file per session). */
+  private readonly creditedSummaryPaths = new Set<string>()
   private highestCostTurn: ContextStats["highestCostTurn"]
   private busy = false
   /** Running tally of tokens saved by compacting tool outputs this session. */
   private compaction = { savedTokens: 0, outputs: 0 }
-  /** Accumulated session memory text from turns compacted out of the context window. */
+  /** Rendered session-memory block currently in the working set (for change detection). */
   private sessionMemoryText: string | undefined
+  /**
+   * LLM summaries of turns spliced OUT of this.messages by overflow compaction — the
+   * only memory that cannot be re-derived from the live message list. Template
+   * distillation re-derives everything else fresh each turn, so only this part is
+   * embedded as `existingMemory` (prevents nesting/duplication).
+   */
+  private splicedMemoryText: string | undefined
   /** Shadow checkpoint store for /rewind support. */
   readonly checkpoints: CheckpointStore
-  /** Whether we've taken a checkpoint for the current turn yet. */
-  private turnCheckpointTaken = false
   /** Running turn counter (incremented at the start of each send). */
   private turnIndex = 0
   /** Mark of compaction savings already folded into a recorded context plan. */
@@ -389,6 +395,9 @@ export class DawnAgent {
     this.compaction = { savedTokens: 0, outputs: 0 }
     this.compactionPlanMark = 0
     this.sessionSummaries.clear()
+    this.creditedSummaryPaths.clear()
+    this.sessionMemoryText = undefined
+    this.splicedMemoryText = undefined
   }
 
   contextStats(): ContextStats {
@@ -428,7 +437,7 @@ export class DawnAgent {
     // Fold compaction savings accrued since the last plan into this one (persisted for /savings).
     const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
     this.compactionPlanMark = this.compaction.savedTokens
-    const built = buildRequestMessages({
+    const buildArgs = {
       system: this.system,
       messages: this.messages,
       workingSet: this.workingSet.all(),
@@ -441,21 +450,30 @@ export class DawnAgent {
       compactionSavings,
       loadedSkills: this.skillBuffer.loaded(),
       naive: this.naive,
-    })
-    this.latestContextPlan = built.plan
-    if (!this.naive && built.plan.totalEstimatedTokens > this.tokenBudget) {
-      throw new Error(
-        `Context budget exceeded: estimated ${built.plan.totalEstimatedTokens} tokens > budget ${this.tokenBudget}. ` +
-          "Raise --budget or narrow the request.",
-      )
+      creditedSummaryPaths: this.creditedSummaryPaths,
     }
+    let built = buildRequestMessages(buildArgs)
+    if (!this.naive && built.plan.totalEstimatedTokens > this.tokenBudget) {
+      // Degrade instead of failing closed: retry bare (no working set, no summaries).
+      // If even that overflows the estimate, send anyway — chars/4 is approximate and
+      // a real provider overflow is already handled by compaction + retry downstream.
+      built = buildRequestMessages({ ...buildArgs, workingSet: [], summaries: [] })
+      if (built.plan.totalEstimatedTokens > this.tokenBudget) {
+        this.bus.emit({
+          type: "status",
+          message: `context estimate ${built.plan.totalEstimatedTokens} tokens exceeds budget ${this.tokenBudget} — sending trimmed request anyway`,
+        })
+      }
+    }
+    this.latestContextPlan = built.plan
+    for (const p of built.keptSummaryPaths) this.creditedSummaryPaths.add(p)
     this.estimatedSavedTokens += built.plan.savingsEstimate + built.plan.substitutionSavings
     this.inputTokenEstimates.push(built.plan.totalEstimatedTokens)
     this.contextStore.recordContextPlan(this.opts.sessionId, built.plan)
 
     // If history turns were dropped, distill them into session memory so the thread isn't lost.
     if (!this.naive && built.keptHistoryMessages.length < this.messages.length) {
-      const newMemory = distillDroppedTurns(this.messages, built.keptHistoryMessages, this.sessionMemoryText)
+      const newMemory = distillDroppedTurns(this.messages, built.keptHistoryMessages, this.splicedMemoryText)
       if (newMemory && newMemory !== this.sessionMemoryText) {
         this.sessionMemoryText = newMemory
         this.workingSet.add({
@@ -482,11 +500,12 @@ export class DawnAgent {
     const { bus, opts } = this
 
     this.turnIndex++
-    this.turnCheckpointTaken = false
     const effectiveText = opts.gate.mode === "plan" ? `${text}\n\n${PLAN_MODE_REMINDER}` : text
 
     if (images && images.length > 0) {
-      const content: Array<{ type: "text"; text: string } | { type: "image"; image: string; mediaType: string }> = [
+      const content: Array<
+        { type: "text"; text: string } | { type: "image"; image: string; mediaType: string }
+      > = [
         { type: "text", text: effectiveText },
         ...images.map((img) => ({
           type: "image" as const,
@@ -551,386 +570,412 @@ export class DawnAgent {
       })
 
       try {
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const { providerId } = parseModelRef(activeRef)
-        // Behavior (reasoning handling, tool repair, caching, prompt scaffolding)
-        // is driven by the model's profile, resolved per attempt so an auto-switch
-        // to a different model picks up the right behavior.
-        const profile = resolveProfile(activeRef, opts.catalog)
-        // Models on OpenAI-compatible providers (e.g. Groq) reject reasoning_content
-        // in messages even when their own models produced it in a previous step.
-        const needsReasoningStrip = profile.reasoning === "strip"
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          const { providerId } = parseModelRef(activeRef)
+          // Behavior (reasoning handling, tool repair, caching, prompt scaffolding)
+          // is driven by the model's profile, resolved per attempt so an auto-switch
+          // to a different model picks up the right behavior.
+          const profile = resolveProfile(activeRef, opts.catalog)
+          // Models on OpenAI-compatible providers (e.g. Groq) reject reasoning_content
+          // in messages even when their own models produced it in a previous step.
+          const needsReasoningStrip = profile.reasoning === "strip"
 
-        const { system, messages: requestMsgs } = this.requestMessages(profile)
+          const { system, messages: requestMsgs } = this.requestMessages(profile)
 
-        // Thread reasoning-aware params. Reasoning models (o-series, codex, deepseek-r1, …)
-        // reject temperature and expect max_completion_tokens on OpenAI-compatible transports.
-        const streamParams: Parameters<typeof streamText>[0] = {
-          model: resolved.model,
-          system: system as any,
-          messages: requestMsgs,
-          tools: visibleTools({ ...this.tools, ...this.mcpTools }, opts.gate.mode, opts.config.permissions),
-          experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
-          prepareStep:
-            needsReasoningStrip || forceRepoOverview
-              ? ({ stepNumber, messages }) => {
-                  const overrides: {
-                    activeTools?: string[]
-                    toolChoice?: { type: "tool"; toolName: string }
-                    messages?: ModelMessage[]
-                  } = {}
+          // Thread reasoning-aware params. Reasoning models (o-series, codex, deepseek-r1, …)
+          // reject temperature and expect max_completion_tokens on OpenAI-compatible transports.
+          const streamParams: Parameters<typeof streamText>[0] = {
+            model: resolved.model,
+            system: system as any,
+            messages: requestMsgs,
+            // Errors surface as fullStream "error" parts and are classified below; the SDK
+            // default onError would ALSO dump the raw stack to the console (ugly in the TUI).
+            onError: () => {},
+            tools: visibleTools({ ...this.tools, ...this.mcpTools }, opts.gate.mode, opts.config.permissions),
+            experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
+            prepareStep:
+              needsReasoningStrip || forceRepoOverview
+                ? ({ stepNumber, messages }) => {
+                    const overrides: {
+                      activeTools?: string[]
+                      toolChoice?: { type: "tool"; toolName: string }
+                      messages?: ModelMessage[]
+                    } = {}
 
-                  if (forceRepoOverview && stepNumber === 0) {
-                    overrides.activeTools = [REPO_OVERVIEW_TOOL]
-                    overrides.toolChoice = { type: "tool", toolName: REPO_OVERVIEW_TOOL }
+                    if (forceRepoOverview && stepNumber === 0) {
+                      overrides.activeTools = [REPO_OVERVIEW_TOOL]
+                      overrides.toolChoice = { type: "tool", toolName: REPO_OVERVIEW_TOOL }
+                    }
+
+                    if (needsReasoningStrip && stepNumber > 0) {
+                      const stripped = stripReasoningParts(messages)
+                      if (stripped !== messages) overrides.messages = stripped
+                    }
+
+                    return Object.keys(overrides).length > 0 ? overrides : undefined
                   }
-
-                  if (needsReasoningStrip && stepNumber > 0) {
-                    const stripped = stripReasoningParts(messages)
-                    if (stripped !== messages) overrides.messages = stripped
-                  }
-
-                  return Object.keys(overrides).length > 0 ? overrides : undefined
-                }
-              : undefined,
-          stopWhen: stepCountIs(MAX_STEPS),
-          abortSignal: signal,
-          onStepFinish: (step) => {
-            // Persist after every clean step boundary so a crash/abort never loses completed work.
-            this.messages.push(...step.response.messages)
-            stepMsgsPushed += step.response.messages.length
-            this.persist()
-          },
-        }
-        if (profile.params.temperature !== undefined) {
-          streamParams.temperature = profile.params.temperature
-        }
-        if (profile.params.maxTokens !== undefined) {
-          streamParams.maxOutputTokens = profile.params.maxTokens
-        }
-        if (profile.params.useMaxCompletionTokens) {
-          // OpenAI reasoning models require max_completion_tokens; pass via providerOptions
-          // so it reaches the underlying SDK without conflicting with maxOutputTokens.
-          streamParams.providerOptions = {
-            ...streamParams.providerOptions,
-            openai: { ...(streamParams.providerOptions?.openai as object | undefined), maxCompletionTokens: 16384 },
-            "openai-compatible": {
-              ...(streamParams.providerOptions?.["openai-compatible"] as object | undefined),
-              max_completion_tokens: 16384,
+                : undefined,
+            stopWhen: stepCountIs(MAX_STEPS),
+            abortSignal: signal,
+            onStepFinish: (step) => {
+              // Persist after every clean step boundary so a crash/abort never loses completed work.
+              this.messages.push(...step.response.messages)
+              stepMsgsPushed += step.response.messages.length
+              this.persist()
             },
           }
-        }
-        const result = streamText(streamParams)
-
-        let retryableFailure: unknown
-        let switchFailure: ClassifiedFailure | undefined
-        let overflowFailure = false
-        let hasOutput = false
-        let stepMsgsPushed = 0
-        // Set when a stream error is emitted directly (not retryable, not a switch trigger).
-        // Prevents falling through to the success path after a visible error.
-        let hadStreamError = false
-        // Stash inputs at tool-call time so tool-result can build a semantic summary
-        const toolInputs = new Map<string, unknown>()
-        // Loop-detection: count failures per unique (tool, input) signature
-        const failureCounts = new Map<string, number>()
-        let stepCount = 0
-
-        for await (const part of result.fullStream) {
-          switch (part.type) {
-            case "text-delta":
-              hasOutput = true
-              bus.emit({ type: "text-delta", text: part.text })
-              break
-            case "text-end":
-              bus.emit({ type: "text-end" })
-              break
-            case "reasoning-delta":
-              hasOutput = true
-              bus.emit({ type: "reasoning-delta", text: part.text })
-              break
-            case "tool-call":
-              hasOutput = true
-              toolInputs.set(part.toolCallId, part.input)
-              bus.emit({
-                type: "tool-start",
-                id: part.toolCallId,
-                name: part.toolName,
-                title: toolTitle(part.toolName, part.input),
-                preview: toolPreview(part.toolName, part.input),
-              })
-              break
-            case "tool-result": {
-              const storedInput = toolInputs.get(part.toolCallId)
-              const echo = truncateMiddle(String(part.output ?? ""), 4000)
-              this.workingSet.add({
-                kind: "tool-result",
-                content: echo,
-                reason: `${part.toolName} output`,
-                ttl: ttlForKind(this.contextMode, "tool-result"),
-                estimatedTokens: estimateTokens(echo),
-              })
-              bus.emit({
-                type: "tool-end",
-                id: part.toolCallId,
-                name: part.toolName,
-                title: toolTitle(part.toolName, storedInput ?? part.input),
-                summary: toolResultSummary(part.toolName, storedInput ?? part.input, part.output),
-                isError: false,
-              })
-              break
-            }
-            case "tool-error": {
-              const errMsg = part.error instanceof Error ? part.error.message : String(part.error)
-              // Track repeated failures: same tool + same input args = same signature
-              const sig = `${part.toolName}:${JSON.stringify(toolInputs.get(part.toolCallId) ?? part.input)}`
-              const prevCount = failureCounts.get(sig) ?? 0
-              failureCounts.set(sig, prevCount + 1)
-              bus.emit({
-                type: "tool-end",
-                id: part.toolCallId,
-                name: part.toolName,
-                title: toolTitle(part.toolName, toolInputs.get(part.toolCallId) ?? part.input),
-                summary: errMsg,
-                isError: true,
-              })
-              // Edit multi-match: inject re-read guidance immediately on first failure, don't wait for MAX_REPEATED_FAILURES
-              if (part.toolName === "edit" && errMsg.includes("matches") && errMsg.includes("times")) {
-                const input = toolInputs.get(part.toolCallId) ?? part.input
-                const fp = (input as Record<string, unknown>)?.filePath ?? "the file"
-                this.workingSet.add({
-                  kind: "tool-result",
-                  content:
-                    `[Dawn edit-hint] oldString appears multiple times in ${fp}. ` +
-                    `You must re-read the file around the target lines, then expand oldString to include ` +
-                    `3–5 lines of surrounding context that uniquely identify the location.`,
-                  reason: "edit multi-match hint",
-                  ttl: 1,
-                  estimatedTokens: 60,
-                })
-              }
-              if (prevCount + 1 >= MAX_REPEATED_FAILURES) {
-                // Break the loop — inject a reconsider message so the model can try a different approach
-                bus.emit({
-                  type: "status",
-                  message: `${part.toolName} failed ${prevCount + 1} times in a row — asking the model to reconsider`,
-                })
-                // This surfaces as a visible error to the model in its next step
-                this.workingSet.add({
-                  kind: "tool-result",
-                  content:
-                    `[Dawn loop-break] "${part.toolName}" has failed ${prevCount + 1} times with the same arguments. ` +
-                    `Stop repeating this call. Step back, reconsider your approach, and try a meaningfully different strategy. ` +
-                    `If you're stuck, surface the blocker to the user with ask_user instead of retrying.`,
-                  reason: "loop-break injection",
-                  ttl: 2,
-                  estimatedTokens: 100,
-                })
-              }
-              break
-            }
-            case "finish-step": {
-              stepCount++
-              const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
-              this.ledger.record(usage)
-              if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
-                this.highestCostTurn = {
-                  providerId: usage.providerId,
-                  modelId: usage.modelId,
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  cost: usage.cost,
-                }
-              }
-              if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, usage)
-              bus.emit({ type: "step-finish", usage })
-              break
-            }
-            case "error": {
-              const classified = classifyFailure(part.error)
-              if (classified.kind === "retryable-tool") {
-                retryableFailure = part.error
-              } else if (
-                classified.kind === "free-tier-deprecated" ||
-                classified.kind === "model-unavailable" ||
-                classified.kind === "rate-limit"
-              ) {
-                // Trigger silent switch when the provider says the model is gone, suggests a
-                // replacement, or has rate-limited this model — switching providers is the
-                // correct recovery for all three cases.
-                switchFailure = classified
-              } else if (classified.kind === "context-overflow" && compactionRetries < MAX_COMPACTIONS) {
-                // Context overflow: attempt LLM-backed compaction then retry rather than dying.
-                overflowFailure = true
-              } else {
-                // plan-restricted, auth, context-overflow (retries exhausted), unknown: surface
-                // directly and mark that we had a real stream error so we don't fall
-                // through to the success path after this.
-                bus.emit({ type: "error", message: classified.message })
-                hadStreamError = true
-              }
-              break
-            }
-            default:
-              break
+          if (profile.params.temperature !== undefined) {
+            streamParams.temperature = profile.params.temperature
           }
-        }
-
-        // Context-overflow recovery: compact history via LLM and retry.
-        if (overflowFailure) {
-          compactionRetries++
-          bus.emit({ type: "status", message: "context overflow — compacting history and retrying…" })
-          try {
-            const { summary, messages: compacted } = await compactViaLlm(
-              this.messages,
-              this.modelRef,
-              opts.catalog,
-              opts.config,
-            )
-            this.messages = compacted
-            if (summary) {
-              this.sessionMemoryText = summary
-              this.workingSet.add({
-                kind: "summary",
-                summary,
-                reason: "overflow compaction",
-                ttl: 9999,
-                estimatedTokens: estimateTokens(summary),
-              })
+          if (profile.params.maxTokens !== undefined) {
+            streamParams.maxOutputTokens = profile.params.maxTokens
+          }
+          if (profile.params.useMaxCompletionTokens) {
+            // OpenAI reasoning models require max_completion_tokens; pass via providerOptions
+            // so it reaches the underlying SDK without conflicting with maxOutputTokens.
+            streamParams.providerOptions = {
+              ...streamParams.providerOptions,
+              openai: {
+                ...(streamParams.providerOptions?.openai as object | undefined),
+                maxCompletionTokens: 16384,
+              },
+              "openai-compatible": {
+                ...(streamParams.providerOptions?.["openai-compatible"] as object | undefined),
+                max_completion_tokens: 16384,
+              },
             }
-            this.persist()
-          } catch {
-            // Compaction itself failed; surface the original overflow error.
-            bus.emit({ type: "error", message: "Context window is full and compaction failed. Try a model with a larger context or clear history." })
+          }
+          const result = streamText(streamParams)
+
+          let retryableFailure: unknown
+          let switchFailure: ClassifiedFailure | undefined
+          let overflowFailure = false
+          let hasOutput = false
+          let stepMsgsPushed = 0
+          // Set when a stream error is emitted directly (not retryable, not a switch trigger).
+          // Prevents falling through to the success path after a visible error.
+          let hadStreamError = false
+          // Stash inputs at tool-call time so tool-result can build a semantic summary
+          const toolInputs = new Map<string, unknown>()
+          // Loop-detection: count failures per unique (tool, input) signature
+          const failureCounts = new Map<string, number>()
+          let stepCount = 0
+
+          for await (const part of result.fullStream) {
+            switch (part.type) {
+              case "text-delta":
+                hasOutput = true
+                bus.emit({ type: "text-delta", text: part.text })
+                break
+              case "text-end":
+                bus.emit({ type: "text-end" })
+                break
+              case "reasoning-delta":
+                hasOutput = true
+                bus.emit({ type: "reasoning-delta", text: part.text })
+                break
+              case "tool-call":
+                hasOutput = true
+                toolInputs.set(part.toolCallId, part.input)
+                bus.emit({
+                  type: "tool-start",
+                  id: part.toolCallId,
+                  name: part.toolName,
+                  title: toolTitle(part.toolName, part.input),
+                  preview: toolPreview(part.toolName, part.input),
+                })
+                break
+              case "tool-result": {
+                const storedInput = toolInputs.get(part.toolCallId)
+                const echo = truncateMiddle(String(part.output ?? ""), 4000)
+                this.workingSet.add({
+                  kind: "tool-result",
+                  content: echo,
+                  reason: `${part.toolName} output`,
+                  ttl: ttlForKind(this.contextMode, "tool-result"),
+                  estimatedTokens: estimateTokens(echo),
+                })
+                bus.emit({
+                  type: "tool-end",
+                  id: part.toolCallId,
+                  name: part.toolName,
+                  title: toolTitle(part.toolName, storedInput ?? part.input),
+                  summary: toolResultSummary(part.toolName, storedInput ?? part.input, part.output),
+                  isError: false,
+                })
+                break
+              }
+              case "tool-error": {
+                const errMsg = part.error instanceof Error ? part.error.message : String(part.error)
+                // Track repeated failures: same tool + same input args = same signature
+                const sig = `${part.toolName}:${JSON.stringify(toolInputs.get(part.toolCallId) ?? part.input)}`
+                const prevCount = failureCounts.get(sig) ?? 0
+                failureCounts.set(sig, prevCount + 1)
+                bus.emit({
+                  type: "tool-end",
+                  id: part.toolCallId,
+                  name: part.toolName,
+                  title: toolTitle(part.toolName, toolInputs.get(part.toolCallId) ?? part.input),
+                  summary: errMsg,
+                  isError: true,
+                })
+                // Edit multi-match: inject re-read guidance immediately on first failure, don't wait for MAX_REPEATED_FAILURES
+                if (part.toolName === "edit" && errMsg.includes("matches") && errMsg.includes("times")) {
+                  const input = toolInputs.get(part.toolCallId) ?? part.input
+                  const fp = (input as Record<string, unknown>)?.filePath ?? "the file"
+                  this.workingSet.add({
+                    kind: "tool-result",
+                    content:
+                      `[Dawn edit-hint] oldString appears multiple times in ${fp}. ` +
+                      `You must re-read the file around the target lines, then expand oldString to include ` +
+                      `3–5 lines of surrounding context that uniquely identify the location.`,
+                    reason: "edit multi-match hint",
+                    ttl: 1,
+                    estimatedTokens: 60,
+                  })
+                }
+                if (prevCount + 1 >= MAX_REPEATED_FAILURES) {
+                  // Break the loop — inject a reconsider message so the model can try a different approach
+                  bus.emit({
+                    type: "status",
+                    message: `${part.toolName} failed ${prevCount + 1} times in a row — asking the model to reconsider`,
+                  })
+                  // This surfaces as a visible error to the model in its next step
+                  this.workingSet.add({
+                    kind: "tool-result",
+                    content:
+                      `[Dawn loop-break] "${part.toolName}" has failed ${prevCount + 1} times with the same arguments. ` +
+                      `Stop repeating this call. Step back, reconsider your approach, and try a meaningfully different strategy. ` +
+                      `If you're stuck, surface the blocker to the user with ask_user instead of retrying.`,
+                    reason: "loop-break injection",
+                    ttl: 2,
+                    estimatedTokens: 100,
+                  })
+                }
+                break
+              }
+              case "finish-step": {
+                stepCount++
+                const usage = toStepUsage(part.usage, providerId, resolved.modelId, resolved.info)
+                this.ledger.record(usage)
+                if (!this.highestCostTurn || usage.cost > this.highestCostTurn.cost) {
+                  this.highestCostTurn = {
+                    providerId: usage.providerId,
+                    modelId: usage.modelId,
+                    inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens,
+                    cost: usage.cost,
+                  }
+                }
+                if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, usage)
+                bus.emit({ type: "step-finish", usage })
+                break
+              }
+              case "error": {
+                const classified = classifyFailure(part.error)
+                if (classified.kind === "retryable-tool") {
+                  retryableFailure = part.error
+                } else if (
+                  classified.kind === "free-tier-deprecated" ||
+                  classified.kind === "model-unavailable" ||
+                  classified.kind === "rate-limit"
+                ) {
+                  // Trigger silent switch when the provider says the model is gone, suggests a
+                  // replacement, or has rate-limited this model — switching providers is the
+                  // correct recovery for all three cases.
+                  switchFailure = classified
+                } else if (classified.kind === "context-overflow" && compactionRetries < MAX_COMPACTIONS) {
+                  // Context overflow: attempt LLM-backed compaction then retry rather than dying.
+                  overflowFailure = true
+                } else {
+                  // plan-restricted, auth, context-overflow (retries exhausted), unknown: surface
+                  // directly and mark that we had a real stream error so we don't fall
+                  // through to the success path after this.
+                  bus.emit({ type: "error", message: classified.message })
+                  hadStreamError = true
+                }
+                break
+              }
+              default:
+                break
+            }
+          }
+
+          // Context-overflow recovery: compact history via LLM and retry.
+          if (overflowFailure) {
+            compactionRetries++
+            bus.emit({ type: "status", message: "context overflow — compacting history and retrying…" })
+            try {
+              const { summary, messages: compacted } = await compactViaLlm(
+                this.messages,
+                this.modelRef,
+                opts.catalog,
+                opts.config,
+              )
+              this.messages = compacted
+              if (summary) {
+                // Accumulate: a later compaction summarizes only the current messages,
+                // not the turns an earlier compaction already spliced out.
+                this.splicedMemoryText = this.splicedMemoryText
+                  ? `${this.splicedMemoryText}\n${summary}`
+                  : summary
+                this.sessionMemoryText = summary
+                this.workingSet.add({
+                  kind: "summary",
+                  summary,
+                  reason: "overflow compaction",
+                  ttl: 9999,
+                  estimatedTokens: estimateTokens(summary),
+                })
+              }
+              this.persist()
+            } catch {
+              // Compaction itself failed; surface the original overflow error.
+              bus.emit({
+                type: "error",
+                message:
+                  "Context window is full and compaction failed. Try a model with a larger context or clear history.",
+              })
+              this.workingSet.decrementLeases()
+              bus.emit({ type: "turn-end" })
+              unsubTodos()
+              return
+            }
+            bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+            continue
+          }
+
+          // A real stream error was already emitted — don't fall through to the success path.
+          if (hadStreamError) {
+            unsubTodos()
             this.workingSet.decrementLeases()
             bus.emit({ type: "turn-end" })
-            unsubTodos()
             return
           }
-          bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
-          continue
-        }
 
-        // A real stream error was already emitted — don't fall through to the success path.
-        if (hadStreamError) {
-          unsubTodos()
-          this.workingSet.decrementLeases()
-          bus.emit({ type: "turn-end" })
-          return
-        }
-
-        // A clean stream that produced nothing: retry the same model once, then surface
-        // a diagnostic error. Empty responses are almost always a request-shaping issue
-        // (missing headers, wrong params) — not a reason to silently swap models.
-        if (!hasOutput && !retryableFailure && !switchFailure) {
-          if (noOutputRetries === 0) {
-            noOutputRetries++
-            bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
-            bus.emit({ type: "status", message: `${activeRef} returned an empty response — retrying…` })
-            continue
-          }
-          // Second empty response: gather diagnostics and surface a real error.
-          let finishReason: string | undefined
-          let warnings: string | undefined
-          try {
-            finishReason = (await result.finishReason) ?? undefined
-            const w = await result.warnings
-            if (w && w.length > 0) {
-              warnings = w.map((x) => ("message" in x ? x.message : JSON.stringify(x))).join("; ")
-            }
-          } catch {
-            // Diagnostics are best-effort; don't let them block the error path.
-          }
-          const parts = [`\`${activeRef}\` returned an empty response`]
-          if (finishReason && finishReason !== "unknown") parts.push(`finish reason: ${finishReason}`)
-          if (warnings) parts.push(`provider warnings: ${warnings}`)
-          parts.push(
-            "Check that this model is available on your account and that your API key has access to it.",
-          )
-          unsubTodos()
-          bus.emit({ type: "error", message: parts.join(" — ") })
-          this.workingSet.decrementLeases()
-          bus.emit({ type: "turn-end" })
-          return
-        }
-
-        // ── Same-model retry (Groq tool-call 400) ────────────────────────────
-        if (retryableFailure !== undefined) {
-          bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
-          if (attempt === 0) {
-            bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
-            continue
-          }
-          unsubTodos()
-          bus.emit({
-            type: "error",
-            message: retryableFailure instanceof Error ? retryableFailure.message : String(retryableFailure),
-          })
-          this.workingSet.decrementLeases()
-          bus.emit({ type: "turn-end" })
-          return
-        }
-
-        // ── Auto-switch to a different model ─────────────────────────────────
-        if (switchFailure !== undefined) {
-          // Reproducibility-sensitive teams can opt out of silent model switching.
-          if (opts.config.autoFallback !== false && switchCount < MAX_SWITCHES) {
-            const fallback = chooseFallback(activeRef, opts.catalog, opts.config, switchFailure.suggestedSlug)
-            if (fallback) {
-              const fromRef = activeRef
-              activeRef = fallback
-              resolved = resolveModel(fallback, opts.catalog, opts.config)
-              if (opts.gate.mode === "plan" && this.planModelRef) {
-                this.planModelRef = fallback
-              } else {
-                this.modelRef = fallback
-              }
-              switchCount++
-              bus.emit({ type: "attempt-reset", reason: "model-switch" })
-              bus.emit({ type: "model-switched", from: fromRef, to: fallback, reason: switchFailure.message })
+          // A clean stream that produced nothing: retry the same model once, then surface
+          // a diagnostic error. Empty responses are almost always a request-shaping issue
+          // (missing headers, wrong params) — not a reason to silently swap models.
+          if (!hasOutput && !retryableFailure && !switchFailure) {
+            if (noOutputRetries === 0) {
+              noOutputRetries++
+              bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+              bus.emit({ type: "status", message: `${activeRef} returned an empty response — retrying…` })
               continue
             }
+            // Second empty response: gather diagnostics and surface a real error.
+            let finishReason: string | undefined
+            let warnings: string | undefined
+            try {
+              finishReason = (await result.finishReason) ?? undefined
+              const w = await result.warnings
+              if (w && w.length > 0) {
+                warnings = w.map((x) => ("message" in x ? x.message : JSON.stringify(x))).join("; ")
+              }
+            } catch {
+              // Diagnostics are best-effort; don't let them block the error path.
+            }
+            const parts = [`\`${activeRef}\` returned an empty response`]
+            if (finishReason && finishReason !== "unknown") parts.push(`finish reason: ${finishReason}`)
+            if (warnings) parts.push(`provider warnings: ${warnings}`)
+            parts.push(
+              "Check that this model is available on your account and that your API key has access to it.",
+            )
+            unsubTodos()
+            bus.emit({ type: "error", message: parts.join(" — ") })
+            this.workingSet.decrementLeases()
+            bus.emit({ type: "turn-end" })
+            return
           }
-          // No fallback available or cap reached
+
+          // ── Same-model retry (Groq tool-call 400) ────────────────────────────
+          if (retryableFailure !== undefined) {
+            bus.emit({ type: "attempt-reset", reason: "retryable-tool-failure" })
+            if (attempt === 0) {
+              bus.emit({ type: "status", message: "provider rejected a tool call — retrying…" })
+              continue
+            }
+            unsubTodos()
+            bus.emit({
+              type: "error",
+              message:
+                retryableFailure instanceof Error ? retryableFailure.message : String(retryableFailure),
+            })
+            this.workingSet.decrementLeases()
+            bus.emit({ type: "turn-end" })
+            return
+          }
+
+          // ── Auto-switch to a different model ─────────────────────────────────
+          if (switchFailure !== undefined) {
+            // Reproducibility-sensitive teams can opt out of silent model switching.
+            if (opts.config.autoFallback !== false && switchCount < MAX_SWITCHES) {
+              const fallback = chooseFallback(
+                activeRef,
+                opts.catalog,
+                opts.config,
+                switchFailure.suggestedSlug,
+              )
+              if (fallback) {
+                const fromRef = activeRef
+                activeRef = fallback
+                resolved = resolveModel(fallback, opts.catalog, opts.config)
+                if (opts.gate.mode === "plan" && this.planModelRef) {
+                  this.planModelRef = fallback
+                } else {
+                  this.modelRef = fallback
+                }
+                switchCount++
+                bus.emit({ type: "attempt-reset", reason: "model-switch" })
+                bus.emit({
+                  type: "model-switched",
+                  from: fromRef,
+                  to: fallback,
+                  reason: switchFailure.message,
+                })
+                continue
+              }
+            }
+            // No fallback available or cap reached
+            unsubTodos()
+            bus.emit({ type: "error", message: switchFailure.message })
+            this.workingSet.decrementLeases()
+            bus.emit({ type: "turn-end" })
+            return
+          }
+
+          // ── Success ───────────────────────────────────────────────────────────
           unsubTodos()
-          bus.emit({ type: "error", message: switchFailure.message })
+          const response = await result.response
+          // onStepFinish persists incrementally; push any messages it didn't cover
+          // (e.g., single-step providers that don't fire onStepFinish for the last step).
+          const remaining = response.messages.slice(stepMsgsPushed)
+          if (remaining.length > 0) {
+            this.messages.push(...remaining)
+            this.persist()
+          }
           this.workingSet.decrementLeases()
+          // If the model ran out of steps with unfinished work, surface it so the user can continue
+          const hasOpenTodos = latestTodos.some((t) => t.status === "pending" || t.status === "in_progress")
+          if (stepCount >= MAX_STEPS) {
+            bus.emit({ type: "step-limit", stepCount, hasOpenTodos })
+          }
+          // on-turn-end hooks: run after turn completes, show output in transcript
+          const onTurnEndCmds = opts.config.hooks?.["on-turn-end"]
+          if (onTurnEndCmds && onTurnEndCmds.length > 0) {
+            const hookResults = await runHooks(onTurnEndCmds, this.cwd)
+            const hookOutput = formatHookResults(hookResults)
+            if (hookOutput.trim()) {
+              bus.emit({ type: "status", message: hookOutput })
+            }
+          }
           bus.emit({ type: "turn-end" })
           return
         }
 
-        // ── Success ───────────────────────────────────────────────────────────
-        unsubTodos()
-        const response = await result.response
-        // onStepFinish persists incrementally; push any messages it didn't cover
-        // (e.g., single-step providers that don't fire onStepFinish for the last step).
-        const remaining = response.messages.slice(stepMsgsPushed)
-        if (remaining.length > 0) {
-          this.messages.push(...remaining)
-          this.persist()
-        }
+        // All attempts exhausted without completing
         this.workingSet.decrementLeases()
-        // If the model ran out of steps with unfinished work, surface it so the user can continue
-        const hasOpenTodos = latestTodos.some((t) => t.status === "pending" || t.status === "in_progress")
-        if (stepCount >= MAX_STEPS) {
-          bus.emit({ type: "step-limit", stepCount, hasOpenTodos })
-        }
-        // on-turn-end hooks: run after turn completes, show output in transcript
-        const onTurnEndCmds = opts.config.hooks?.["on-turn-end"]
-        if (onTurnEndCmds && onTurnEndCmds.length > 0) {
-          const hookResults = await runHooks(onTurnEndCmds, this.cwd)
-          const hookOutput = formatHookResults(hookResults)
-          if (hookOutput.trim()) {
-            bus.emit({ type: "status", message: hookOutput })
-          }
-        }
         bus.emit({ type: "turn-end" })
-        return
-      }
-
-      // All attempts exhausted without completing
-      this.workingSet.decrementLeases()
-      bus.emit({ type: "turn-end" })
       } finally {
         unsubTodos()
       }

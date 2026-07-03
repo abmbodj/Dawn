@@ -161,6 +161,8 @@ export function ProviderConnect({
   }
 
   const startGithubOAuth = (prov: ProviderOption) => {
+    const clientId = githubClientId
+    if (!clientId) return
     setOauthData(null)
     setOauthError(null)
     setBrowserOpenStatus(null)
@@ -169,7 +171,7 @@ export function ProviderConnect({
     oauthAbortRef.current = abort
     ;(async () => {
       try {
-        const flow = await startDeviceFlowFn(githubClientId!)
+        const flow = await startDeviceFlowFn(clientId)
         setOauthData(flow)
         const [opened, copied] = await Promise.all([
           openUrl(flow.verificationUri),
@@ -179,7 +181,7 @@ export function ProviderConnect({
           setBrowserOpenStatus(opened ? "opened" : "manual")
           setClipboardStatus(copied ? "copied" : "failed")
         }
-        const token = await pollForTokenFn(githubClientId!, flow.deviceCode, flow.interval, abort.signal)
+        const token = await pollForTokenFn(clientId, flow.deviceCode, flow.interval, abort.signal)
         setApiKey("github-copilot", token)
         onConnected(prov)
       } catch (err: unknown) {

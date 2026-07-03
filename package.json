@@ -17,6 +17,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
+    "preflight": "bun test && bun run typecheck && bun run check",
     "format": "biome format --write .",
     "bench": "bun run bench/run.ts",
     "bench:report": "bun run bench/report.ts"

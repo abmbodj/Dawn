@@ -12,7 +12,33 @@ the token counts straight from each agent's own usage accounting:
 - **`claude`** — Claude Code (`claude -p`) on the same task, when the `claude` CLI is on your
   `PATH`. **Indicative only**, not apples-to-apples: it's a different agent. By default it runs
   on Dawn's model when that's `anthropic/*`; pass `--claude-model <id>` to run it on any other
-  provider (including a free one) — see below.
+  provider (including a free one) — see below. Multi-turn tasks skip this column (`claude -p`
+  is single-shot).
+
+## Task types
+
+- **Single-turn** tasks measure one send: read-heavy `cat`/`grep` work, structural edit checks,
+  and four exact-answer pilots.
+- **Multi-turn** tasks (`mt-*`, `prompts: [...]` in `tasks.ts`) send several user turns to the
+  same agent/session. They are the only place the cross-turn machinery — history trimming,
+  working-set TTLs, session memory, cross-turn prompt caching — actually gets exercised, which
+  is exactly where Dawn is designed to win.
+- Exact-count checks derive their expected numbers **from the pinned worktree itself** at run
+  time (see `countMatchingLines`/`uniqueExportFiles` in `tasks.ts`), so they don't go stale
+  when the pinned ref moves. "Name three X" checks accept *any* correct answer, including ones
+  only visible in a compacted head/tail view — otherwise the check would bias against the very
+  mechanism being measured.
+
+## Model pinning and pacing
+
+- Reps run with `autoFallback` disabled and the harness marks a rep **invalid** if the model
+  changed mid-run — a silently switched model would bench something other than the recorded
+  provenance. (Providers do reject catalog-listed models: GitHub Copilot's chat endpoint
+  returns `model_not_supported` for Claude models unless they're enabled in your Copilot
+  policy settings, even though its `/models` list includes them.)
+- Runs are paced (`PACE_MS`) and rate-limited reps are retried after a pause
+  (`RATE_LIMIT_PAUSE_MS`) — subscription providers like Copilot throttle burst traffic from
+  multi-step agent turns.
 
 ## Run it
 

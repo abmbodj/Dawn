@@ -78,7 +78,14 @@ function fmtInt(n: number): string {
 function taskRow(
   r: TaskResult,
   hasClaude: boolean,
-): { cells: string[]; dawnIn: number; dawnCost: number; naiveIn: number; naiveCost: number; bothOk: boolean } {
+): {
+  cells: string[]
+  dawnIn: number
+  dawnCost: number
+  naiveIn: number
+  naiveCost: number
+  bothOk: boolean
+} {
   const dawnIn = pick(r.modes.dawn, "inputTokens")
   const dawnCached = pick(r.modes.dawn, "cachedInputTokens")
   const dawnCost = pick(r.modes.dawn, "cost")
@@ -125,7 +132,10 @@ function render(data: Results): string {
   const categories = [...new Set(results.map((r) => r.category))]
   const grouped = new Map<string, TaskResult[]>()
   for (const cat of categories) {
-    grouped.set(cat, results.filter((r) => r.category === cat))
+    grouped.set(
+      cat,
+      results.filter((r) => r.category === cat),
+    )
   }
 
   // Per-category and overall accumulators
@@ -139,10 +149,6 @@ function render(data: Results): string {
   const sections: string[] = []
 
   for (const [cat, catResults] of grouped) {
-    let catNaiveIn = 0
-    let catDawnIn = 0
-    let catNaiveCost = 0
-    let catDawnCost = 0
     const catInputRed: number[] = []
     const catCostRed: number[] = []
     const rows: string[] = []
@@ -152,10 +158,6 @@ function render(data: Results): string {
       rows.push(`| ${cells.join(" | ")} |`)
 
       if (bothOk && naiveIn > 0) {
-        catNaiveIn += naiveIn
-        catDawnIn += dawnIn
-        catNaiveCost += naiveCost
-        catDawnCost += dawnCost
         catInputRed.push(((naiveIn - dawnIn) / naiveIn) * 100)
         if (naiveCost > 0) catCostRed.push(((naiveCost - dawnCost) / naiveCost) * 100)
         totalNaiveIn += naiveIn

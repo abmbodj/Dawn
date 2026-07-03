@@ -59,7 +59,19 @@ export interface ToolContext {
 }
 
 /** Tools whose string output can be large enough to be worth content-aware compaction. */
-const HEAVY_OUTPUT_TOOLS = new Set(["bash", "bash_output", "grep", "glob", "ls", "web_fetch", "web_search"])
+const HEAVY_OUTPUT_TOOLS = new Set([
+  "bash",
+  "bash_output",
+  "grep",
+  "glob",
+  "ls",
+  "web_fetch",
+  "web_search",
+  "repo_map",
+  "find_symbol",
+  "git_diff",
+  "git_log",
+])
 
 function resolvePath(cwd: string, p: string): string {
   return path.isAbsolute(p) ? p : path.resolve(cwd, p)
@@ -161,6 +173,8 @@ export function toolTitle(toolName: string, input: any): string {
     case "write":
     case "edit":
       return String(input?.filePath ?? "")
+    case "multi_edit":
+      return `${input?.filePath ?? ""} (${Array.isArray(input?.edits) ? input.edits.length : 0} changes)`
     case "grep":
       return `"${input?.pattern ?? ""}"${input?.path ? ` in ${input.path}` : ""}`
     case "glob":
@@ -284,11 +298,15 @@ export function toolResultSummary(toolName: string, input: any, output: unknown)
       return `${lines} commit${lines === 1 ? "" : "s"}`
     }
     case "git_commit":
-      return out.startsWith("Permission denied") ? "denied" : out.split("\n")[0] ?? "committed"
+      return out.startsWith("Permission denied") ? "denied" : (out.split("\n")[0] ?? "committed")
     case "git_push":
       return out.startsWith("Permission denied") ? "denied" : "pushed"
     case "gh_pr_create":
-      return out.startsWith("Permission denied") ? "denied" : out.startsWith("http") ? "PR created" : out.split("\n")[0] ?? "done"
+      return out.startsWith("Permission denied")
+        ? "denied"
+        : out.startsWith("http")
+          ? "PR created"
+          : (out.split("\n")[0] ?? "done")
     default: {
       const first = out.split("\n")[0] ?? ""
       return first.length > 80 ? `${first.slice(0, 80)}…` : first
@@ -343,7 +361,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const repo_overview = tool({
     description:
-      "Read a compact snapshot of the current repository: top-level files, manifests, README excerpt, workspace packages, scripts, dependencies, and git status. Use this before answering broad project/repo overview questions; use grep/read afterward for exact code claims.",
+      "Compact repo snapshot: top-level files, manifests, README excerpt, packages, scripts, dependencies, git status. Use before broad project questions; then grep/read for exact claims.",
     inputSchema: z.object({}),
     execute: async () => buildRepoOverview(cwd),
   })
@@ -354,7 +372,14 @@ export function createTools(ctx: ToolContext): ToolSet {
     inputSchema: z.object({
       filePath: z.string().describe("Path to the file (relative to cwd or absolute)"),
       offset: z.number().int().min(1).optional().describe("1-based line to start from"),
-      limit: z.number().int().min(1).optional().describe("Max lines to read (default 2000)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          `Max lines per call (default and hard cap ${maxReadLines(mode)} — larger requests are capped; a partial read ends with a "continue with offset=N" marker)`,
+        ),
     }),
     execute: async ({ filePath, offset = 1, limit = maxReadLines(mode) }) => {
       const abs = resolvePath(cwd, filePath)
@@ -433,6 +458,26 @@ export function createTools(ctx: ToolContext): ToolSet {
     },
   })
 
+  // Read-before-edit discipline: the model must have read the file this session
+  // and the content must not have drifted since then.
+  const assertFreshRead = (abs: string, content: string): void => {
+    if (!ctx.readRegistry) return
+    const knownHash = ctx.readRegistry.get(abs)
+    if (!knownHash) {
+      throw new Error(
+        `You haven't read ${relative(cwd, abs)} yet this session. Use the read tool on it first, then retry the edit.`,
+      )
+    }
+    const currentHash = contentHash(content)
+    if (currentHash !== knownHash) {
+      // Update the registry so the next edit attempt doesn't re-flag this
+      ctx.readRegistry.set(abs, currentHash)
+      throw new Error(
+        `${relative(cwd, abs)} has changed since you last read it. Re-read it with the read tool, then retry the edit.`,
+      )
+    }
+  }
+
   const edit = tool({
     description:
       "Replace an exact string in a file. oldString must match exactly once (include surrounding lines to disambiguate) unless replaceAll is set.",
@@ -446,24 +491,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       const abs = resolvePath(cwd, filePath)
       if (!fs.existsSync(abs)) throw new Error(`File not found: ${filePath} — use write to create it`)
       const content = fs.readFileSync(abs, "utf8")
-      // Read-before-edit discipline: the model must have read the file this session
-      // and the content must not have drifted since then.
-      if (ctx.readRegistry) {
-        const knownHash = ctx.readRegistry.get(abs)
-        if (!knownHash) {
-          throw new Error(
-            `You haven't read ${relative(cwd, abs)} yet this session. Use the read tool on it first, then retry the edit.`,
-          )
-        }
-        const currentHash = contentHash(content)
-        if (currentHash !== knownHash) {
-          // Update the registry so the next edit attempt doesn't re-flag this
-          ctx.readRegistry.set(abs, currentHash)
-          throw new Error(
-            `${relative(cwd, abs)} has changed since you last read it. Re-read it with the read tool, then retry the edit.`,
-          )
-        }
-      }
+      assertFreshRead(abs, content)
       let updated: string
       try {
         updated = applyEdit(content, oldString, newString, replaceAll)
@@ -503,6 +531,57 @@ export function createTools(ctx: ToolContext): ToolSet {
       fs.writeFileSync(abs, updated)
       if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(updated))
       return `Edited ${relative(cwd, abs)}`
+    },
+  })
+
+  const multi_edit = tool({
+    description:
+      "Apply several exact-string replacements to ONE file atomically (one permission prompt). Each edit's oldString must match exactly once in the file as left by the previous edits. Prefer this over repeated edit calls when changing multiple spots in the same file.",
+    inputSchema: z.object({
+      filePath: z.string(),
+      edits: z
+        .array(
+          z.object({
+            oldString: z.string(),
+            newString: z.string(),
+            replaceAll: z.boolean().optional(),
+          }),
+        )
+        .min(1),
+    }),
+    execute: async ({ filePath, edits }) => {
+      const abs = resolvePath(cwd, filePath)
+      if (!fs.existsSync(abs)) throw new Error(`File not found: ${filePath} — use write to create it`)
+      const content = fs.readFileSync(abs, "utf8")
+      assertFreshRead(abs, content)
+      // All-or-nothing: apply in memory first; any failure aborts the whole call.
+      let updated = content
+      for (let i = 0; i < edits.length; i++) {
+        const e = edits[i]
+        if (!e) continue
+        try {
+          updated = applyEdit(updated, e.oldString, e.newString, e.replaceAll)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          throw new Error(
+            `multi_edit hunk ${i + 1}/${edits.length} failed: ${msg}\n` +
+              `No changes were written. Fix that hunk (or use single edit calls for detailed match hints) and retry.`,
+          )
+        }
+      }
+      const preview = edits
+        .map((e) => toolPreview("edit", e))
+        .filter(Boolean)
+        .join("\n---\n")
+      const ok = await gate.ask({
+        tool: "edit",
+        title: `Edit ${relative(cwd, abs)} (${edits.length} changes)`,
+        detail: preview,
+      })
+      if (!ok) return DENIED
+      fs.writeFileSync(abs, updated)
+      if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(updated))
+      return `Applied ${edits.length} edits to ${relative(cwd, abs)}`
     },
   })
 
@@ -612,8 +691,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const ask_user = tool({
     description:
-      "Ask the user a multiple-choice question to resolve a decision only they can make. " +
-      "Use sparingly — only when the right path is genuinely ambiguous and acting without input would be risky.",
+      "Ask the user a multiple-choice question to resolve a decision only they can make; use sparingly.",
     inputSchema: z.object({
       question: z.string().describe("The question to ask the user"),
       options: z.array(z.string()).min(2).max(9).describe("The choices to present (2–9 items)"),
@@ -631,8 +709,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const exit_plan_mode = tool({
     description:
-      "Call this tool only while in plan mode, after you have researched the task and presented a complete plan. " +
-      "It shows the plan to the user for approval before any files are modified.",
+      "Call only in plan mode, after presenting a complete plan; shows it to the user for approval before any files change.",
     inputSchema: z.object({
       plan: z.string().describe("The complete plan to present for user approval"),
     }),
@@ -654,9 +731,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const todo_write = tool({
     description:
-      "Record or update the task checklist for the current multi-step work. Pass the FULL list every call (it replaces the previous one). " +
-      "content = short imperative ('Add --json flag'); activeForm = its present-continuous form ('Adding --json flag'); keep exactly one item in_progress. " +
-      "Use this for tasks with 3+ distinct steps and update it as you finish each step. Skip it for trivial or single-step work.",
+      "Record or update the task checklist. Pass the FULL list every call (it replaces the previous one). content = short imperative; activeForm = its present-continuous form; keep exactly one item in_progress. Use for tasks with 3+ steps; skip for trivial work.",
     inputSchema: z.object({
       todos: z
         .array(
@@ -682,7 +757,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const web_fetch = tool({
     description:
-      "Fetch an exact URL and return its text content (HTML stripped). Use before relying on user-provided links, documentation, changelogs, or URLs returned by search; if fetching fails, report that instead of simulating content.",
+      "Fetch a URL and return its text content (HTML stripped). Use before relying on links or docs; if fetching fails, report that instead of simulating content.",
     inputSchema: z.object({
       url: z.string().url().describe("URL to fetch"),
     }),
@@ -720,8 +795,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const web_search = tool({
     description:
-      "Search the web for current or unknown external information, especially latest/current/recent facts. " +
-      "Requires BRAVE_API_KEY or TAVILY_API_KEY; if not configured, use web_fetch with a known URL or say search is unavailable.",
+      "Search the web for current external information. Requires BRAVE_API_KEY or TAVILY_API_KEY; if unconfigured, use web_fetch with a known URL or say search is unavailable.",
     inputSchema: z.object({
       query: z.string().describe("Search query"),
     }),
@@ -772,8 +846,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const bash_background = tool({
     description:
-      "Run a shell command in the background without blocking. Returns a process ID to poll with bash_output or stop with bash_kill. " +
-      "Use for dev servers, file watchers, long builds, or any command you need to run concurrently.",
+      "Run a shell command in the background; returns a process id to poll with bash_output or stop with bash_kill. Use for dev servers, watchers, long builds.",
     inputSchema: z.object({
       command: z.string(),
     }),
@@ -819,8 +892,7 @@ export function createTools(ctx: ToolContext): ToolSet {
   })
 
   const bash_output = tool({
-    description:
-      "Drain and return new output from a background process started with bash (run_in_background). Also reports whether the process is still running.",
+    description: "Return new output from a background process and whether it is still running.",
     inputSchema: z.object({
       id: z.string().describe("Process ID returned by bash when run_in_background was used"),
     }),
@@ -891,8 +963,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const skill = tool({
     description:
-      "Load the full instructions for a named skill. The available skills are listed under # Skills in your system prompt. " +
-      "Call this when the user's task matches a skill's description — the body lands in context for this session.",
+      "Load the full instructions for a named skill (listed under # Skills in the system prompt) when the task matches its description.",
     inputSchema: z.object({
       name: z.string().describe("Skill name from the # Skills catalog"),
     }),
@@ -910,11 +981,12 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const repo_map = tool({
     description:
-      "Return an importance-ranked map of this repository: directories, files, and their key exported symbols. " +
-      "Use this to orient in a large codebase — find where things live before using grep/read for details. " +
-      "Pass expand=true to include more files or a dirFilter to focus on a subdirectory.",
+      "Importance-ranked map of the repo: directories, files, key exported symbols. Use to orient before grep/read. expand=true for more files; dirFilter to focus on a subdirectory.",
     inputSchema: z.object({
-      dirFilter: z.string().optional().describe("Limit output to files under this directory (relative to cwd)"),
+      dirFilter: z
+        .string()
+        .optional()
+        .describe("Limit output to files under this directory (relative to cwd)"),
       expand: z.boolean().optional().describe("Include more files and symbols (default: concise view)"),
     }),
     execute: async ({ dirFilter, expand: expandView }) => {
@@ -924,16 +996,16 @@ export function createTools(ctx: ToolContext): ToolSet {
       const entries = ctx.contextStore.allIndexEntries(cwd)
       if (entries.length === 0) return "repo index is empty — run `dawn index` to build it"
       const filter = dirFilter ? path.resolve(cwd, dirFilter) : null
-      const filtered = filter
-        ? entries.filter((e) => path.resolve(cwd, e.path).startsWith(filter))
-        : entries
+      const filtered = filter ? entries.filter((e) => path.resolve(cwd, e.path).startsWith(filter)) : entries
       // Rank by: has symbols > has imports > file size (larger = more important)
       const ranked = [...filtered].sort((a, b) => {
         const aScore = a.symbols.length * 10 + a.imports.length + Math.min(a.size / 1000, 5)
         const bScore = b.symbols.length * 10 + b.imports.length + Math.min(b.size / 1000, 5)
         return bScore - aScore
       })
-      const lines = [`Repository map (${filtered.length} files, top ${Math.min(maxFiles, ranked.length)} shown):`]
+      const lines = [
+        `Repository map (${filtered.length} files, top ${Math.min(maxFiles, ranked.length)} shown):`,
+      ]
       for (const entry of ranked.slice(0, maxFiles)) {
         const syms = entry.symbols.slice(0, maxSymbolsPerFile)
         const symStr = syms.length > 0 ? `  → ${syms.join(", ")}` : ""
@@ -945,8 +1017,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 
   const find_symbol = tool({
     description:
-      "Find where a symbol (function, class, type, variable, …) is defined and referenced across the repo. " +
-      "Returns definition sites first, then usage sites. Use this before reading a file to jump directly to the right lines.",
+      "Find where a symbol is defined and referenced across the repo (definitions first). Use to jump to the right lines before reading.",
     inputSchema: z.object({
       symbol: z.string().describe("Symbol name to search for"),
       definitionOnly: z.boolean().optional().describe("Only return definition sites, not all usages"),
@@ -1011,6 +1082,7 @@ export function createTools(ctx: ToolContext): ToolSet {
     read,
     write,
     edit,
+    multi_edit,
     bash,
     bash_background,
     bash_output,
@@ -1205,6 +1277,7 @@ function workspacePackageDirs(cwd: string, pkg: PackageJson): string[] {
 const SIDE_EFFECTING_TOOLS = new Set([
   "write",
   "edit",
+  "multi_edit",
   "bash",
   "bash_background",
   "bash_kill",

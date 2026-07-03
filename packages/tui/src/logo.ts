@@ -189,6 +189,6 @@ export const COMPACT_WORDMARK_ROWS: Run[][] = [
 export const WIDE_WORDMARK_ROWS = COMPACT_WORDMARK_ROWS
 export const WIDE_WORDMARK_MIN_COLS = WORDMARK.length + 4
 
-export function wordmarkRows(cols: number): Run[][] {
+export function wordmarkRows(_cols: number): Run[][] {
   return COMPACT_WORDMARK_ROWS
 }

@@ -71,6 +71,17 @@ interface Flags {
 
 const REPO_ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"]).toString().trim()
 
+/** Pause between reps so back-to-back runs don't trip per-minute provider quotas. */
+const PACE_MS = 15_000
+/** How long to wait before retrying a rate-limited rep. */
+const RATE_LIMIT_PAUSE_MS = 120_000
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
+
+function isRateLimited(error?: string): boolean {
+  return !!error && /too many requests|rate.?limit|429/i.test(error)
+}
+
 function parseFlags(argv: string[]): Flags {
   const f: Flags = { smoke: false, reps: 3, ref: "HEAD", noClaude: false, timeoutMs: 180_000 }
   for (let i = 0; i < argv.length; i++) {
@@ -154,7 +165,9 @@ async function runDawn(
     bus,
     gate,
     catalog,
-    config: { ...config, model: modelRef },
+    // autoFallback off: a silently switched model would bench a different model
+    // than the one recorded in provenance, making the rep meaningless.
+    config: { ...config, model: modelRef, autoFallback: false },
     store,
     sessionId: session.id,
     contextStore,
@@ -162,18 +175,27 @@ async function runDawn(
   })
 
   const started = Date.now()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const prompts = task.prompts && task.prompts.length > 0 ? task.prompts : [task.prompt]
   try {
-    await agent.send(task.prompt, controller.signal)
+    for (const prompt of prompts) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        await agent.send(prompt, controller.signal)
+      } finally {
+        clearTimeout(timer)
+      }
+    }
   } catch (err) {
     errored = true
     errorMsg = err instanceof Error ? err.message : String(err)
-  } finally {
-    clearTimeout(timer)
   }
   const ms = Date.now() - started
   const t = agent.ledger.totals()
+  if (agent.modelRef !== modelRef) {
+    errored = true
+    errorMsg = `model switched mid-run to ${agent.modelRef} — rep invalid`
+  }
   const success = !errored && task.check({ transcript, workdir })
   store.close()
   contextStore.close()
@@ -293,22 +315,38 @@ async function main(): Promise<void> {
   for (const task of tasks) {
     const tr: TaskResult = { task: task.id, category: task.category, modes: {} }
     for (const mode of modes) {
+      if (mode === "claude" && task.prompts && task.prompts.length > 1) {
+        console.error(`  ${task.id} · claude: skipped (multi-turn task — claude -p is single-shot)`)
+        continue
+      }
       const reps: RunMetrics[] = []
       for (let r = 0; r < flags.reps; r++) {
-        const wt = makeWorktree(sha)
-        try {
-          const m =
-            mode === "claude"
-              ? runClaude(task, wt.dir, claudeModel as string, flags.timeoutMs)
-              : await runDawn(task, wt.dir, mode === "naive", modelRef, catalog, config, flags.timeoutMs)
-          reps.push(m)
-          const tag = m.success ? "ok" : m.errored ? "err" : "miss"
-          console.error(
-            `  ${task.id} · ${mode} · rep ${r + 1}: ${tag} · ↑${m.inputTokens} (${m.cachedInputTokens} cached) ↓${m.outputTokens} · $${m.cost.toFixed(4)}`,
-          )
-        } finally {
-          wt.cleanup()
+        let m!: RunMetrics
+        for (let attempt = 0; ; attempt++) {
+          const wt = makeWorktree(sha)
+          try {
+            m =
+              mode === "claude"
+                ? runClaude(task, wt.dir, claudeModel as string, flags.timeoutMs)
+                : await runDawn(task, wt.dir, mode === "naive", modelRef, catalog, config, flags.timeoutMs)
+          } finally {
+            wt.cleanup()
+          }
+          if (m.errored && isRateLimited(m.error) && attempt < 4) {
+            console.error(
+              `  ${task.id} · ${mode} · rep ${r + 1}: rate-limited — pausing ${RATE_LIMIT_PAUSE_MS / 1000}s before retry`,
+            )
+            await sleep(RATE_LIMIT_PAUSE_MS)
+            continue
+          }
+          break
         }
+        reps.push(m)
+        const tag = m.success ? "ok" : m.errored ? "err" : "miss"
+        console.error(
+          `  ${task.id} · ${mode} · rep ${r + 1}: ${tag} · ↑${m.inputTokens} (${m.cachedInputTokens} cached) ↓${m.outputTokens} · $${m.cost.toFixed(4)}`,
+        )
+        await sleep(PACE_MS)
       }
       tr.modes[mode] = reps
     }

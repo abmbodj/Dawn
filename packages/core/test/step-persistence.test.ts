@@ -1,7 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 import type { ModelMessage } from "ai"
 
 /**
@@ -13,14 +10,10 @@ import type { ModelMessage } from "ai"
  */
 describe("step-by-step persistence", () => {
   test("accumulating step messages produces a valid transcript", () => {
-    const messages: ModelMessage[] = [
-      { role: "user", content: "Do something" },
-    ]
+    const messages: ModelMessage[] = [{ role: "user", content: "Do something" }]
 
     // Simulate step 1: text-only response
-    const step1Messages: ModelMessage[] = [
-      { role: "assistant", content: "I will help." },
-    ]
+    const step1Messages: ModelMessage[] = [{ role: "assistant", content: "I will help." }]
     messages.push(...step1Messages)
 
     // No orphan tool-call: last assistant message has no pending tool-calls
@@ -45,7 +38,14 @@ describe("step-by-step persistence", () => {
       },
       {
         role: "tool",
-        content: [{ type: "tool-result", toolCallId: "tc1", toolName: "read", output: { type: "text", value: "file contents" } }],
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "tc1",
+            toolName: "read",
+            output: { type: "text", value: "file contents" },
+          },
+        ],
       },
     ]
     messages.push(...step2Messages)

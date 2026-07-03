@@ -117,9 +117,7 @@ export function formatProjectProfileSection(profile: ProjectProfile): string | u
   const slow = profile.checkCommands.filter((c) => c.speed === "slow")
   const lines: string[] = ["# Project checks"]
   if (fast.length > 0) {
-    lines.push(
-      "After making code changes, run these fast checks automatically before closing the turn:",
-    )
+    lines.push("After making code changes, run these fast checks automatically before closing the turn:")
     for (const cmd of fast) lines.push(`- ${cmd.label}: \`${cmd.command}\``)
     lines.push("Fix any failures before finishing.")
   }

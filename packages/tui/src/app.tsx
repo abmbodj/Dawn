@@ -49,7 +49,9 @@ import {
   mentionCaretOffset,
   scanProjectFiles,
 } from "./fileMentions"
+import { loadImageAttachment } from "./imageAttach"
 import { dawnSyntaxStyle } from "./markdown"
+import { SCROLL_STEP } from "./scrollConstants"
 import {
   formatSlashCommandHelp,
   getSlashCommandSuggestions,
@@ -812,8 +814,9 @@ export function App(props: AppProps) {
   const [pluginSetupOpen, setPluginSetupOpen] = useState(false)
   const [setupConfig, setSetupConfig] = useState<DawnConfig>(config)
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>(() => listInstalledPlugins())
-  const [pendingImages, setPendingImages] = useState<Array<{ base64: string; mimeType: string; name: string }>>([])
-
+  const [pendingImages, setPendingImages] = useState<
+    Array<{ base64: string; mimeType: string; name: string }>
+  >([])
 
   // Register plugin commands as dynamic slash commands once on mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1042,6 +1045,50 @@ export function App(props: AppProps) {
           dispatch({ type: "push", item: { kind: "info", text: "started a new session" } })
           break
         }
+        case "resume": {
+          if (busy) {
+            dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt first" } })
+            break
+          }
+          const sessions = store.sessionsForCwd(session.cwd).filter((s) => s.id !== session.id)
+          if (sessions.length === 0) {
+            dispatch({ type: "push", item: { kind: "info", text: "no other sessions for this directory" } })
+            break
+          }
+          const resumeArg = cmd.trim().split(/\s+/)[1]
+          if (!resumeArg) {
+            const lines = sessions
+              .slice(0, 10)
+              .map(
+                (s, i) => `  ${i}  ${new Date(s.updatedAt).toLocaleString()}  "${s.title || "(untitled)"}"`,
+              )
+            dispatch({
+              type: "push",
+              item: { kind: "info", text: `Recent sessions (use /resume N to switch):\n${lines.join("\n")}` },
+            })
+            break
+          }
+          const target = sessions[Number.parseInt(resumeArg, 10)]
+          if (!target) {
+            dispatch({
+              type: "push",
+              item: { kind: "error", text: `no session ${resumeArg} — run /resume to list them` },
+            })
+            break
+          }
+          setSession(target)
+          agent.startSession(target.id, store.loadMessages(target.id))
+          setUsage(store.usageTotals(target.id))
+          dispatch({ type: "reset", items: [] })
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: `Resumed "${target.title || "(untitled)"}" — ${agent.messages.length} message(s) of context restored.`,
+            },
+          })
+          break
+        }
         case "clear":
           dispatch({ type: "reset", items: [] })
           break
@@ -1058,6 +1105,31 @@ export function App(props: AppProps) {
           setSetupConfig(loadConfig(agent.cwd))
           setPluginSetupOpen(true)
           break
+        case "image": {
+          const arg = cmd.trim().split(/\s+/).slice(1).join(" ")
+          if (!arg) {
+            dispatch({
+              type: "push",
+              item: { kind: "info", text: "usage: /image <path> — attaches the image to your next message" },
+            })
+            break
+          }
+          const result = loadImageAttachment(agent.cwd, arg)
+          if (!result.ok) {
+            dispatch({ type: "push", item: { kind: "error", text: result.error } })
+            break
+          }
+          const { base64, mimeType, name, sizeKb } = result.image
+          setPendingImages((prev) => [...prev, { base64, mimeType, name }])
+          dispatch({
+            type: "push",
+            item: {
+              kind: "info",
+              text: `attached ${name} (${sizeKb} KB) — will be sent with your next message`,
+            },
+          })
+          break
+        }
         case "rewind": {
           if (busy) {
             dispatch({ type: "push", item: { kind: "info", text: "still working — Esc to interrupt first" } })
@@ -1067,7 +1139,13 @@ export function App(props: AppProps) {
           const rewindArg = cmd.trim().split(/\s+/)[1]
           const checkpoints = agent.checkpoints.list()
           if (checkpoints.length === 0) {
-            dispatch({ type: "push", item: { kind: "info", text: "no checkpoints yet — checkpoints are taken at the start of each turn" } })
+            dispatch({
+              type: "push",
+              item: {
+                kind: "info",
+                text: "no checkpoints yet — checkpoints are taken at the start of each turn",
+              },
+            })
             break
           }
           if (!rewindArg) {
@@ -1078,19 +1156,28 @@ export function App(props: AppProps) {
             )
             dispatch({
               type: "push",
-              item: { kind: "info", text: `Recent checkpoints (use /rewind N to restore):\n${lines.join("\n")}` },
+              item: {
+                kind: "info",
+                text: `Recent checkpoints (use /rewind N to restore):\n${lines.join("\n")}`,
+              },
             })
             break
           }
           const cpIndex = Number.parseInt(rewindArg, 10)
           const target = checkpoints[cpIndex]
           if (!target) {
-            dispatch({ type: "push", item: { kind: "error", text: `no checkpoint ${cpIndex} — run /rewind to list them` } })
+            dispatch({
+              type: "push",
+              item: { kind: "error", text: `no checkpoint ${cpIndex} — run /rewind to list them` },
+            })
             break
           }
           const restored = agent.checkpoints.restore(target)
           if (!restored) {
-            dispatch({ type: "push", item: { kind: "error", text: `failed to restore checkpoint ${cpIndex}` } })
+            dispatch({
+              type: "push",
+              item: { kind: "error", text: `failed to restore checkpoint ${cpIndex}` },
+            })
             break
           }
           agent.startSession(session.id, restored.messages)
@@ -1145,12 +1232,22 @@ export function App(props: AppProps) {
         return
       }
       if (agent.messages.length === 0) store.setTitle(session.id, text.slice(0, 80))
-      dispatch({ type: "push", item: { kind: "user", text } })
+      const displayText =
+        pendingImages.length > 0
+          ? `${text}\n[images: ${pendingImages.map((img) => img.name).join(", ")}]`
+          : text
+      dispatch({ type: "push", item: { kind: "user", text: displayText } })
       const controller = new AbortController()
       abortRef.current = controller
-      void agent.send(text, controller.signal)
+      if (pendingImages.length > 0) {
+        const images = pendingImages.map(({ base64, mimeType }) => ({ base64, mimeType }))
+        setPendingImages([])
+        void agent.send(text, controller.signal, images)
+      } else {
+        void agent.send(text, controller.signal)
+      }
     },
-    [agent, busy, runCommand, session.id, store],
+    [agent, busy, pendingImages, runCommand, session.id, store],
   )
 
   const handlePromptInput = useCallback(

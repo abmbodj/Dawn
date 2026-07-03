@@ -92,24 +92,50 @@ function distillGroup(messages: ModelMessage[], turnIndex: number): MemoryEntry 
   }
 }
 
-/** Format a list of MemoryEntry objects into the session memory block. */
+/**
+ * Hard cap on the rendered session-memory block (~1k tokens). The block is a
+ * priority-1, never-expiring working-set summary — without a cap, a long lean-budget
+ * session lets it eat the context budget it exists to protect.
+ */
+export const MAX_MEMORY_CHARS = 4000
+
+/**
+ * Format a list of MemoryEntry objects into the session memory block.
+ *
+ * `existingMemory` must only be memory that cannot be re-derived from the live
+ * message list (i.e. the LLM summary of turns spliced out by overflow compaction) —
+ * never this function's own previous output. Template-distilled entries are re-derived
+ * from scratch on every call, so embedding prior output would duplicate them and nest
+ * headers without bound.
+ */
 export function formatSessionMemory(entries: MemoryEntry[], existingMemory?: string): string {
-  const lines: string[] = ["[Session memory — distilled from earlier context]"]
+  const header = "[Session memory — distilled from earlier context]"
+  // ponytail: crude head-slice cap — LLM summaries are front-loaded
+  const spliced = existingMemory?.slice(0, MAX_MEMORY_CHARS / 2)
 
-  if (existingMemory) {
-    lines.push(existingMemory)
-    lines.push("")
-    lines.push("[Additional turns compacted]")
-  }
-
-  for (const e of entries) {
-    lines.push(`\nTurn ${e.turnIndex}: "${e.userAsk}"`)
+  const rendered = entries.map((e) => {
+    const lines = [`\nTurn ${e.turnIndex}: "${e.userAsk}"`]
     if (e.filesEdited.length) lines.push(`  Edited: ${e.filesEdited.join(", ")}`)
     if (e.commandsRun.length) lines.push(`  Ran: ${e.commandsRun.join("; ")}`)
     if (e.errors.length) lines.push(`  Errors: ${e.errors.slice(0, 2).join(" | ")}`)
     if (e.assistantClose) lines.push(`  Result: ${e.assistantClose}`)
+    return lines.join("\n")
+  })
+
+  // Keep the newest entries that fit under the cap (always at least one).
+  let used = header.length + (spliced?.length ?? 0)
+  const kept: string[] = []
+  for (let i = rendered.length - 1; i >= 0; i--) {
+    const block = rendered[i]
+    if (block === undefined) continue
+    if (used + block.length > MAX_MEMORY_CHARS && kept.length > 0) break
+    kept.unshift(block)
+    used += block.length
   }
 
+  const lines = [header]
+  if (spliced) lines.push(spliced, "", "[Additional turns compacted]")
+  lines.push(...kept)
   return lines.join("\n")
 }
 

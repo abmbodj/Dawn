@@ -1,6 +1,6 @@
-import type { ModelMessage } from "ai"
 import fs from "node:fs"
 import path from "node:path"
+import type { ModelMessage } from "ai"
 import { cacheDir } from "../paths"
 
 export interface CheckpointMeta {
@@ -89,7 +89,12 @@ export class CheckpointStore {
       this.ensureInit()
       // Stage all tracked + untracked files (excluding .git itself)
       this.git("add", "--all")
-      const result = this.git("commit", "--allow-empty", "-m", `dawn-checkpoint: turn ${turnIndex} — ${label}`)
+      const result = this.git(
+        "commit",
+        "--allow-empty",
+        "-m",
+        `dawn-checkpoint: turn ${turnIndex} — ${label}`,
+      )
       if (result.exitCode !== 0) return undefined
       const shaResult = this.git("rev-parse", "HEAD")
       if (shaResult.exitCode !== 0) return undefined

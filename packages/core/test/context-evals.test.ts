@@ -78,6 +78,18 @@ describe("substitution savings", () => {
     const wouldSendTokens =
       built.plan.totalEstimatedTokens + built.plan.savingsEstimate + built.plan.substitutionSavings
     expect(wouldSendTokens).toBeGreaterThan(built.plan.totalEstimatedTokens)
+
+    // Once credited, the same summary is not re-credited on later turns.
+    const rebuilt = buildRequestMessages({
+      system: "You are Dawn.",
+      messages,
+      summaries: [summary],
+      workingSet: [],
+      budget: { mode: "balanced", budget: 8000 },
+      creditedSummaryPaths: new Set(built.keptSummaryPaths),
+    })
+    expect(rebuilt.plan.substitutionSavings).toBe(0)
+    expect(rebuilt.keptSummaryPaths).toEqual(["src/large.ts"])
   })
 
   test("substitutionSavings is zero when no summaries are included", () => {

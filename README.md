@@ -7,7 +7,8 @@
 
 Dawn is an early Bun + TypeScript monorepo for running an AI coding agent from your shell. It has an
 interactive terminal UI, a one-shot `dawn run` mode, multi-provider model selection, persisted and
-resumable sessions, and permission prompts for side-effecting tools.
+resumable sessions (`/resume` picker, `dawn -c`), image input (`/image`), single- and multi-hunk
+edit tools, and permission prompts for side-effecting tools.
 
 The thing that makes Dawn *Dawn* is the part most agents skip: it treats your context window as a
 budget to spend carefully, not a bucket to refill every turn — and it shows you, live, exactly what
@@ -58,14 +59,16 @@ working set. Anything that doesn't fit is trimmed by priority before the request
 Dawn indexes the repo and stores a compact summary per file — language, defined symbols, imports, and
 a short excerpt ([context/summarize.ts](packages/core/src/context/summarize.ts)). When a file is
 relevant, Dawn sends the summary instead of re-reading the source, and counts the difference as
-**substitution savings** (`sourceTokens − tokenEstimate`). Summaries are cached in SQLite keyed by file
+**substitution savings** (`sourceTokens − tokenEstimate`), credited **once per file per session** —
+not re-credited every turn the summary stays resident. Summaries are cached in SQLite keyed by file
 hash ([context/store.ts](packages/core/src/context/store.ts)), so an unchanged file is never
 re-summarized.
 
 ### 3. A working set with TTL leases
 Loaded files, file ranges, and tool results live in a working set
 ([context/working-set.ts](packages/core/src/context/working-set.ts)) where each item holds a TTL lease
-that ages out every turn (`decrementLeases`). Tool results survive ~1–3 turns, file loads ~1–4, and
+that ages out every turn (`decrementLeases`). Tool results survive ~1–3 turns, file loads ~3–6 (long
+enough to survive a multi-step edit; unlimited on large-window caching providers), and
 summaries ~6–14, depending on mode. When the budget is tight, items are dropped by priority —
 `summary > file-range > file > tool-result` — so the cheapest, most reusable context stays and the
 bulky transient context goes.
@@ -78,13 +81,15 @@ return.
 
 ### 5. Bounded reads
 The read tool caps how much it pulls per call by mode — 120 / 240 / 600 lines
-([tools/index.ts](packages/core/src/tools/index.ts)) — and every read enters the working set, so the
-model has what it needs without re-fetching the same file next turn.
+([tools/index.ts](packages/core/src/tools/index.ts)) — and tells the model the real cap in its schema,
+with an explicit `continue with offset=N` marker on partial reads, so the model never mistakes a
+partial view for the whole file. Every read enters the working set, so the model has what it needs
+without re-fetching the same file next turn.
 
 ### 6. Content-aware output compaction (reversible)
-Large tool outputs are the biggest token sink in a coding agent — a single `bash`, `grep`, or
-`web_fetch` can dwarf the rest of the prompt, and it's re-sent on every step of a multi-step turn. Dawn
-routes each heavy tool output through a compaction engine
+Large tool outputs are the biggest token sink in a coding agent — a single `bash`, `grep`,
+`git_diff`, `repo_map`, or `web_fetch` can dwarf the rest of the prompt, and it's re-sent on every
+step of a multi-step turn. Dawn routes each heavy tool output through a compaction engine
 ([context/compact/](packages/core/src/context/compact/)) that detects its shape and shrinks it
 accordingly: JSON arrays keep their keys and head/tail items while the redundant middle is elided
 (SmartCrusher-style), repetitive logs collapse identical lines into `(×N)`, grep results are grouped and

@@ -149,7 +149,12 @@ async function indexCommand(flags: Flags): Promise<void> {
 }
 
 function noInitialModelMessage(): string {
-  return "No live tool-capable model is available. Connect a provider or pass --model provider/model."
+  return (
+    "No live tool-capable model is available. Connect a provider first:\n" +
+    "  dawn auth login <provider>   e.g. dawn auth login anthropic\n" +
+    "  dawn                         guided setup (interactive)\n" +
+    "or pass --model provider/model."
+  )
 }
 
 function projectConfigHasModel(cwd: string): boolean {

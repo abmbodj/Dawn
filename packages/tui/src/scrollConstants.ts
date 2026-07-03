@@ -1,1 +1,1 @@
-export const SCROLL_STEP = 20;
+export const SCROLL_STEP = 20

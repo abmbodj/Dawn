@@ -120,7 +120,11 @@ export function classifyFailure(err: unknown): ClassifiedFailure {
     }
 
     if (lower.includes("no output") || lower.includes("no content") || lower.includes("empty response")) {
-      return { kind: "no-output", message: "Model returned an empty response. Check that this model is available on your account and that your API key has access to it." }
+      return {
+        kind: "no-output",
+        message:
+          "Model returned an empty response. Check that this model is available on your account and that your API key has access to it.",
+      }
     }
 
     if (lower.includes("unauthorized") || lower.includes("invalid api key")) {

@@ -174,9 +174,7 @@ export function resolveProfile(ref: string, catalog: Catalog): ModelProfile {
   const isReasoning = isReasoningModel(modelId, info)
   // Reasoning models (o-series, codex, deepseek-r1, etc.) reject temperature and
   // expect max_completion_tokens on OpenAI-compatible transports.
-  const params: ModelProfile["params"] = isReasoning
-    ? { useMaxCompletionTokens: true }
-    : {}
+  const params: ModelProfile["params"] = isReasoning ? { useMaxCompletionTokens: true } : {}
 
   return {
     ref,

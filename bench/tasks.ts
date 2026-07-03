@@ -17,6 +17,13 @@ export interface BenchTask {
   id: string
   category: "read-heavy" | "diagnosis" | "edit" | "large-output"
   prompt: string
+  /**
+   * Multi-turn session: each entry is a user turn sent to the same agent/session in
+   * order (overrides `prompt`). This is the only place cross-turn machinery — history
+   * trimming, working-set TTLs, session memory, cross-turn prompt caching — gets
+   * measured; single-turn tasks never exercise it. Claude Code mode skips these.
+   */
+  prompts?: string[]
   /** When true the agent edits files, so the run needs write permissions + a writable worktree. */
   edits?: boolean
   /** Returns true if the run completed the task. */
@@ -39,6 +46,36 @@ function fileHas(workdir: string, rel: string, ...needles: Array<string | string
   }
 }
 
+/** Lines in `rel` matching `re` — ground truth computed from the pinned worktree itself, not hardcoded. */
+function countMatchingLines(workdir: string, rel: string, re: RegExp): number {
+  try {
+    return fs
+      .readFileSync(path.join(workdir, rel), "utf8")
+      .split("\n")
+      .filter((l) => re.test(l)).length
+  } catch {
+    return 0
+  }
+}
+
+/** Files under packages/core/src with at least one line matching /^export/ — ground truth from the worktree. */
+function uniqueExportFiles(workdir: string): number {
+  let count = 0
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(p)
+      else if (/^export/m.test(fs.readFileSync(p, "utf8"))) count++
+    }
+  }
+  try {
+    walk(path.join(workdir, "packages/core/src"))
+  } catch {
+    return 0
+  }
+  return count
+}
+
 /** A read-heavy task: an explicit command that yields a large output + a lenient engagement check. */
 const heavy = (id: string, prompt: string, ...needles: Array<string | string[]>): BenchTask => ({
   id,
@@ -51,12 +88,45 @@ export const TASKS: BenchTask[] = [
   heavy(
     "cat-agent",
     "Use the bash tool to run `cat packages/core/src/agent/agent.ts`, then name three methods of the DawnAgent class.",
-    ["send", "requestmessages", "initmcp", "contextstats", "setmodel", "resolvemcpservers", "compactout"],
+    // Any real DawnAgent method counts — a mode that compacts the file middle may
+    // correctly name methods from the kept head/tail, and that's still a right answer.
+    [
+      "send",
+      "requestmessages",
+      "initmcp",
+      "contextstats",
+      "setmodel",
+      "resolvemcpservers",
+      "compactout",
+      "persist",
+      "relevantsummaries",
+      "mcpstatus",
+      "startsession",
+      "skillstats",
+      "contextplantotals",
+    ],
   ),
   heavy(
     "cat-tools",
     "Use the bash tool to run `cat packages/core/src/tools/index.ts`, then list four tools it defines.",
-    ["read", "bash", "grep", "edit", "write", "expand", "glob", "skill"],
+    // Any real tool name counts (see cat-agent note).
+    [
+      "read",
+      "bash",
+      "grep",
+      "edit",
+      "write",
+      "expand",
+      "glob",
+      "skill",
+      "repo_overview",
+      "repo_map",
+      "find_symbol",
+      "web_fetch",
+      "web_search",
+      "ask_user",
+      "todo",
+    ],
   ),
   heavy(
     "cat-budget",
@@ -135,7 +205,14 @@ export const TASKS: BenchTask[] = [
     category: "read-heavy",
     prompt:
       "Use the bash tool to run `grep -c '^export' packages/core/src/context/budget.ts` and report the exact number you see in the output.",
-    check: ({ transcript }) => has(transcript, "19", ["export", "grep", "found", "result", "count"]),
+    check: ({ transcript, workdir }) =>
+      has(transcript, String(countMatchingLines(workdir, "packages/core/src/context/budget.ts", /^export/)), [
+        "export",
+        "grep",
+        "found",
+        "result",
+        "count",
+      ]),
   },
   {
     id: "pilot-diagnosis-maxreadlines",
@@ -158,6 +235,48 @@ export const TASKS: BenchTask[] = [
     category: "large-output",
     prompt:
       "Use the bash tool to run `grep -rn '^export' packages/core/src`. Count the number of unique file paths in the output (each path is the part before the first colon on each line) and report the exact count.",
-    check: ({ transcript }) => has(transcript, "59", ["file", "unique", "path", "export"]),
+    check: ({ transcript, workdir }) =>
+      has(transcript, String(uniqueExportFiles(workdir)), ["file", "unique", "path", "export"]),
+  },
+
+  // ── Multi-turn tasks ─────────────────────────────────────────────────────
+  // Sent as sequential user turns to ONE agent/session, so history trimming,
+  // working-set TTLs, session memory, and cross-turn prompt caching are actually
+  // exercised. Checks are structural (file contents) or exact-answer, like the pilots.
+  {
+    id: "mt-edit-sequence",
+    category: "edit",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Read packages/core/src/context/working-set.ts and describe in two sentences what ContextWorkingSet.add does.",
+      "Add a method `size(): number` to the ContextWorkingSet class that returns `this.items.length`, placed right after the all() method.",
+      "Now add `export const WORKING_SET_VERSION = 2` immediately after the imports at the top of the same file.",
+    ],
+    check: ({ workdir }) =>
+      fileHas(workdir, "packages/core/src/context/working-set.ts", "size(): number", "items.length") &&
+      fileHas(workdir, "packages/core/src/context/working-set.ts", "WORKING_SET_VERSION", "2"),
+  },
+  {
+    id: "mt-diagnosis-recall",
+    category: "diagnosis",
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Use the bash tool to run `grep -rn estimateTokens packages/core/src` and summarize where the function is defined versus where it is used.",
+      "Use the bash tool to run `cat packages/core/src/context/budget.ts`.",
+      "From what you have already seen — without running any more commands — what is the exact value of the SUMMARY_SHARE_CACHED constant? Report only the number.",
+    ],
+    check: ({ transcript }) => has(transcript, "0.35"),
+  },
+  {
+    id: "mt-large-recall",
+    category: "large-output",
+    prompt: "", // unused — see prompts
+    prompts: [
+      'Use the bash tool to run `grep -rn "class " packages/core/src` and list the class names you find.',
+      "Use the bash tool to run `cat packages/core/src/tools/index.ts` and name four tools it defines.",
+      "From the earlier grep output — without re-running it — in which file (give the path) is the ContextWorkingSet class defined?",
+    ],
+    check: ({ transcript }) => has(transcript, "working-set.ts"),
   },
 ]

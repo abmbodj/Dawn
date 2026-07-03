@@ -26,7 +26,9 @@ export const RECOMMENDED_LOCAL_MODELS: LocalModelRec[] = [
  */
 export function recommendLocalModel(): LocalModelRec {
   const fitting = RECOMMENDED_LOCAL_MODELS.filter((m) => localModelFit(m.sizeBytes).status === "ok")
-  return fitting.at(-1) ?? RECOMMENDED_LOCAL_MODELS[0]!
+  const pick = fitting.at(-1) ?? RECOMMENDED_LOCAL_MODELS.at(0)
+  if (!pick) throw new Error("RECOMMENDED_LOCAL_MODELS is empty")
+  return pick
 }
 
 /** Whether an Ollama server is reachable, regardless of whether it has models installed. */

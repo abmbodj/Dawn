@@ -1,321 +1,41 @@
 {
   "provenance": {
-    "generatedAt": "2026-06-23T21:05:27.429Z",
-    "gitSha": "8da4a648a621643502d3bd90c5412fdd142b320d",
-    "gitShaShort": "8da4a648",
-    "model": "github-copilot/claude-haiku-4.5",
-    "claudeModel": "claude-haiku-4-5-20251001",
-    "reps": 2,
-    "taskCount": 4,
+    "generatedAt": "2026-07-03T19:41:10.798Z",
+    "gitSha": "cab865008b091ae017f20d2d1ce0dc78cf157bab",
+    "gitShaShort": "cab86500",
+    "model": "github-copilot/gpt-4.1",
+    "claudeModel": null,
+    "reps": 1,
+    "taskCount": 1,
     "smoke": false
   },
   "results": [
-    {
-      "task": "pilot-read-exact-exports",
-      "category": "read-heavy",
-      "modes": {
-        "dawn": [
-          {
-            "inputTokens": 11100,
-            "cachedInputTokens": 5469,
-            "outputTokens": 88,
-            "cacheWriteTokens": 0,
-            "cost": 0.0066178999999999995,
-            "steps": 2,
-            "ms": 3026,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 11100,
-            "cachedInputTokens": 5469,
-            "outputTokens": 99,
-            "cacheWriteTokens": 0,
-            "cost": 0.0066729,
-            "steps": 2,
-            "ms": 2631,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "naive": [
-          {
-            "inputTokens": 9156,
-            "cachedInputTokens": 4497,
-            "outputTokens": 83,
-            "cacheWriteTokens": 0,
-            "cost": 0.0055237,
-            "steps": 2,
-            "ms": 2524,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 9165,
-            "cachedInputTokens": 4497,
-            "outputTokens": 94,
-            "cacheWriteTokens": 0,
-            "cost": 0.0055877,
-            "steps": 2,
-            "ms": 2544,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "claude": [
-          {
-            "inputTokens": 18,
-            "cachedInputTokens": 22424,
-            "outputTokens": 227,
-            "cacheWriteTokens": 22593,
-            "cost": 0.031636649999999995,
-            "steps": 0,
-            "ms": 13622,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 18,
-            "cachedInputTokens": 35002,
-            "outputTokens": 282,
-            "cacheWriteTokens": 11678,
-            "cost": 0.019525700000000003,
-            "steps": 0,
-            "ms": 7229,
-            "success": true,
-            "errored": false
-          }
-        ]
-      }
-    },
     {
       "task": "pilot-diagnosis-maxreadlines",
       "category": "diagnosis",
       "modes": {
         "dawn": [
           {
-            "inputTokens": 14209,
-            "cachedInputTokens": 5318,
-            "outputTokens": 158,
+            "inputTokens": 12993,
+            "cachedInputTokens": 5248,
+            "outputTokens": 90,
             "cacheWriteTokens": 0,
-            "cost": 0.010212800000000001,
-            "steps": 2,
-            "ms": 3838,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 14217,
-            "cachedInputTokens": 5319,
-            "outputTokens": 186,
-            "cacheWriteTokens": 0,
-            "cost": 0.0103599,
-            "steps": 2,
-            "ms": 6545,
+            "cost": 0.018834,
+            "steps": 3,
+            "ms": 5254,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 12317,
-            "cachedInputTokens": 0,
-            "outputTokens": 147,
+            "inputTokens": 18385,
+            "cachedInputTokens": 15232,
+            "outputTokens": 144,
             "cacheWriteTokens": 0,
-            "cost": 0.013052,
-            "steps": 2,
-            "ms": 4324,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 12323,
-            "cachedInputTokens": 0,
-            "outputTokens": 119,
-            "cacheWriteTokens": 0,
-            "cost": 0.012918,
-            "steps": 2,
-            "ms": 3178,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "claude": [
-          {
-            "inputTokens": 18,
-            "cachedInputTokens": 35021,
-            "outputTokens": 304,
-            "cacheWriteTokens": 18654,
-            "cost": 0.0283576,
-            "steps": 0,
-            "ms": 8807,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 18,
-            "cachedInputTokens": 35021,
-            "outputTokens": 349,
-            "cacheWriteTokens": 18652,
-            "cost": 0.0285801,
-            "steps": 0,
-            "ms": 12722,
-            "success": true,
-            "errored": false
-          }
-        ]
-      }
-    },
-    {
-      "task": "pilot-edit-export-constant",
-      "category": "edit",
-      "modes": {
-        "dawn": [
-          {
-            "inputTokens": 22637,
-            "cachedInputTokens": 13711,
-            "outputTokens": 361,
-            "cacheWriteTokens": 0,
-            "cost": 0.0121021,
-            "steps": 3,
-            "ms": 10022,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 22642,
-            "cachedInputTokens": 13715,
-            "outputTokens": 350,
-            "cacheWriteTokens": 0,
-            "cost": 0.0120485,
-            "steps": 3,
-            "ms": 5806,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "naive": [
-          {
-            "inputTokens": 20486,
-            "cachedInputTokens": 7880,
-            "outputTokens": 389,
-            "cacheWriteTokens": 0,
-            "cost": 0.015339,
-            "steps": 3,
-            "ms": 9494,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 20462,
-            "cachedInputTokens": 7869,
-            "outputTokens": 375,
-            "cacheWriteTokens": 0,
-            "cost": 0.015254900000000002,
-            "steps": 3,
-            "ms": 5862,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "claude": [
-          {
-            "inputTokens": 26,
-            "cachedInputTokens": 65452,
-            "outputTokens": 652,
-            "cacheWriteTokens": 19146,
-            "cost": 0.0337637,
-            "steps": 0,
-            "ms": 20727,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 26,
-            "cachedInputTokens": 65452,
-            "outputTokens": 627,
-            "cacheWriteTokens": 19122,
-            "cost": 0.0336087,
-            "steps": 0,
-            "ms": 17364,
-            "success": true,
-            "errored": false
-          }
-        ]
-      }
-    },
-    {
-      "task": "pilot-large-output-unique-files",
-      "category": "large-output",
-      "modes": {
-        "dawn": [
-          {
-            "inputTokens": 42560,
-            "cachedInputTokens": 27162,
-            "outputTokens": 300,
-            "cacheWriteTokens": 0,
-            "cost": 0.0196142,
-            "steps": 4,
-            "ms": 10057,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 42536,
-            "cachedInputTokens": 27153,
-            "outputTokens": 288,
-            "cacheWriteTokens": 0,
-            "cost": 0.0195383,
-            "steps": 4,
-            "ms": 9901,
-            "success": true,
-            "errored": false
-          }
-        ],
-        "naive": [
-          {
-            "inputTokens": 31077,
-            "cachedInputTokens": 17699,
-            "outputTokens": 238,
-            "cacheWriteTokens": 0,
-            "cost": 0.016337900000000002,
-            "steps": 3,
-            "ms": 4765,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 17751,
-            "cachedInputTokens": 4496,
-            "outputTokens": 866,
-            "cacheWriteTokens": 0,
-            "cost": 0.0180346,
-            "steps": 2,
-            "ms": 6626,
-            "success": false,
-            "errored": false
-          }
-        ],
-        "claude": [
-          {
-            "inputTokens": 26,
-            "cachedInputTokens": 67005,
-            "outputTokens": 1291,
-            "cacheWriteTokens": 21294,
-            "cost": 0.039799,
-            "steps": 0,
-            "ms": 20047,
-            "success": true,
-            "errored": false
-          },
-          {
-            "inputTokens": 18,
-            "cachedInputTokens": 34940,
-            "outputTokens": 2014,
-            "cacheWriteTokens": 20158,
-            "cost": 0.0387795,
-            "steps": 0,
-            "ms": 32309,
+            "cost": 0.015074,
+            "steps": 5,
+            "ms": 5230,
             "success": true,
             "errored": false
           }

@@ -1,8 +1,8 @@
-import { type ModelMessage, generateText } from "ai"
-import type { Catalog } from "../provider/catalog"
+import { generateText, type ModelMessage } from "ai"
 import type { DawnConfig } from "../config/config"
-import { resolveRoleModel } from "../provider/roles"
+import type { Catalog } from "../provider/catalog"
 import { resolveModel } from "../provider/provider"
+import { resolveRoleModel } from "../provider/roles"
 import { groupHistory } from "./budget"
 import { distillDroppedTurns } from "./session-memory"
 
