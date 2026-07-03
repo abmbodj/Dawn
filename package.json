@@ -1,8 +1,20 @@
 {
   "name": "dawn",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Dawn — a token-frugal AI coding agent for the terminal",
   "license": "MIT",
+  "author": "abmbodj",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abmbodj/Dawn.git"
+  },
+  "homepage": "https://github.com/abmbodj/Dawn#readme",
+  "bugs": {
+    "url": "https://github.com/abmbodj/Dawn/issues"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
   "type": "module",
   "private": true,
   "bin": {

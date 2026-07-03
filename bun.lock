@@ -16,7 +16,7 @@
     },
     "packages/core": {
       "name": "@dawn/core",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "dependencies": {
         "@ai-sdk/amazon-bedrock": "^4.0.120",
         "@ai-sdk/anthropic": "^3.0.83",
@@ -32,7 +32,7 @@
     },
     "packages/tui": {
       "name": "@dawn/tui",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "dependencies": {
         "@dawn/core": "workspace:*",
         "@opentui/core": "0.4.1",

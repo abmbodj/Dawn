@@ -1,6 +1,21 @@
 {
   "name": "@dawn/core",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Core agent logic, providers, context planning, tools, and persistence for Dawn",
+  "license": "MIT",
+  "author": "abmbodj",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abmbodj/Dawn.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/abmbodj/Dawn/tree/main/packages/core",
+  "bugs": {
+    "url": "https://github.com/abmbodj/Dawn/issues"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

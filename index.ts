@@ -39,7 +39,7 @@ import {
   withOllama,
 } from "@dawn/core"
 
-const VERSION = "0.1.0"
+const VERSION = "1.0.0"
 
 const USAGE = `dawn — token-frugal AI coding agent
 

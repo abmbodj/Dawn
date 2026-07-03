@@ -34,7 +34,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
 }
 
 async function connectOne(name: string, config: McpServerConfig, timeoutMs: number): Promise<McpConnection> {
-  const client = new Client({ name: "dawn", version: "0.1.0" }, { capabilities: {} })
+  const client = new Client({ name: "dawn", version: "1.0.0" }, { capabilities: {} })
 
   let transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
 
