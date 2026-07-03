@@ -1469,7 +1469,8 @@ export function App(props: AppProps) {
   const mentionOpen = mentionSuggestions.length > 0
   const selectedMentionIndex =
     mentionSuggestions.length > 0 ? Math.min(selectedMention, mentionSuggestions.length - 1) : 0
-  const showUsageBox = footerMode(width) === "wide"
+  const wideEnoughForUsageBox = footerMode(width) === "wide"
+  const showUsageBox = wideEnoughForUsageBox && !empty
   // While in plan mode the dedicated plan model runs (if set); the footer reflects
   // whichever model will actually handle the next turn.
   const activeModelRef = permMode === "plan" && planModelRef ? planModelRef : modelRef
@@ -1933,7 +1934,7 @@ export function App(props: AppProps) {
         />
       </box>
 
-      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1, flexShrink: 0 }}>
+      <box style={{ height: 1, paddingLeft: 1, paddingRight: 1, flexDirection: "row", flexShrink: 0 }}>
         {footer.mode === "narrow" ? (
           <text fg={busy ? theme.accent : theme.dim}>{footer.left}</text>
         ) : (
