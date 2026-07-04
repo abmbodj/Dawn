@@ -141,16 +141,19 @@ describe("GitHub Copilot plan gating", () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
-  test("drops models the plan can't invoke, keeps premium ones flagged", async () => {
+  test("drops plan-gated (policy disabled) models, keeps usable ones even when picker-hidden", async () => {
     const s = Bun.serve({
       port: 0,
       fetch: () =>
         Response.json({
           data: [
             { id: "included-model", name: "Included" },
-            { id: "plan-gated", name: "Gated", model_picker_enabled: false },
-            { id: "premium-model", name: "Premium", is_premium: true, model_picker_enabled: true },
-            { id: "disabled-model", name: "Disabled", policy: { state: "disabled" } },
+            // model_picker_enabled is a VS Code preference, not entitlement — must be kept.
+            { id: "picker-hidden", name: "Hidden", model_picker_enabled: false, policy: { state: "enabled" } },
+            { id: "premium-model", name: "Premium", is_premium: true },
+            // policy.state "disabled" is the real plan gate — must be dropped.
+            { id: "plan-gated", name: "Gated", policy: { state: "disabled" } },
+            { id: "embeddings", name: "Embed", capabilities: { type: "embeddings" } },
           ],
         }),
     })
@@ -169,7 +172,7 @@ describe("GitHub Copilot plan gating", () => {
     await withLiveModels(catalog, "github-copilot", { providers: {} })
 
     const models = catalog["github-copilot"]?.models ?? {}
-    expect(Object.keys(models).sort()).toEqual(["included-model", "premium-model"])
+    expect(Object.keys(models).sort()).toEqual(["included-model", "picker-hidden", "premium-model"])
     expect(models["premium-model"]?.access).toBe("premium")
     expect(models["included-model"]?.access).toBe("standard")
   })

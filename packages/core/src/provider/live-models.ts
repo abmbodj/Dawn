@@ -163,7 +163,6 @@ async function fetchOpenAICompatible(
       billing_type?: string
       policy?: { state?: string }
       is_premium?: boolean
-      model_picker_enabled?: boolean
       deprecated?: boolean
     }>
     models?: Array<{ id: string; name?: string }>
@@ -176,12 +175,12 @@ async function fetchOpenAICompatible(
   return items
     .filter((m) => {
       // Drop models the provider itself marks as disabled, deprecated, or embedding-only.
+      // Copilot: policy.state === "disabled" is the plan-entitlement signal (models the
+      // account can't invoke). model_picker_enabled is only a VS Code picker preference —
+      // it's false even for usable models, so it must NOT be used for filtering.
       if (m.deprecated === true) return false
       if (m.policy?.state === "disabled") return false
       if (m.capabilities?.type === "embeddings") return false
-      // Copilot reports plan entitlement per model; false means this account's
-      // plan can't invoke it (undefined passes — older accounts omit the field).
-      if (providerId === "github-copilot" && m.model_picker_enabled === false) return false
       return true
     })
     .map((m) => {
