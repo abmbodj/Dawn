@@ -29,7 +29,8 @@ const PREFERRED_MODELS: Array<[string, string[]]> = [
 ]
 
 function isLiveProvider(catalog: Catalog, providerId: string): boolean {
-  return catalog[providerId]?.modelsSource === "live"
+  const source = catalog[providerId]?.modelsSource
+  return source === "live" || source === "cached-live"
 }
 
 function connectedProvider(

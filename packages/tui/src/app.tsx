@@ -1330,6 +1330,7 @@ export function App(props: AppProps) {
         } else {
           agent.setModel(ref)
           setModelRef(ref)
+          saveConfig({ model: ref })
           dispatch({ type: "push", item: { kind: "info", text: `model → ${ref}` } })
         }
       } catch (err) {

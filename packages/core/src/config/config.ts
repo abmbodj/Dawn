@@ -124,8 +124,10 @@ export function hasConfiguredModel(catalog: Catalog, config: DawnConfig): boolea
   return connectedProviders(catalog, config).some((p) => {
     if (!p.hasKey) return false
     const provider = catalog[p.id]
+    const source = provider?.modelsSource
     return (
-      provider?.modelsSource === "live" && Object.values(provider.models).some((m) => m.tool_call !== false)
+      (source === "live" || source === "cached-live") &&
+      Object.values(provider?.models ?? {}).some((m) => m.tool_call !== false)
     )
   })
 }

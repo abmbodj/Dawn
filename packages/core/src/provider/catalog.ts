@@ -37,8 +37,14 @@ export interface ProviderInfo {
   api?: string
   /** Extra HTTP headers sent on every request to this provider (both chat and model listing). */
   headers?: Record<string, string>
-  /** Whether this model list came from a live provider probe/list call or static catalog metadata. */
-  modelsSource?: "live" | "catalog"
+  /**
+   * Where this provider's model list came from:
+   * "live"        — probed from the provider this session (per-account accurate)
+   * "cached-live" — last successful probe, loaded from disk (probe failed/offline this session)
+   * "catalog"     — curated fallback only; never the raw models.dev list for a connected provider
+   * Absent means raw catalog/models.dev data (unconnected providers only).
+   */
+  modelsSource?: "live" | "cached-live" | "catalog"
   models: Record<string, ModelInfo>
 }
 

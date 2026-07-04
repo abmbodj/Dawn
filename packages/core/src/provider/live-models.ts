@@ -1,8 +1,64 @@
+import fs from "node:fs"
+import path from "node:path"
 import { resolveApiKey } from "../auth/auth"
 import type { DawnConfig } from "../config/config"
+import { cacheDir } from "../paths"
 import type { Catalog, ModelInfo, ProviderInfo } from "./catalog"
 import { FALLBACK_CATALOG } from "./catalog"
 import { connectedProviders } from "./provider"
+
+// ---------------------------------------------------------------------------
+// Last-known-live cache
+//
+// The raw models.dev catalog lists models a given API key may not be entitled
+// to. Only live per-account probes are trusted for display, so when a probe
+// can't run (offline, provider hiccup) we fall back to the last successful
+// probe persisted here — never to the raw catalog list. No TTL: this is the
+// user's own account data, valid until replaced by the next successful probe.
+// ---------------------------------------------------------------------------
+
+type LiveCacheFile = Record<string, { fetchedAt: number; models: Record<string, ModelInfo> }>
+
+function liveCachePath(): string {
+  return path.join(cacheDir(), "live-models.json")
+}
+
+function readLiveCache(): LiveCacheFile {
+  try {
+    return JSON.parse(fs.readFileSync(liveCachePath(), "utf8"))
+  } catch {
+    return {}
+  }
+}
+
+function writeLiveCache(providerId: string, models: Record<string, ModelInfo>): void {
+  try {
+    const data = readLiveCache()
+    data[providerId] = { fetchedAt: Date.now(), models }
+    fs.writeFileSync(liveCachePath(), JSON.stringify(data))
+  } catch {
+    // best-effort: a failed cache write must never break the boot path
+  }
+}
+
+/**
+ * A connected provider's probe didn't land — replace any raw catalog models
+ * with the last-known-live list, or the curated fallback singleton, so the
+ * picker never shows models the user's account can't invoke.
+ */
+function clampProvider(catalog: Catalog, providerId: string): void {
+  const p = catalog[providerId]
+  if (!p || p.modelsSource === "live" || p.modelsSource === "cached-live") return
+  const cached = readLiveCache()[providerId]
+  if (cached && Object.keys(cached.models).length > 0) {
+    catalog[providerId] = { ...p, modelsSource: "cached-live", models: cached.models }
+    return
+  }
+  // mergeCatalog spreads models.dev models over the fallback, so read the
+  // curated list straight from FALLBACK_CATALOG rather than catalog models.
+  const fb = FALLBACK_CATALOG[providerId]
+  catalog[providerId] = { ...p, modelsSource: "catalog", models: fb ? fb.models : {} }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,6 +162,7 @@ async function fetchOpenAICompatible(
       billing_type?: string
       policy?: { state?: string }
       is_premium?: boolean
+      model_picker_enabled?: boolean
       deprecated?: boolean
     }>
     models?: Array<{ id: string; name?: string }>
@@ -121,6 +178,9 @@ async function fetchOpenAICompatible(
       if (m.deprecated === true) return false
       if (m.policy?.state === "disabled") return false
       if (m.capabilities?.type === "embeddings") return false
+      // Copilot reports plan entitlement per model; false means this account's
+      // plan can't invoke it (undefined passes — older accounts omit the field).
+      if (providerId === "github-copilot" && m.model_picker_enabled === false) return false
       return true
     })
     .map((m) => {
@@ -221,33 +281,31 @@ export async function withLiveModels(
   const apiKey = resolveApiKey(providerId, envNames)
   const baseURL = custom?.baseURL ?? providerInfo?.api
 
-  // Skip if no credential and the provider requires one
+  // No credential and the provider requires one: not connected, the picker
+  // won't show it — leave the raw catalog data untouched for pricing lookups.
   const requiresKey = envNames.length > 0
   if (!apiKey && requiresKey) return catalog
-  // Skip if no base URL for OpenAI-compatible providers (non-standard)
-  if (providerId !== "anthropic" && providerId !== "google" && !baseURL) return catalog
 
+  // From here on the provider counts as connected. Every path that doesn't
+  // land a live list must clamp so raw catalog models are never displayed.
   try {
-    let liveModels: LiveModel[]
+    let liveModels: LiveModel[] = []
 
     if (providerId === "anthropic") {
-      if (!apiKey) return catalog
-      liveModels = await fetchAnthropic(apiKey)
+      if (apiKey) liveModels = await fetchAnthropic(apiKey)
     } else if (providerId === "google") {
-      if (!apiKey) return catalog
-      liveModels = await fetchGoogle(apiKey)
+      if (apiKey) liveModels = await fetchGoogle(apiKey)
     } else if (baseURL) {
       const providerHeaders = { ...(providerInfo?.headers ?? {}), ...(custom?.headers ?? {}) }
       liveModels = await fetchOpenAICompatible(baseURL, apiKey, providerId, providerHeaders)
-    } else {
-      return catalog
     }
-
-    if (liveModels.length === 0) return catalog
 
     // Filter to models with tool-call support (or unknown — included optimistically)
     const toolCapable = liveModels.filter((m) => m.toolCall !== false)
-    if (toolCapable.length === 0) return catalog
+    if (toolCapable.length === 0) {
+      clampProvider(catalog, providerId)
+      return catalog
+    }
 
     const updatedProvider: ProviderInfo = {
       ...(providerInfo ?? FALLBACK_CATALOG[providerId] ?? { id: providerId, name: providerId, models: {} }),
@@ -255,19 +313,20 @@ export async function withLiveModels(
       models: buildProviderModels(providerId, toolCapable, providerInfo),
     }
 
-    // Mutate in place (same contract as withOpenRouter / withOllama) so callers
-    // that hold a reference to the catalog object see the update without needing
-    // to use the return value.
+    // Mutate in place (same contract as withOllama) so callers that hold a
+    // reference to the catalog object see the update without needing the
+    // return value.
     catalog[providerId] = updatedProvider
+    writeLiveCache(providerId, updatedProvider.models)
     return catalog
   } catch {
+    clampProvider(catalog, providerId)
     return catalog
   }
 }
 
 /**
  * Refresh live model lists for every currently-connected provider in parallel.
- * Replaces the separate withOpenRouter / withOllama startup calls.
  */
 export async function withAllLiveModels(catalog: Catalog, config: DawnConfig): Promise<Catalog> {
   const connected = connectedProviders(catalog, config)
