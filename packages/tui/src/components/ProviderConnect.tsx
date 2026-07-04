@@ -12,6 +12,7 @@ import {
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
 import { theme } from "../theme"
+import { optionItem, SelectList } from "./SelectList"
 
 export interface ProviderOption {
   id: string
@@ -122,6 +123,7 @@ export function ProviderConnect({
   const [selected, setSelected] = useState<ProviderOption>(
     fixedProvider ?? providers[0] ?? SETUP_PROVIDERS[0],
   )
+  const [pickIdx, setPickIdx] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [oauthData, setOauthData] = useState<DeviceFlowStart | null>(null)
   const [oauthError, setOauthError] = useState<string | null>(null)
@@ -218,8 +220,7 @@ export function ProviderConnect({
     }
   })
 
-  const handleProviderPick = (_i: number, opt: any) => {
-    const value: string | undefined = opt?.value
+  const handleProviderPick = (value: string | undefined) => {
     if (!value) return
     if (value.startsWith("extra:")) {
       onExtraSelect?.(value.slice("extra:".length))
@@ -257,6 +258,7 @@ export function ProviderConnect({
   ]
 
   if (phase === "pick") {
+    const items = pickerOptions.map((o) => optionItem(o.value, o.name, o.description))
     return (
       <box style={{ flexDirection: "column" }}>
         <box
@@ -269,12 +271,12 @@ export function ProviderConnect({
           }}
           title="choose provider"
         >
-          <select
-            focused
-            showScrollIndicator
-            options={pickerOptions}
-            onSelect={handleProviderPick}
-            style={{ flexGrow: 1 }}
+          <SelectList
+            items={items}
+            height={10}
+            selectedIndex={pickIdx}
+            onSelectIndex={setPickIdx}
+            onActivate={(i) => handleProviderPick(pickerOptions[i]?.value)}
           />
         </box>
         <text fg={theme.dim}>{"↑↓ navigate · Enter select · Esc cancel"}</text>

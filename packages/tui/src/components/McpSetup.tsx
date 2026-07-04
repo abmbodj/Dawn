@@ -2,6 +2,7 @@ import type { McpServerConfig } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useState } from "react"
 import { theme } from "../theme"
+import { optionItem, SelectList } from "./SelectList"
 
 export interface McpSetupProps {
   servers: Record<string, McpServerConfig>
@@ -138,18 +139,7 @@ export function McpSetup({ servers, connections, onAdd, onRemove, onClose }: Mcp
         setListIdx((i) => Math.max(0, i - 1))
         return
       }
-      if (key.name === "up") {
-        key.preventDefault()
-        key.stopPropagation()
-        setListIdx((i) => Math.max(0, i - 1))
-        return
-      }
-      if (key.name === "down") {
-        key.preventDefault()
-        key.stopPropagation()
-        setListIdx((i) => Math.min(serverNames.length - 1, i + 1))
-        return
-      }
+      // Arrows are handled by the list's SelectList.
       return
     }
 
@@ -501,13 +491,12 @@ export function McpSetup({ servers, connections, onAdd, onRemove, onClose }: Mcp
         <text fg={theme.error} style={{ paddingLeft: 1, flexShrink: 0 }}>{`✗ ${connectError}`}</text>
       ) : null}
       <box style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
-        <select
-          focused
-          showScrollIndicator
-          options={listOptions}
+        <SelectList
+          items={listOptions.map((o) => optionItem(o.value, o.name, o.description))}
+          height={9}
           selectedIndex={safeListIdx}
-          onChange={(i: number) => setListIdx(i)}
-          style={{ flexGrow: 1 }}
+          onSelectIndex={setListIdx}
+          onActivate={() => {}}
         />
       </box>
       {selectedName ? (

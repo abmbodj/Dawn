@@ -4,6 +4,7 @@ import type { Skill } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
+import { optionItem, SelectList } from "./SelectList"
 
 export interface SkillsSetupProps {
   skills: Skill[]
@@ -52,24 +53,13 @@ export function SkillsSetup({
       onClose()
       return
     }
-    if (key.name === "space" || key.name === " " || key.name === "return" || key.name === "enter") {
+    // Arrows and Enter are handled by SelectList; space toggles here.
+    if (key.name === "space" || key.name === " ") {
       if (selected) {
         key.preventDefault()
         key.stopPropagation()
         onToggleAlwaysLoad(selected.name)
       }
-      return
-    }
-    if (key.name === "up") {
-      key.preventDefault()
-      key.stopPropagation()
-      setIdx((i) => Math.max(0, i - 1))
-      return
-    }
-    if (key.name === "down") {
-      key.preventDefault()
-      key.stopPropagation()
-      setIdx((i) => Math.min(skills.length - 1, i + 1))
       return
     }
   })
@@ -116,13 +106,15 @@ export function SkillsSetup({
       title="skills · space=toggle always-load · ↑↓ navigate · esc close"
     >
       <box style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
-        <select
-          focused
-          showScrollIndicator
-          options={listOptions}
+        <SelectList
+          items={listOptions.map((o) => optionItem(o.value, o.name, o.description))}
+          height={10}
           selectedIndex={safeIdx}
-          onChange={(i: number) => setIdx(i)}
-          style={{ flexGrow: 1 }}
+          onSelectIndex={setIdx}
+          onActivate={(i) => {
+            const skill = skills[i]
+            if (skill) onToggleAlwaysLoad(skill.name)
+          }}
         />
       </box>
       {selected ? (

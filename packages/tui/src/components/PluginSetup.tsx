@@ -2,6 +2,7 @@ import type { InstalledPlugin } from "@dawn/core"
 import { useKeyboard } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
 import { theme } from "../theme"
+import { optionItem, SelectList } from "./SelectList"
 
 export interface PluginSetupProps {
   plugins: InstalledPlugin[]
@@ -84,25 +85,11 @@ export function PluginSetup({
       setIdx((i) => Math.max(0, i - 1))
       return
     }
-    if (
-      (key.name === "space" || key.name === " " || key.name === "return" || key.name === "enter") &&
-      selected
-    ) {
+    // Arrows and Enter are handled by SelectList; space toggles here.
+    if ((key.name === "space" || key.name === " ") && selected) {
       key.preventDefault()
       key.stopPropagation()
       onToggleEnabled(selected.name)
-      return
-    }
-    if (key.name === "up") {
-      key.preventDefault()
-      key.stopPropagation()
-      setIdx((i) => Math.max(0, i - 1))
-      return
-    }
-    if (key.name === "down") {
-      key.preventDefault()
-      key.stopPropagation()
-      setIdx((i) => Math.min(plugins.length - 1, i + 1))
       return
     }
   })
@@ -212,13 +199,15 @@ export function PluginSetup({
       title="plugins · space=toggle enabled · a install · d remove · esc close"
     >
       <box style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
-        <select
-          focused
-          showScrollIndicator
-          options={listOptions}
+        <SelectList
+          items={listOptions.map((o) => optionItem(o.value, o.name, o.description))}
+          height={10}
           selectedIndex={safeIdx}
-          onChange={(i: number) => setIdx(i)}
-          style={{ flexGrow: 1 }}
+          onSelectIndex={setIdx}
+          onActivate={(i) => {
+            const plugin = plugins[i]
+            if (plugin) onToggleEnabled(plugin.name)
+          }}
         />
       </box>
       {selected ? (
