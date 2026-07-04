@@ -8,7 +8,22 @@ export {
 } from "./agent/errors"
 export { estimateMemoryTokens, loadProjectMemory, type ProjectMemory } from "./agent/project-memory"
 export { buildSystemPrompt } from "./agent/system"
-export { listAuthProviders, removeApiKey, resolveApiKey, setApiKey } from "./auth/auth"
+export {
+  accessToken as anthropicAccessToken,
+  authorizeUrl as anthropicAuthorizeUrl,
+  createApiKeyFromOAuth,
+  exchangeCode as anthropicExchangeCode,
+} from "./auth/anthropic-oauth"
+export {
+  type AuthEntry,
+  getAuthEntry,
+  hasOAuth,
+  listAuthProviders,
+  removeApiKey,
+  resolveApiKey,
+  setApiKey,
+  setOAuthTokens,
+} from "./auth/auth"
 export {
   type CredentialSource,
   type DiscoveredCredential,

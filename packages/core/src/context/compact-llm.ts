@@ -1,7 +1,8 @@
 import { generateText, type ModelMessage } from "ai"
+import { CLAUDE_CODE_SYSTEM_PREFIX } from "../auth/anthropic-oauth"
 import type { DawnConfig } from "../config/config"
 import type { Catalog } from "../provider/catalog"
-import { resolveModel } from "../provider/provider"
+import { resolveModel, usesOAuth } from "../provider/provider"
 import { resolveRoleModel } from "../provider/roles"
 import { groupHistory } from "./budget"
 import { distillDroppedTurns } from "./session-memory"
@@ -38,6 +39,10 @@ export async function compactViaLlm(
     const historyText = renderHistoryForSummary(toSummarize)
     const { text } = await generateText({
       model: resolved.model,
+      // Subscription-OAuth Anthropic requests must present as Claude Code.
+      ...(resolved.providerId === "anthropic" && usesOAuth("anthropic", catalog, config)
+        ? { system: CLAUDE_CODE_SYSTEM_PREFIX }
+        : {}),
       messages: [
         {
           role: "user",

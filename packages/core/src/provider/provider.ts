@@ -6,7 +6,8 @@ import { createVertex } from "@ai-sdk/google-vertex"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import type { LanguageModel } from "ai"
-import { resolveApiKey } from "../auth/auth"
+import { anthropicOAuthFetch } from "../auth/anthropic-oauth"
+import { hasOAuth, resolveApiKey } from "../auth/auth"
 import type { CustomProvider, DawnConfig } from "../config/config"
 import { type Catalog, type ModelInfo, normalizeModelRef, parseModelRef } from "./catalog"
 
@@ -101,7 +102,7 @@ export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig):
 
   // A provider requires a key if it declares env vars. Key-free providers (Ollama, local) have no env entries.
   const requiresKey = envNames.length > 0
-  if (!apiKey && requiresKey) {
+  if (!apiKey && requiresKey && !hasOAuth(providerId)) {
     const hint = envNames[0] ? ` or set ${envNames[0]}` : ""
     throw new Error(`No API key for "${providerId}". Run \`dawn auth login ${providerId}\`${hint}.`)
   }
@@ -109,7 +110,11 @@ export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig):
   let model: LanguageModel
   switch (providerId) {
     case "anthropic":
-      model = createAnthropic({ apiKey })(modelId)
+      // OAuth (Claude Pro/Max) sends a Bearer token via a fetch wrapper instead of x-api-key.
+      model =
+        !apiKey && hasOAuth("anthropic")
+          ? createAnthropic({ apiKey: "oauth", fetch: anthropicOAuthFetch as typeof fetch })(modelId)
+          : createAnthropic({ apiKey })(modelId)
       break
     case "openai":
       model = createOpenAI({ apiKey })(modelId)
@@ -140,6 +145,19 @@ export function resolveModel(ref: string, catalog: Catalog, config: DawnConfig):
   return { model, providerId, modelId, info: providerInfo?.models?.[modelId] }
 }
 
+/**
+ * Whether requests to this provider will authenticate via OAuth (no API key
+ * available, OAuth entry present). Anthropic subscription requests must then
+ * present as Claude Code via the system-prompt prefix.
+ */
+export function usesOAuth(providerId: string, catalog: Catalog, config: DawnConfig): boolean {
+  if (!hasOAuth(providerId)) return false
+  const info = catalog[providerId]
+  const custom = config.providers?.[providerId]
+  const envNames = [...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []), ...(info?.env ?? [])]
+  return resolveApiKey(providerId, envNames) === undefined
+}
+
 export interface ProviderStatus {
   id: string
   name: string
@@ -165,7 +183,7 @@ export function connectedProviders(catalog: Catalog, config: DawnConfig): Provid
     }
 
     const envNames = [...(custom?.apiKeyEnv ? [custom.apiKeyEnv] : []), ...(info?.env ?? [])]
-    const hasKey = resolveApiKey(id, envNames) !== undefined
+    const hasKey = resolveApiKey(id, envNames) !== undefined || hasOAuth(id)
     const requiresKey = envNames.length > 0
     const baseURL = custom?.baseURL ?? info?.api
     // Connected if: has a key, OR is a key-free provider with a known endpoint

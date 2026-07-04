@@ -4,17 +4,21 @@ import path from "node:path"
 import {
   Asker,
   addPlugin,
+  anthropicAuthorizeUrl,
+  anthropicExchangeCode,
   Bus,
   buildRepoIndex,
   type ContextMode,
   ContextStore,
   connectedProviders,
+  createApiKeyFromOAuth,
   DawnAgent,
   type DawnConfig,
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
   type DoctorMode,
   type DoctorResult,
+  getAuthEntry,
   listAuthProviders,
   listInstalledPlugins,
   loadCatalog,
@@ -176,7 +180,7 @@ function persistRepairedModel(cwd: string, selection: ModelSelection | undefined
   saveConfig({ model: selection.ref })
 }
 
-async function promptHidden(label: string): Promise<string> {
+async function promptRaw(label: string, echo: boolean): Promise<string> {
   process.stdout.write(label)
   const stdin = process.stdin
   stdin.setRawMode?.(true)
@@ -200,15 +204,20 @@ async function promptHidden(label: string): Promise<string> {
           return
         }
         if (byte === 127 || byte === 8) {
+          if (echo && value.length > 0) process.stdout.write("\b \b")
           value = value.slice(0, -1)
         } else if (byte >= 32) {
           value += String.fromCharCode(byte)
+          if (echo) process.stdout.write(String.fromCharCode(byte))
         }
       }
     }
     stdin.on("data", onData)
   })
 }
+
+const promptHidden = (label: string): Promise<string> => promptRaw(label, false)
+const promptLine = (label: string): Promise<string> => promptRaw(label, true)
 
 async function authCommand(args: string[], cwd: string): Promise<void> {
   const [sub, provider] = args
@@ -249,6 +258,31 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
         console.log("GitHub Copilot connected.")
         return
       }
+      if (provider === "anthropic") {
+        console.log("How do you want to connect Anthropic?")
+        console.log("  1) Claude Pro/Max — use your Claude subscription (no API key)")
+        console.log("  2) Create an API key — log in to console.anthropic.com")
+        console.log("  3) Paste an existing API key")
+        const choice = (await promptLine("Choose [1/2/3]: ")).trim()
+        if (choice === "1" || choice === "2") {
+          const mode = choice === "1" ? "max" : "console"
+          const { url, verifier } = anthropicAuthorizeUrl(mode)
+          const opened = await openExternalUrl(url)
+          if (opened) console.log("Opened Anthropic login in your browser.")
+          else console.log(`Open this URL in your browser:\n${url}`)
+          const code = await promptLine("Paste the authorization code (code#state): ")
+          const tokens = await anthropicExchangeCode(code, verifier)
+          if (mode === "console") {
+            const key = await createApiKeyFromOAuth(tokens.access)
+            setApiKey("anthropic", key)
+            console.log("Anthropic connected — API key created and saved.")
+          } else {
+            console.log("Anthropic connected via Claude Pro/Max.")
+          }
+          return
+        }
+        // fall through to the paste-a-key path
+      }
       const key = await promptHidden(`API key for ${provider} (input hidden): `)
       if (!key.trim()) {
         console.error("no key entered, nothing saved")
@@ -261,7 +295,9 @@ async function authCommand(args: string[], cwd: string): Promise<void> {
     case "list": {
       const stored = listAuthProviders()
       if (stored.length === 0) console.log("no stored keys — keys from env vars still work")
-      else for (const id of stored) console.log(`${id} (stored)`)
+      else
+        for (const id of stored)
+          console.log(`${id} (${getAuthEntry(id)?.type === "oauth" ? "oauth" : "stored"})`)
       return
     }
     case "logout": {

@@ -1,6 +1,9 @@
 import {
+  anthropicAuthorizeUrl,
+  anthropicExchangeCode,
   type Catalog,
   copyToClipboard,
+  createApiKeyFromOAuth,
   type DawnConfig,
   type DeviceFlowStart,
   ENTERPRISE_PROVIDERS,
@@ -146,15 +149,21 @@ export function ProviderConnect({
   onCancel,
 }: ProviderConnectProps) {
   const githubClientId = resolveGithubClientId(config)
-  const [phase, setPhase] = useState<"pick" | "detecting" | "key" | "oauth">(() => {
+  const [phase, setPhase] = useState<"pick" | "detecting" | "key" | "oauth" | "method" | "code">(() => {
     if (!fixedProvider) return "pick"
     if (fixedProvider.id === "github-copilot") return "detecting"
+    if (fixedProvider.id === "anthropic") return "method"
     return "key"
   })
   const [selected, setSelected] = useState<ProviderOption>(
     fixedProvider ?? providers[0] ?? SETUP_PROVIDERS[0],
   )
   const [pickIdx, setPickIdx] = useState(0)
+  const [methodIdx, setMethodIdx] = useState(0)
+  const [oauthMode, setOauthMode] = useState<"max" | "console">("max")
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [codeBusy, setCodeBusy] = useState(false)
+  const verifierRef = useRef<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [oauthData, setOauthData] = useState<DeviceFlowStart | null>(null)
   const [oauthError, setOauthError] = useState<string | null>(null)
@@ -238,7 +247,13 @@ export function ProviderConnect({
       if (phase === "detecting") {
         detectCancelledRef.current = true
       }
-      if (phase === "key" || phase === "oauth" || phase === "detecting") {
+      if (phase === "code") {
+        // Back to the method choice; a new authorize URL is minted on retry.
+        setCodeError(null)
+        setPhase("method")
+        return
+      }
+      if (phase === "key" || phase === "oauth" || phase === "detecting" || phase === "method") {
         if (fixedProvider) {
           onCancel()
         } else {
@@ -266,7 +281,45 @@ export function ProviderConnect({
       detectAndStartCopilot(prov)
       return
     }
+    if (value === "anthropic") {
+      setMethodIdx(0)
+      setPhase("method")
+      return
+    }
     setPhase("key")
+  }
+
+  const startAnthropicOAuth = (mode: "max" | "console") => {
+    const { url, verifier } = anthropicAuthorizeUrl(mode)
+    verifierRef.current = verifier
+    setOauthMode(mode)
+    setCodeError(null)
+    setPhase("code")
+    void openUrl(url)
+  }
+
+  const handleCodeSubmit = (raw: unknown) => {
+    const pasted = (typeof raw === "string" ? raw : String((raw as any)?.value ?? "")).trim()
+    if (!pasted || codeBusy) return
+    const verifier = verifierRef.current
+    if (!verifier) return
+    setCodeBusy(true)
+    setCodeError(null)
+    ;(async () => {
+      try {
+        const tokens = await anthropicExchangeCode(pasted, verifier)
+        if (oauthMode === "console") {
+          // Console flavor: mint a plain API key; overwrites the oauth entry.
+          const key = await createApiKeyFromOAuth(tokens.access)
+          setApiKey("anthropic", key)
+        }
+        onConnected(selected)
+      } catch (err) {
+        setCodeError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setCodeBusy(false)
+      }
+    })()
   }
 
   const handleKeySubmit = (raw: unknown) => {
@@ -311,6 +364,66 @@ export function ProviderConnect({
           />
         </box>
         <text fg={theme.dim}>{"↑↓ navigate · Enter select · Esc cancel"}</text>
+      </box>
+    )
+  }
+
+  if (phase === "method") {
+    const methods = [
+      { value: "max", name: "Claude Pro/Max", description: "use your Claude subscription — no API key" },
+      { value: "console", name: "Create an API key", description: "log in to console.anthropic.com" },
+      { value: "key", name: "Paste an API key", description: "you already have one" },
+    ]
+    return (
+      <box style={{ flexDirection: "column" }}>
+        <box
+          style={{
+            border: true,
+            borderColor: theme.accent,
+            height: 5,
+            flexDirection: "column",
+            marginBottom: 1,
+          }}
+          title="connect Anthropic"
+        >
+          <SelectList
+            items={methods.map((m) => optionItem(m.value, m.name, m.description))}
+            height={3}
+            selectedIndex={methodIdx}
+            onSelectIndex={setMethodIdx}
+            onActivate={(i) => {
+              const method = methods[i]?.value
+              if (method === "max" || method === "console") startAnthropicOAuth(method)
+              else if (method === "key") setPhase("key")
+            }}
+          />
+        </box>
+        <text fg={theme.dim}>{"↑↓ navigate · Enter select · Esc back"}</text>
+      </box>
+    )
+  }
+
+  if (phase === "code") {
+    return (
+      <box style={{ flexDirection: "column" }}>
+        <text fg={theme.text} style={{ marginBottom: 1 }}>
+          {oauthMode === "max"
+            ? "Log in with your Claude Pro/Max account in the browser, approve access, then paste the code shown."
+            : "Log in to the Anthropic Console in the browser, approve access, then paste the code shown."}
+        </text>
+        <box
+          style={{ border: true, borderColor: theme.accent, height: 3, marginBottom: 1 }}
+          title="authorization code — paste and press Enter"
+        >
+          <input focused placeholder="code#state…" onSubmit={handleCodeSubmit} />
+        </box>
+        {codeBusy ? <text fg={theme.dim}>{"Exchanging code…"}</text> : null}
+        {codeError ? (
+          <text fg={theme.error} style={{ marginBottom: 1 }}>
+            {codeError}
+          </text>
+        ) : null}
+        <text fg={theme.dim}>{"Enter to connect · Esc to go back"}</text>
       </box>
     )
   }

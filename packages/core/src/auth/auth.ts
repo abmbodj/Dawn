@@ -2,10 +2,9 @@ import fs from "node:fs"
 import path from "node:path"
 import { dataDir } from "../paths"
 
-interface AuthEntry {
-  type: "api"
-  key: string
-}
+export type AuthEntry =
+  | { type: "api"; key: string }
+  | { type: "oauth"; access: string; refresh: string; expires: number }
 
 type AuthFile = Record<string, AuthEntry>
 
@@ -44,13 +43,31 @@ export function listAuthProviders(): string[] {
   return Object.keys(readAuthFile())
 }
 
+export function getAuthEntry(providerId: string): AuthEntry | undefined {
+  return readAuthFile()[providerId]
+}
+
+export function setOAuthTokens(
+  providerId: string,
+  tokens: { access: string; refresh: string; expires: number },
+): void {
+  const data = readAuthFile()
+  data[providerId] = { type: "oauth", ...tokens }
+  writeAuthFile(data)
+}
+
+export function hasOAuth(providerId: string): boolean {
+  return readAuthFile()[providerId]?.type === "oauth"
+}
+
 /**
  * Resolve an API key for a provider: explicit auth store first,
- * then any of the provider's documented env vars.
+ * then any of the provider's documented env vars. OAuth entries are
+ * not API keys — callers check hasOAuth() separately.
  */
 export function resolveApiKey(providerId: string, envNames: string[] = []): string | undefined {
   const stored = readAuthFile()[providerId]
-  if (stored?.key) return stored.key
+  if (stored?.type === "api" && stored.key) return stored.key
   for (const name of envNames) {
     const value = process.env[name]
     if (value) return value

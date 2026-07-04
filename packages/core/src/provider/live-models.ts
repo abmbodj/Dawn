@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
-import { resolveApiKey } from "../auth/auth"
+import { accessToken, OAUTH_BETA_HEADER } from "../auth/anthropic-oauth"
+import { hasOAuth, resolveApiKey } from "../auth/auth"
 import type { DawnConfig } from "../config/config"
 import { cacheDir } from "../paths"
 import type { Catalog, ModelInfo, ProviderInfo } from "./catalog"
@@ -212,12 +213,16 @@ async function fetchOpenAICompatible(
 }
 
 /** Anthropic /v1/models: { data: [{ id, display_name, … }] } */
-async function fetchAnthropic(apiKey: string): Promise<LiveModel[]> {
+async function fetchAnthropic(auth: { apiKey?: string; bearer?: string }): Promise<LiveModel[]> {
+  const headers: Record<string, string> = { "anthropic-version": "2023-06-01" }
+  if (auth.bearer) {
+    headers.authorization = `Bearer ${auth.bearer}`
+    headers["anthropic-beta"] = OAUTH_BETA_HEADER
+  } else if (auth.apiKey) {
+    headers["x-api-key"] = auth.apiKey
+  }
   const res = await fetch("https://api.anthropic.com/v1/models", {
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
+    headers,
     signal: AbortSignal.timeout(8000),
   })
   if (!res.ok) return []
@@ -284,7 +289,7 @@ export async function withLiveModels(
   // No credential and the provider requires one: not connected, the picker
   // won't show it — leave the raw catalog data untouched for pricing lookups.
   const requiresKey = envNames.length > 0
-  if (!apiKey && requiresKey) return catalog
+  if (!apiKey && requiresKey && !hasOAuth(providerId)) return catalog
 
   // From here on the provider counts as connected. Every path that doesn't
   // land a live list must clamp so raw catalog models are never displayed.
@@ -292,7 +297,13 @@ export async function withLiveModels(
     let liveModels: LiveModel[] = []
 
     if (providerId === "anthropic") {
-      if (apiKey) liveModels = await fetchAnthropic(apiKey)
+      if (apiKey) {
+        liveModels = await fetchAnthropic({ apiKey })
+      } else {
+        // OAuth (Claude Pro/Max): /v1/models with a Bearer token is per-account.
+        const bearer = await accessToken()
+        if (bearer) liveModels = await fetchAnthropic({ bearer })
+      }
     } else if (providerId === "google") {
       if (apiKey) liveModels = await fetchGoogle(apiKey)
     } else if (baseURL) {

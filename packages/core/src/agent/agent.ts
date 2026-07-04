@@ -1,4 +1,5 @@
 import { type ModelMessage, stepCountIs, streamText, type ToolSet } from "ai"
+import { CLAUDE_CODE_SYSTEM_PREFIX } from "../auth/anthropic-oauth"
 import type { Bus } from "../bus/bus"
 import { CheckpointStore } from "../checkpoint/checkpoint"
 import type { DawnConfig } from "../config/config"
@@ -28,7 +29,7 @@ import { loadEnabledPlugins, pluginMcpServers } from "../plugins/registry"
 import type { Catalog } from "../provider/catalog"
 import { BLESSED_MODELS, getModelInfo, normalizeModelRef, parseModelRef } from "../provider/catalog"
 import { AMPLE_BUDGET_THRESHOLD, budgetFor, type ModelProfile, resolveProfile } from "../provider/profile"
-import { resolveModel } from "../provider/provider"
+import { resolveModel, usesOAuth } from "../provider/provider"
 import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
 import { buildSkillCatalog, discoverSkills, findSkill, matchAutoTriggers } from "../skills/registry"
@@ -422,10 +423,16 @@ export class DawnAgent {
     return this.contextStore.contextPlanTotals(sessionIds)
   }
 
-  private requestMessages(profile: ModelProfile): {
+  private requestMessages(
+    profile: ModelProfile,
+    providerId?: string,
+  ): {
     system: string | import("../context/budget").SystemModelMessage
     messages: ModelMessage[]
   } {
+    // Subscription-OAuth Anthropic requests must present as Claude Code.
+    // Static per session, so the cached prompt prefix is unaffected.
+    const spoof = providerId === "anthropic" && usesOAuth("anthropic", this.opts.catalog, this.opts.config)
     const latest = this.messages[this.messages.length - 1]
     const query = typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
     const summaries = this.relevantSummaries(query)
@@ -438,7 +445,7 @@ export class DawnAgent {
     const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
     this.compactionPlanMark = this.compaction.savedTokens
     const buildArgs = {
-      system: this.system,
+      system: spoof ? `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${this.system}` : this.system,
       messages: this.messages,
       workingSet: this.workingSet.all(),
       summaries,
@@ -580,7 +587,7 @@ export class DawnAgent {
           // in messages even when their own models produced it in a previous step.
           const needsReasoningStrip = profile.reasoning === "strip"
 
-          const { system, messages: requestMsgs } = this.requestMessages(profile)
+          const { system, messages: requestMsgs } = this.requestMessages(profile, providerId)
 
           // Thread reasoning-aware params. Reasoning models (o-series, codex, deepseek-r1, …)
           // reject temperature and expect max_completion_tokens on OpenAI-compatible transports.
