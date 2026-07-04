@@ -13,6 +13,7 @@ import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
 import { type ProviderOption, SETUP_PROVIDERS } from "./ProviderConnect"
+import { SelectList, type SelectListItem, safeSelection } from "./SelectList"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -203,30 +204,6 @@ function isSelectable(row: Row | undefined): boolean {
   return row?.kind === "model" || row?.kind === "connect"
 }
 
-/** Clamp idx to a selectable row, searching forward then backward if needed. */
-function safeSelection(rows: Row[], idx: number): number {
-  if (rows.length === 0) return 0
-  const clamped = Math.max(0, Math.min(idx, rows.length - 1))
-  if (isSelectable(rows[clamped])) return clamped
-  for (let i = clamped + 1; i < rows.length; i++) {
-    if (isSelectable(rows[i])) return i
-  }
-  for (let i = clamped - 1; i >= 0; i--) {
-    if (isSelectable(rows[i])) return i
-  }
-  return clamped
-}
-
-/** Move to the next selectable row in direction (+1 or -1), skipping headers. */
-function nextSel(rows: Row[], from: number, dir: 1 | -1): number {
-  let i = from + dir
-  while (i >= 0 && i < rows.length) {
-    if (isSelectable(rows[i])) return i
-    i += dir
-  }
-  return from
-}
-
 function rowKey(row: Row): string {
   if (row.kind === "model") return `model-${row.entry.ref}`
   if (row.kind === "connect") return `connect-${row.provider.id}`
@@ -351,65 +328,32 @@ export function ModelPicker({
   const [selectedFlatIdx, setSelectedFlatIdx] = useState(() => {
     const r = buildPickerRows(catalog, config, current, "")
     const i = r.findIndex((row) => row.kind === "model" && row.entry.ref === current)
-    return i >= 0 ? i : safeSelection(r, 0)
-  })
-  const [scrollTop, setScrollTop] = useState(() => {
-    const r = buildPickerRows(catalog, config, current, "")
-    const i = r.findIndex((row) => row.kind === "model" && row.entry.ref === current)
-    const sel = i >= 0 ? i : safeSelection(r, 0)
-    return Math.max(0, sel - Math.floor(VISIBLE_HEIGHT / 2))
+    return i >= 0 ? i : 0
   })
 
   const rows = buildPickerRows(catalog, config, current, query)
   const wide = width >= 70
 
-  const sel = safeSelection(rows, selectedFlatIdx)
-  const safeScrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, rows.length - VISIBLE_HEIGHT)))
-  const visibleRows = rows.slice(safeScrollTop, safeScrollTop + VISIBLE_HEIGHT)
+  const items: SelectListItem[] = rows.map((row) => ({
+    key: rowKey(row),
+    selectable: isSelectable(row),
+    render: (selected) => <PickerRow row={row} selected={selected} wide={wide} />,
+  }))
+  const sel = safeSelection(items, selectedFlatIdx)
 
-  const moveSel = (dir: 1 | -1) => {
-    const next = nextSel(rows, sel, dir)
-    if (next === sel) return
-    setSelectedFlatIdx(next)
-    if (next < safeScrollTop) setScrollTop(next)
-    else if (next >= safeScrollTop + VISIBLE_HEIGHT) setScrollTop(next - VISIBLE_HEIGHT + 1)
+  const activate = (i: number) => {
+    const row = rows[i]
+    if (row?.kind === "model") onPick(row.entry.ref)
+    else if (row?.kind === "connect") onConnect(row.provider)
   }
 
+  // Arrow/PgUp/PgDn/Enter and all mouse interaction live in SelectList.
   useKeyboard((key) => {
     if (key.ctrl && key.name === "c") process.exit(0)
-    if (key.name === "up") {
-      moveSel(-1)
-      return
-    }
-    if (key.name === "down") {
-      moveSel(1)
-      return
-    }
-    if (key.name === "pageup") {
-      for (let i = 0; i < VISIBLE_HEIGHT; i++) moveSel(-1)
-      return
-    }
-    if (key.name === "pagedown") {
-      for (let i = 0; i < VISIBLE_HEIGHT; i++) moveSel(1)
-      return
-    }
-    if (key.name === "return") {
-      const row = rows[sel]
-      if (row?.kind === "model") {
-        onPick(row.entry.ref)
-        return
-      }
-      if (row?.kind === "connect") {
-        onConnect(row.provider)
-        return
-      }
-      return
-    }
     if (key.name === "escape") {
       if (query) {
         setQuery("")
         setSelectedFlatIdx(0)
-        setScrollTop(0)
         return
       }
       onClose()
@@ -421,7 +365,6 @@ export function ModelPicker({
     const q = typeof val === "string" ? val : String((val as any)?.value ?? "")
     setQuery(q)
     setSelectedFlatIdx(0)
-    setScrollTop(0)
   }
 
   const title = query
@@ -440,9 +383,13 @@ export function ModelPicker({
       <box style={{ height: 1 }}>
         <input focused value={query} placeholder="search models…" onInput={handleInput} />
       </box>
-      {visibleRows.map((row, i) => (
-        <PickerRow key={rowKey(row)} row={row} selected={safeScrollTop + i === sel} wide={wide} />
-      ))}
+      <SelectList
+        items={items}
+        height={VISIBLE_HEIGHT}
+        selectedIndex={sel}
+        onSelectIndex={setSelectedFlatIdx}
+        onActivate={activate}
+      />
       <text fg={theme.dim} style={{ paddingLeft: 1 }}>
         {footer}
       </text>
