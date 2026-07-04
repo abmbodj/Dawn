@@ -1,7 +1,9 @@
 import {
+  type Catalog,
   copyToClipboard,
   type DawnConfig,
   type DeviceFlowStart,
+  ENTERPRISE_PROVIDERS,
   openExternalUrl,
   pollForToken,
   resolveGithubClientId,
@@ -80,6 +82,35 @@ export const SETUP_PROVIDERS: [ProviderOption, ...ProviderOption[]] = [
     envVar: "MISTRAL_API_KEY",
   },
 ]
+
+/**
+ * Every provider a key can be pasted for: the curated SETUP_PROVIDERS first
+ * (familiar order and labels), then all remaining models.dev catalog providers
+ * that declare an auth env var and dispatch through an OpenAI-compatible
+ * baseURL (or a native SDK for anthropic/openai/google). Enterprise gateways
+ * (bedrock/vertex/azure) are excluded — they authenticate via cloud credential
+ * chains, not a pasted key.
+ */
+export function connectableProviders(catalog: Catalog): ProviderOption[] {
+  const curated = new Set(SETUP_PROVIDERS.map((p) => p.id))
+  const NATIVE_SDK = new Set(["anthropic", "openai", "google"])
+  const extra: ProviderOption[] = []
+  for (const info of Object.values(catalog)) {
+    if (!info?.id || curated.has(info.id) || ENTERPRISE_PROVIDERS.has(info.id)) continue
+    if (!info.env || info.env.length === 0) continue
+    if (!info.api && !NATIVE_SDK.has(info.id)) continue // no way to dispatch requests
+    const firstModel = Object.keys(info.models ?? {})[0]
+    extra.push({
+      id: info.id,
+      label: info.name || info.id,
+      url: (info.doc ?? "models.dev").replace(/^https?:\/\//, ""),
+      defaultModel: firstModel ? `${info.id}/${firstModel}` : "",
+      envVar: info.env[0] ?? "",
+    })
+  }
+  extra.sort((a, b) => a.label.localeCompare(b.label))
+  return [...SETUP_PROVIDERS, ...extra]
+}
 
 export interface ProviderConnectProps {
   /** When set, skip the pick phase and go straight to key/oauth for this provider. */

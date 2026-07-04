@@ -12,7 +12,7 @@ import {
 import { useKeyboard } from "@opentui/react"
 import { useState } from "react"
 import { theme } from "../theme"
-import { type ProviderOption, SETUP_PROVIDERS } from "./ProviderConnect"
+import { connectableProviders, type ProviderOption } from "./ProviderConnect"
 import { SelectList, type SelectListItem, safeSelection } from "./SelectList"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -186,13 +186,18 @@ export function buildPickerRows(catalog: Catalog, config: DawnConfig, current: s
     for (const e of entries) rows.push({ kind: "model", entry: e })
   }
 
-  // "More providers" section — hidden during search
-  if (!q) {
-    const unconnected = SETUP_PROVIDERS.filter((p) => !connectedIds.has(p.id))
-    if (unconnected.length > 0) {
-      rows.push({ kind: "header", label: "MORE PROVIDERS", count: unconnected.length })
-      for (const p of unconnected) rows.push({ kind: "connect", provider: p })
-    }
+  // "More providers" section — every connectable catalog provider; the
+  // search query filters it by name instead of hiding it (the full
+  // models.dev list is ~60 entries).
+  let unconnected = connectableProviders(catalog).filter((p) => !connectedIds.has(p.id))
+  if (q) {
+    unconnected = unconnected.filter(
+      (p) => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q),
+    )
+  }
+  if (unconnected.length > 0) {
+    rows.push({ kind: "header", label: "MORE PROVIDERS", count: unconnected.length })
+    for (const p of unconnected) rows.push({ kind: "connect", provider: p })
   }
 
   return rows

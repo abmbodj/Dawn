@@ -35,6 +35,8 @@ export interface ProviderInfo {
   env?: string[]
   npm?: string
   api?: string
+  /** Provider docs/console URL (supplied by models.dev). */
+  doc?: string
   /** Extra HTTP headers sent on every request to this provider (both chat and model listing). */
   headers?: Record<string, string>
   /**
