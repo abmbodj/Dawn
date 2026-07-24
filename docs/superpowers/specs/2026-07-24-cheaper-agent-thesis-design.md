@@ -56,9 +56,13 @@ Replace the Anthropic-only `supportsCaching` boolean with two fields on `ModelPr
 ### Adaptive budget
 
 - CLI/`dawn run`: **omit** `tokenBudget` unless `--budget` is set → `budgetFor(profile, info, mode)`
-- Caching models: fraction of context window by mode (`minimal` 35%, `balanced` 65%, `deep` 80%), capped at 200k
-- Non-caching: lean budgets scaled lightly by mode
+- Caching models get a **modest** uplift, hard-capped for $ safety (not 65% of the window):
+  - `minimal`: `min(window × 0.06, 12_000)`
+  - `balanced`: `min(window × 0.10, 20_000)` — at/under the ample TTL threshold so file leases still expire
+  - `deep`: `min(window × 0.15, 32_000)`
+- Non-caching: lean budgets scaled lightly by mode (6k / 8k / 12k)
 - `--budget` remains a hard override
+- Rationale: uncapped adaptive budgets let investigate tasks retain huge tool outputs and lose $ vs `--naive` despite cache reads (Haiku `cat-budget`: 71k vs 18k tokens).
 
 ### Pay-for-itself summary injection
 

@@ -13,14 +13,23 @@ import {
 export const AMPLE_BUDGET_THRESHOLD = 20_000
 /** Lean budget for non-caching providers (matches the original tight default). */
 export const LEAN_TOKEN_BUDGET = 8_000
-/** Never request more than this many tokens even on huge-window models (API sanity cap). */
-const MAX_ADAPTIVE_BUDGET = 200_000
 
-/** Fraction of the model context window used when prompt caching amortizes the stable prefix. */
+/**
+ * Modest fraction of the model window when prompt caching amortizes the stable prefix.
+ * Kept small on purpose: a 65%-of-window budget let investigate tasks retain huge tool
+ * outputs and lose $ vs `--naive` despite cache reads.
+ */
 const CACHED_BUDGET_FRACTION: Record<ContextMode, number> = {
-  minimal: 0.35,
-  balanced: 0.65,
-  deep: 0.8,
+  minimal: 0.06,
+  balanced: 0.1,
+  deep: 0.15,
+}
+
+/** Absolute ceiling for caching-model budgets (wins over window×fraction). */
+const CACHED_BUDGET_CAP: Record<ContextMode, number> = {
+  minimal: 12_000,
+  balanced: 20_000,
+  deep: 32_000,
 }
 
 /** Lean budgets when every re-send is billed at full input price. */
@@ -32,9 +41,9 @@ const LEAN_BUDGET_BY_MODE: Record<ContextMode, number> = {
 
 /**
  * Compute the effective token budget for a model + context mode.
- * Caching models (`promptCaches`) get a mode-scaled fraction of the real context window
- * because the stable prefix is billed at cache-read rates after the first turn.
- * Non-caching / local providers stay lean so each turn doesn't pay full price for a large re-send.
+ * Caching models (`promptCaches`) get a modest uplift over lean so cache amortization
+ * can help — hard-capped so investigate tasks cannot inflate to tens of thousands of
+ * retained tokens. Non-caching / local providers stay lean.
  */
 export function budgetFor(
   profile: Pick<ModelProfile, "promptCaches">,
@@ -44,7 +53,7 @@ export function budgetFor(
   if (!profile.promptCaches) return LEAN_BUDGET_BY_MODE[mode]
   const windowTokens = info?.limit?.context
   if (!windowTokens) return LEAN_BUDGET_BY_MODE[mode]
-  return Math.min(MAX_ADAPTIVE_BUDGET, Math.floor(windowTokens * CACHED_BUDGET_FRACTION[mode]))
+  return Math.min(CACHED_BUDGET_CAP[mode], Math.floor(windowTokens * CACHED_BUDGET_FRACTION[mode]))
 }
 
 /**

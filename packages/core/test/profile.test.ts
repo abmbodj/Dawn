@@ -149,17 +149,20 @@ describe("budgetFor", () => {
     expect(budgetFor(profile, undefined, "deep")).toBe(12_000)
   })
 
-  test("caching models use a mode-scaled fraction of the context window", () => {
+  test("caching models use a modest capped fraction of the context window", () => {
     const profile = { promptCaches: true as const }
     const info = { id: "m", name: "m", limit: { context: 100_000 } }
-    expect(budgetFor(profile, info, "minimal")).toBe(35_000)
-    expect(budgetFor(profile, info, "balanced")).toBe(65_000)
-    expect(budgetFor(profile, info, "deep")).toBe(80_000)
+    // 100k × 0.06/0.10/0.15 = 6k/10k/15k — all under the absolute caps
+    expect(budgetFor(profile, info, "minimal")).toBe(6_000)
+    expect(budgetFor(profile, info, "balanced")).toBe(10_000)
+    expect(budgetFor(profile, info, "deep")).toBe(15_000)
   })
 
-  test("adaptive budget never exceeds the sanity cap", () => {
+  test("absolute mode caps win over large context windows", () => {
     const profile = { promptCaches: true as const }
     const info = { id: "m", name: "m", limit: { context: 1_000_000 } }
-    expect(budgetFor(profile, info, "balanced")).toBe(200_000)
+    expect(budgetFor(profile, info, "minimal")).toBe(12_000)
+    expect(budgetFor(profile, info, "balanced")).toBe(20_000)
+    expect(budgetFor(profile, info, "deep")).toBe(32_000)
   })
 })

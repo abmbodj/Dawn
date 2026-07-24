@@ -77,7 +77,8 @@ describe("cheaper-agent planner invariants", () => {
   test("omitting tokenBudget uses adaptive budgetFor for caching Claude", () => {
     const profile = resolveProfile("anthropic/claude-opus-4-8", catalog())
     const expected = budgetFor(profile, catalog().anthropic?.models["claude-opus-4-8"], "balanced")
-    expect(expected).toBe(130_000)
+    // 200k × 0.10 = 20k, hard-capped at 20k
+    expect(expected).toBe(20_000)
     expect(agentFor("anthropic/claude-opus-4-8").contextStats().budget).toBe(expected)
   })
 
@@ -102,10 +103,11 @@ describe("cheaper-agent planner invariants", () => {
     expect(agentFor("anthropic/claude-opus-4-8", 8000).contextStats().budget).toBe(8000)
   })
 
-  test("context mode scales adaptive Claude budget", () => {
+  test("context mode scales adaptive Claude budget within absolute caps", () => {
     const profile = resolveProfile("anthropic/claude-opus-4-8", catalog())
     const info = catalog().anthropic?.models["claude-opus-4-8"]
-    expect(budgetFor(profile, info, "minimal")).toBe(70_000)
-    expect(budgetFor(profile, info, "deep")).toBe(160_000)
+    // 200k × 0.06 = 12k → capped at 12k; 200k × 0.15 = 30k → capped at 32k → 30k
+    expect(budgetFor(profile, info, "minimal")).toBe(12_000)
+    expect(budgetFor(profile, info, "deep")).toBe(30_000)
   })
 })

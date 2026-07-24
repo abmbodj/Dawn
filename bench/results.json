@@ -1,41 +1,175 @@
 {
   "provenance": {
-    "generatedAt": "2026-07-03T19:41:10.798Z",
-    "gitSha": "cab865008b091ae017f20d2d1ce0dc78cf157bab",
-    "gitShaShort": "cab86500",
-    "model": "github-copilot/gpt-4.1",
+    "generatedAt": "2026-07-24T22:59:09.851Z",
+    "gitSha": "5ea01719d26dab4e06947602912d4f8a55325ffd",
+    "gitShaShort": "5ea01719",
+    "model": "anthropic/claude-haiku-4-5-20251001",
     "claudeModel": null,
+    "aider": false,
     "reps": 1,
-    "taskCount": 1,
+    "taskCount": 5,
     "smoke": false
   },
   "results": [
     {
-      "task": "pilot-diagnosis-maxreadlines",
-      "category": "diagnosis",
+      "task": "trivial-hello",
+      "category": "trivial",
+      "slice": "trivial",
       "modes": {
         "dawn": [
           {
-            "inputTokens": 12993,
-            "cachedInputTokens": 5248,
-            "outputTokens": 90,
-            "cacheWriteTokens": 0,
-            "cost": 0.018834,
-            "steps": 3,
-            "ms": 5254,
+            "inputTokens": 12289,
+            "cachedInputTokens": 5775,
+            "outputTokens": 164,
+            "cacheWriteTokens": 5775,
+            "cost": 0.00935525,
+            "steps": 2,
+            "ms": 4428,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 18385,
-            "cachedInputTokens": 15232,
-            "outputTokens": 144,
+            "inputTokens": 12286,
+            "cachedInputTokens": 0,
+            "outputTokens": 168,
             "cacheWriteTokens": 0,
-            "cost": 0.015074,
+            "cost": 0.013125999999999999,
+            "steps": 2,
+            "ms": 5087,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "cat-budget",
+      "category": "read-heavy",
+      "slice": "investigate",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 71079,
+            "cachedInputTokens": 40150,
+            "outputTokens": 616,
+            "cacheWriteTokens": 8030,
+            "cost": 0.040031500000000005,
+            "steps": 6,
+            "ms": 13515,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 18577,
+            "cachedInputTokens": 0,
+            "outputTokens": 290,
+            "cacheWriteTokens": 0,
+            "cost": 0.020027,
+            "steps": 2,
+            "ms": 6445,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "grep-exports",
+      "category": "read-heavy",
+      "slice": "investigate",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 17746,
+            "cachedInputTokens": 8344,
+            "outputTokens": 186,
+            "cacheWriteTokens": 8344,
+            "cost": 0.0132524,
+            "steps": 2,
+            "ms": 3848,
+            "success": false,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 21291,
+            "cachedInputTokens": 0,
+            "outputTokens": 170,
+            "cacheWriteTokens": 0,
+            "cost": 0.022141,
+            "steps": 2,
+            "ms": 5105,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "edit-maxreadchars",
+      "category": "edit",
+      "slice": "edit",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 46726,
+            "cachedInputTokens": 30700,
+            "outputTokens": 684,
+            "cacheWriteTokens": 7675,
+            "cost": 0.02443475,
             "steps": 5,
-            "ms": 5230,
+            "ms": 13574,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 54714,
+            "cachedInputTokens": 0,
+            "outputTokens": 775,
+            "cacheWriteTokens": 0,
+            "cost": 0.058589,
+            "steps": 6,
+            "ms": 15515,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "mt-diagnosis-recall",
+      "category": "diagnosis",
+      "slice": "long",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 60287,
+            "cachedInputTokens": 37113,
+            "outputTokens": 536,
+            "cacheWriteTokens": 20083,
+            "cost": 0.03458605,
+            "steps": 5,
+            "ms": 18464,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 61445,
+            "cachedInputTokens": 0,
+            "outputTokens": 445,
+            "cacheWriteTokens": 0,
+            "cost": 0.06367,
+            "steps": 5,
+            "ms": 11519,
             "success": true,
             "errored": false
           }

@@ -268,7 +268,7 @@ export class DawnAgent {
       contextStore: this.contextStore,
       workingSet: this.workingSet,
       contextMode: this.contextMode,
-      ampleBudget: this.tokenBudget >= AMPLE_BUDGET_THRESHOLD,
+      ampleBudget: this.tokenBudget > AMPLE_BUDGET_THRESHOLD,
       readRegistry: this.readRegistry,
       bgProcs: this.bgProcs,
       sessionId: opts.sessionId,
