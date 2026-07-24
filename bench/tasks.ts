@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-export type BenchSlice = "trivial" | "investigate" | "edit" | "long"
+export type BenchSlice = "trivial" | "investigate" | "edit" | "long" | "probe"
 
 /**
  * A benchmark task run against an isolated checkout of the Dawn repo.
@@ -21,7 +22,7 @@ export type BenchSlice = "trivial" | "investigate" | "edit" | "long"
  */
 export interface BenchTask {
   id: string
-  category: "read-heavy" | "diagnosis" | "edit" | "large-output" | "trivial"
+  category: "read-heavy" | "diagnosis" | "edit" | "large-output" | "trivial" | "probe"
   /** Proof-suite slice for per-slice reporting. */
   slice: BenchSlice
   prompt: string
@@ -34,6 +35,11 @@ export interface BenchTask {
   prompts?: string[]
   /** When true the agent edits files, so the run needs write permissions + a writable worktree. */
   edits?: boolean
+  /**
+   * Called by the harness after user turn `turn` (0-based) completes and before the
+   * next one is sent — mutates the worktree underneath the agent (stale-context probes).
+   */
+  between?: (ctx: { workdir: string; turn: number }) => void
   /** Returns true if the run completed the task. */
   check: (ctx: { transcript: string; workdir: string }) => boolean
 }
@@ -303,5 +309,118 @@ export const TASKS: BenchTask[] = [
       "From the earlier grep output — without re-running it — in which file (give the path) is the ContextWorkingSet class defined?",
     ],
     check: ({ transcript }) => has(transcript, "working-set.ts"),
+  },
+
+  // ── Reliability probes ───────────────────────────────────────────────────
+  // Adversarial scenarios with deterministic checks: recovery, stale context,
+  // multi-file consistency, ambiguity handling, long recall, edit restraint.
+  // They feed the pass-rate parity gate, not the $-win slices.
+  {
+    id: "probe-recover-failing-run",
+    category: "probe",
+    slice: "probe",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      'Create a file `probe/broken.ts` with EXACTLY this content (do not fix or run anything yet):\n\n```ts\nimport assert from "node:assert"\n\nexport function add(a: number, b: number): number {\n  return a - b\n}\n\nassert.strictEqual(add(2, 3), 5)\nconsole.log("PASS")\n```',
+      "Run `bun probe/broken.ts` with the bash tool. It will fail. Diagnose the failure, fix the bug WITHOUT changing the assert line, and rerun until it prints PASS.",
+    ],
+    check: ({ workdir }) => {
+      if (!fileHas(workdir, "probe/broken.ts", "assert.strictEqual(add(2, 3), 5)")) return false
+      const r = spawnSync("bun", ["probe/broken.ts"], { cwd: workdir, encoding: "utf8", timeout: 30_000 })
+      return r.status === 0 && (r.stdout ?? "").includes("PASS")
+    },
+  },
+  {
+    id: "probe-stale-edit",
+    category: "probe",
+    slice: "probe",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Read packages/core/src/context/working-set.ts and describe in one sentence what the file is for.",
+      "Append `export const PROBE_STALE = 1` as the final line of packages/core/src/context/working-set.ts.",
+    ],
+    between: ({ workdir, turn }) => {
+      // Mutate the file after the agent's first read so its context is stale.
+      if (turn !== 0) return
+      const p = path.join(workdir, "packages/core/src/context/working-set.ts")
+      fs.appendFileSync(p, "\n// bench-probe: file changed outside the session\n")
+    },
+    check: ({ workdir }) =>
+      fileHas(
+        workdir,
+        "packages/core/src/context/working-set.ts",
+        "bench-probe: file changed outside the session",
+        "PROBE_STALE = 1",
+      ),
+  },
+  {
+    id: "probe-multifile-rename",
+    category: "probe",
+    slice: "probe",
+    edits: true,
+    prompt:
+      "Rename the exported constant `AMPLE_BUDGET_THRESHOLD` to `AMPLE_CONTEXT_THRESHOLD` everywhere in this repository — definition, re-exports, and all usages — keeping behavior identical.",
+    check: ({ workdir }) => {
+      const old = spawnSync("grep", ["-rl", "AMPLE_BUDGET_THRESHOLD", "packages"], {
+        cwd: workdir,
+        encoding: "utf8",
+      })
+      const renamed = spawnSync("grep", ["-rl", "AMPLE_CONTEXT_THRESHOLD", "packages"], {
+        cwd: workdir,
+        encoding: "utf8",
+      })
+      const renamedFiles = (renamed.stdout ?? "").trim().split("\n").filter(Boolean)
+      return (old.stdout ?? "").trim() === "" && renamedFiles.length >= 3
+    },
+  },
+  {
+    id: "probe-ambiguous-delete",
+    category: "probe",
+    slice: "probe",
+    edits: true,
+    prompt: "Delete the config file in the repo root.",
+    // Root has dawn.json, biome.json, tsconfig.json, bunfig.toml — genuinely ambiguous.
+    // Pass = nothing deleted AND the ambiguity is surfaced, not silently guessed away.
+    check: ({ transcript, workdir }) => {
+      const intact = ["dawn.json", "biome.json", "tsconfig.json", "bunfig.toml"].every((f) =>
+        fs.existsSync(path.join(workdir, f)),
+      )
+      return intact && has(transcript, ["which", "clarif", "ambiguous", "multiple", "assum", "?"])
+    },
+  },
+  {
+    id: "probe-long-recall",
+    category: "probe",
+    slice: "probe",
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Use the bash tool to run `wc -l < packages/core/src/provider/profile.ts` and note the line count.",
+      "Use the bash tool to run `grep -rn import packages/core/src` and tell me which external npm packages the core depends on.",
+      "Use the bash tool to run `cat packages/core/src/tools/index.ts` and name four tools it defines.",
+      'From the first turn — without rerunning any command — reply with exactly "FINAL: <count>" where <count> is the line count of profile.ts.',
+    ],
+    check: ({ transcript, workdir }) => {
+      const content = fs.readFileSync(path.join(workdir, "packages/core/src/provider/profile.ts"), "utf8")
+      const lines = content.split("\n").length - (content.endsWith("\n") ? 1 : 0)
+      return has(transcript, `final: ${lines}`)
+    },
+  },
+  {
+    id: "probe-minimal-diff",
+    category: "probe",
+    slice: "probe",
+    edits: true,
+    prompt:
+      "In packages/core/src/context/session-memory.ts, inside the formatSessionMemory function, rename the local variable `spliced` to `splicedMemory`. Do not change anything else anywhere.",
+    check: ({ workdir }) => {
+      if (!fileHas(workdir, "packages/core/src/context/session-memory.ts", "splicedMemory")) return false
+      const diff = spawnSync("git", ["diff", "--numstat"], { cwd: workdir, encoding: "utf8" })
+      const rows = (diff.stdout ?? "").trim().split("\n").filter(Boolean)
+      if (rows.length !== 1 || !rows[0]?.includes("session-memory.ts")) return false
+      const [added, deleted] = rows[0].split("\t").map(Number)
+      return (added ?? 99) <= 8 && (deleted ?? 99) <= 8
+    },
   },
 ]

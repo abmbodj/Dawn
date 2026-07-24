@@ -26,9 +26,11 @@ import {
   Bus,
   buildRepoIndex,
   ContextStore,
+  computeCost,
   DawnAgent,
   loadCatalog,
   loadConfig,
+  type ModelInfo,
   PermissionGate,
   SessionStore,
   selectInitialModel,
@@ -182,14 +184,15 @@ async function runDawn(
   const started = Date.now()
   const prompts = task.prompts && task.prompts.length > 0 ? task.prompts : [task.prompt]
   try {
-    for (const prompt of prompts) {
+    for (let i = 0; i < prompts.length; i++) {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       try {
-        await agent.send(prompt, controller.signal)
+        await agent.send(prompts[i] as string, controller.signal)
       } finally {
         clearTimeout(timer)
       }
+      if (i < prompts.length - 1) task.between?.({ workdir, turn: i })
     }
   } catch (err) {
     errored = true
@@ -233,54 +236,92 @@ function aiderAvailable(): boolean {
   return r.status === 0
 }
 
-function runClaude(task: BenchTask, workdir: string, claudeModel: string, timeoutMs: number): RunMetrics {
+/**
+ * Runs Claude Code on a task, resuming the same session for multi-turn tasks.
+ * Token semantics match Dawn's ledger: `inputTokens` is the TOTAL prompt size
+ * (uncached + cache reads + cache writes). When the CLI reports no dollar cost
+ * (subscription logins), usage is priced through the same models.dev catalog
+ * Dawn uses — simulated $ from measured tokens.
+ */
+function runClaude(
+  task: BenchTask,
+  workdir: string,
+  claudeModel: string,
+  timeoutMs: number,
+  info: ModelInfo | undefined,
+): RunMetrics {
   const started = Date.now()
-  const r = spawnSync(
-    "claude",
-    ["-p", task.prompt, "--output-format", "json", "--model", claudeModel, "--dangerously-skip-permissions"],
-    { cwd: workdir, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
-  )
-  const ms = Date.now() - started
-  const empty: RunMetrics = {
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
-    cacheWriteTokens: 0,
-    cost: 0,
-    steps: 0,
-    ms,
-    success: false,
-    errored: true,
-  }
-  if (r.status !== 0 || !r.stdout) {
-    return { ...empty, error: (r.stderr || "claude exited non-zero").slice(0, 300) }
-  }
-  try {
-    const j = JSON.parse(r.stdout) as {
-      result?: string
-      total_cost_usd?: number
-      usage?: {
-        input_tokens?: number
-        output_tokens?: number
-        cache_read_input_tokens?: number
-        cache_creation_input_tokens?: number
+  const totals = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 }
+  let reportedCost = 0
+  let steps = 0
+  let transcript = ""
+  let sessionId: string | undefined
+  const prompts = task.prompts && task.prompts.length > 0 ? task.prompts : [task.prompt]
+
+  for (let i = 0; i < prompts.length; i++) {
+    const args = [
+      "-p",
+      prompts[i] as string,
+      "--output-format",
+      "json",
+      "--model",
+      claudeModel,
+      "--dangerously-skip-permissions",
+    ]
+    if (sessionId) args.push("--resume", sessionId)
+    const r = spawnSync("claude", args, {
+      cwd: workdir,
+      encoding: "utf8",
+      timeout: timeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    const fail = (error: string): RunMetrics => ({
+      ...totals,
+      cost: reportedCost,
+      steps,
+      ms: Date.now() - started,
+      success: false,
+      errored: true,
+      error: error.slice(0, 300),
+    })
+    if (r.status !== 0 || !r.stdout) return fail(r.stderr || "claude exited non-zero")
+    try {
+      const j = JSON.parse(r.stdout) as {
+        result?: string
+        session_id?: string
+        num_turns?: number
+        total_cost_usd?: number
+        usage?: {
+          input_tokens?: number
+          output_tokens?: number
+          cache_read_input_tokens?: number
+          cache_creation_input_tokens?: number
+        }
       }
+      const u = j.usage ?? {}
+      const cached = u.cache_read_input_tokens ?? 0
+      const cacheWrite = u.cache_creation_input_tokens ?? 0
+      totals.inputTokens += (u.input_tokens ?? 0) + cached + cacheWrite
+      totals.cachedInputTokens += cached
+      totals.cacheWriteTokens += cacheWrite
+      totals.outputTokens += u.output_tokens ?? 0
+      reportedCost += j.total_cost_usd ?? 0
+      steps += j.num_turns ?? 0
+      transcript += `${j.result ?? ""}\n`
+      sessionId = j.session_id
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : "failed to parse claude json")
     }
-    const u = j.usage ?? {}
-    const transcript = j.result ?? ""
-    return {
-      inputTokens: u.input_tokens ?? 0,
-      cachedInputTokens: u.cache_read_input_tokens ?? 0,
-      outputTokens: u.output_tokens ?? 0,
-      cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
-      cost: j.total_cost_usd ?? 0,
-      steps: 0,
-      ms,
-      success: task.check({ transcript, workdir }),
-      errored: false,
-    }
-  } catch (err) {
-    return { ...empty, error: err instanceof Error ? err.message : "failed to parse claude json" }
+    if (i < prompts.length - 1) task.between?.({ workdir, turn: i })
+  }
+
+  return {
+    ...totals,
+    cost: reportedCost > 0 ? reportedCost : computeCost(info, totals),
+    steps,
+    ms: Date.now() - started,
+    success: task.check({ transcript, workdir }),
+    errored: false,
   }
 }
 
@@ -351,6 +392,9 @@ async function main(): Promise<void> {
   // Explicit --claude-model wins (any provider); otherwise derive from an anthropic/* Dawn model.
   const claudeModel = flags.claudeModel ?? claudeModelFor(modelRef)
   const useClaude = !flags.noClaude && claudeModel !== null && claudeAvailable()
+  // Pricing info for the Claude Code column: subscription logins report no $, so
+  // usage is priced through the same catalog Dawn uses (anthropic list prices).
+  const claudeInfo: ModelInfo | undefined = claudeModel ? catalog.anthropic?.models[claudeModel] : undefined
   const useAider = !flags.noAider && aiderAvailable()
   if (!flags.noClaude && claudeModel === null) {
     console.error(
@@ -374,8 +418,8 @@ async function main(): Promise<void> {
   for (const task of tasks) {
     const tr: TaskResult = { task: task.id, category: task.category, slice: task.slice, modes: {} }
     for (const mode of modes) {
-      if ((mode === "claude" || mode === "aider") && task.prompts && task.prompts.length > 1) {
-        console.error(`  ${task.id} · ${mode}: skipped (multi-turn task — peer CLI is single-shot)`)
+      if (mode === "aider" && task.prompts && task.prompts.length > 1) {
+        console.error(`  ${task.id} · ${mode}: skipped (multi-turn task — aider run is single-shot)`)
         continue
       }
       const reps: RunMetrics[] = []
@@ -386,7 +430,7 @@ async function main(): Promise<void> {
           try {
             m =
               mode === "claude"
-                ? runClaude(task, wt.dir, claudeModel as string, flags.timeoutMs)
+                ? runClaude(task, wt.dir, claudeModel as string, flags.timeoutMs, claudeInfo)
                 : mode === "aider"
                   ? runAider(task, wt.dir, modelRef, flags.timeoutMs)
                   : await runDawn(task, wt.dir, mode === "naive", modelRef, catalog, config, flags.timeoutMs)

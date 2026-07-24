@@ -10,8 +10,8 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-type Mode = "dawn" | "naive" | "claude" | "aider"
-interface RunMetrics {
+export type Mode = "dawn" | "naive" | "claude" | "aider"
+export interface RunMetrics {
   inputTokens: number
   cachedInputTokens: number
   outputTokens: number
@@ -23,7 +23,7 @@ interface RunMetrics {
   errored: boolean
   error?: string
 }
-interface TaskResult {
+export interface TaskResult {
   task: string
   category: string
   slice?: string
@@ -120,8 +120,73 @@ function taskRow(
   return { cells, dawnIn, dawnCost, naiveIn, naiveCost, bothOk }
 }
 
+interface ModeTotals {
+  cost: number
+  ok: number
+  total: number
+  perSuccess: number
+}
+
+/** Total $ across ALL reps (failures charged) ÷ successful reps, over tasks that ran `mode`. */
+export function costPerSuccess(results: TaskResult[], mode: Mode): ModeTotals {
+  let cost = 0
+  let ok = 0
+  let total = 0
+  for (const r of results) {
+    for (const rep of r.modes[mode] ?? []) {
+      cost += rep.cost
+      total++
+      if (rep.success) ok++
+    }
+  }
+  return { cost, ok, total, perSuccess: ok > 0 ? cost / ok : Number.POSITIVE_INFINITY }
+}
+
+/**
+ * Headline metric + parity gate. Failures are charged, not excluded: an agent that is
+ * cheaper per attempt but fails more often must show it here. Claude Code is compared
+ * on the subset of tasks it actually ran (it skips some), with Dawn recomputed on the
+ * same subset for fairness.
+ */
+export function headline(results: TaskResult[]): string {
+  const dawn = costPerSuccess(results, "dawn")
+  const naive = costPerSuccess(results, "naive")
+  const rate = (t: ModeTotals) => (t.total > 0 ? t.ok / t.total : 0)
+  const fmt = (t: ModeTotals) =>
+    `${t.ok}/${t.total} | $${t.cost.toFixed(4)} | ${Number.isFinite(t.perSuccess) ? `$${t.perSuccess.toFixed(4)}` : "∞ (no passes)"}`
+
+  const lines = [
+    "**Headline — cost per successful task (all reps charged, failures included):**",
+    "",
+    "| Agent | Pass rate | Total $ | $ / successful task |",
+    "| --- | --: | --: | --: |",
+    `| Dawn | ${fmt(dawn)} |`,
+    `| Naive | ${fmt(naive)} |`,
+  ]
+
+  const claudeTasks = results.filter((r) => (r.modes.claude ?? []).length > 0)
+  if (claudeTasks.length > 0) {
+    const claude = costPerSuccess(claudeTasks, "claude")
+    const dawnSub = costPerSuccess(claudeTasks, "dawn")
+    lines.push(
+      `| Claude Code (${claudeTasks.length}-task subset) | ${fmt(claude)} |`,
+      `| Dawn (same subset) | ${fmt(dawnSub)} |`,
+    )
+  }
+
+  const parity = rate(dawn) >= rate(naive)
+  const cheaper = dawn.perSuccess <= naive.perSuccess
+  const gate = parity && cheaper ? "pass" : "fail"
+  const why = [
+    `pass-rate parity (dawn ${(rate(dawn) * 100).toFixed(0)}% vs naive ${(rate(naive) * 100).toFixed(0)}%): ${parity ? "ok" : "FAIL"}`,
+    `$/success (dawn ≤ naive): ${cheaper ? "ok" : "FAIL"}`,
+  ].join("; ")
+  lines.push("", `**Headline gate: ${gate}** — ${why}.`)
+  return lines.join("\n")
+}
+
 function sliceWinBar(results: TaskResult[]): string {
-  const slices = ["trivial", "investigate", "edit", "long"] as const
+  const slices = ["trivial", "investigate", "edit", "long", "probe"] as const
   const lines: string[] = [
     "**Win bar (slice-aware):** overall Dawn $ ≤ naive $; win $ on investigate + long; trivial may tie/lose.",
     "",
@@ -147,6 +212,7 @@ function sliceWinBar(results: TaskResult[]): string {
     let gate = "—"
     if (inputRed.length === 0) gate = "no data"
     else if (slice === "trivial") gate = "informational"
+    else if (slice === "probe") gate = "reliability (pass rate is the metric)"
     else if (slice === "investigate" || slice === "long")
       gate = medCost >= 0 ? "pass ($ win)" : "fail ($ lose)"
     else if (slice === "edit") gate = medCost >= 0 ? "ok" : "watch"
@@ -263,7 +329,19 @@ function render(data: Results): string {
   const reproduce =
     "\n```bash\n# Reproduce (requires credentials; optional `claude` / `aider` CLIs):\nbun run bench        # real API spend, non-deterministic — nightly/on-demand, not PR CI\nbun run bench:report # regenerate this table\n\n# Free local verification of the mechanism delta (Dawn vs --naive only):\nbun run bench -- --no-claude --no-aider --model ollama/<model>   # or groq/<model>\n```"
 
-  return [summary, "", sliceWinBar(results), "", ...sections, "", caption, caveat, reproduce].join("\n\n")
+  return [
+    headline(results),
+    "",
+    summary,
+    "",
+    sliceWinBar(results),
+    "",
+    ...sections,
+    "",
+    caption,
+    caveat,
+    reproduce,
+  ].join("\n\n")
 }
 
 function argValue(flag: string): string | undefined {
@@ -296,4 +374,4 @@ function main(): void {
   }
 }
 
-main()
+if (import.meta.main) main()
