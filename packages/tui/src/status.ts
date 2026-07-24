@@ -173,9 +173,11 @@ export function formatSavingsReport(args: {
   const inputPrice = modelInputPrice(args.catalog, args.modelRef)
   const cacheReadPrice = modelCacheReadPrice(args.catalog, args.modelRef)
   const lines = [
-    "Savings (estimated)",
-    "Baseline: reading full files, full history, no prompt caching",
-    "Note: these are model-based estimates (chars÷4). For measured numbers: `bun run bench`",
+    "Savings",
+    "",
+    "Measured (provider usage ledger)",
+    "Estimated avoided (planner model vs full files / full history / no cache)",
+    "These are never blended into one $ number. For competitive proof: `bun run bench`.",
     inputPrice === undefined
       ? "Pricing: — (no pricing data)"
       : `Pricing: input ${formatCost(inputPrice)} / 1M tokens` +
@@ -191,26 +193,35 @@ export function formatSavingsReport(args: {
         : undefined
     lines.push("")
     lines.push(`${scope.label}:`)
-    lines.push(`  est. saved: ${formatWholeTokens(totalSaved)} tokens`)
-    lines.push(`    summaries + trim: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
-    lines.push(`    tool-output compaction: ${formatWholeTokens(scope.context.compactionSavedTokens)} tokens`)
-    lines.push(`  est. input cut: ~${metrics.savedPercent}% vs naive baseline`)
-    lines.push(`  Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
-    lines.push(`  est. would send (naive): ${formatTokens(metrics.wouldSendTokens)} input`)
-    lines.push(`  est. $ saved: ${metrics.estimatedCostSaved}`)
+    lines.push("  Measured:")
+    lines.push(`    cost: ${formatCost(scope.usage.cost)}`)
     lines.push(
-      `  cache $ saved: ${cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved)}` +
-        (cacheDollarsSaved !== undefined && cacheReadPrice === undefined ? " (est)" : ""),
+      `    tokens: ↑${formatTokens(scope.usage.inputTokens)} ↓${formatTokens(scope.usage.outputTokens)}` +
+        ` · cache read ${formatTokens(scope.usage.cachedInputTokens)}` +
+        ` / write ${formatTokens(scope.usage.cacheWriteTokens)}`,
     )
-    lines.push(`  context plans: ${formatWholeTokens(scope.context.plans)}`)
     lines.push(
-      `  context items: ${formatWholeTokens(scope.context.includedItems)} included / ` +
+      `    cache $ vs full-input pricing: ${cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved)}`,
+    )
+    lines.push("  Estimated avoided:")
+    lines.push(`    est. saved: ${formatWholeTokens(totalSaved)} tokens (chars÷4 model)`)
+    lines.push(`      summaries + trim: ${formatWholeTokens(scope.context.estimatedSavedTokens)} tokens`)
+    lines.push(
+      `      tool-output compaction: ${formatWholeTokens(scope.context.compactionSavedTokens)} tokens`,
+    )
+    lines.push(`    est. input cut: ~${metrics.savedPercent}% vs naive baseline`)
+    lines.push(`    Dawn sent: ${formatTokens(scope.usage.inputTokens)} input`)
+    lines.push(`    est. would send (naive): ${formatTokens(metrics.wouldSendTokens)} input`)
+    lines.push(`    est. $ avoided (not measured): ${metrics.estimatedCostSaved}`)
+    lines.push(`    context plans: ${formatWholeTokens(scope.context.plans)}`)
+    lines.push(
+      `    context items: ${formatWholeTokens(scope.context.includedItems)} included / ` +
         `${formatWholeTokens(scope.context.skippedItems)} skipped`,
     )
     if (scope.context.highestSavingsPlan) {
       const plan = scope.context.highestSavingsPlan
       lines.push(
-        `  highest-saving turn: ${formatWholeTokens(plan.savedTokens)} tokens saved ` +
+        `    highest-saving turn: ${formatWholeTokens(plan.savedTokens)} tokens saved ` +
           `(${formatTokens(plan.totalEstimatedTokens)} / ${formatTokens(plan.budget)}, ${plan.mode})`,
       )
     }
@@ -258,17 +269,25 @@ export function savingsBoxRows(args: {
       : undefined
   const hasSavings = savedTokens > 0
   const hasCacheSavings = cacheDollarsSaved !== undefined && cacheDollarsSaved > 0
+  const hasCost = args.usage.cost > 0
 
   return [
     {
-      label: "input cut",
-      value: `${savedPercent}% · ${formatTokens(savedTokens)} tokens`,
+      label: "measured $",
+      value: formatCost(args.usage.cost),
+      tone: hasCost ? "accent" : "dim",
+    },
+    {
+      label: "measured in",
+      value: formatTokens(args.usage.inputTokens),
+    },
+    {
+      label: "est. cut",
+      value: `${savedPercent}% · ${formatTokens(savedTokens)} tok`,
       tone: hasSavings ? "accent" : "dim",
     },
-    { label: "would send", value: `${formatTokens(wouldSendTokens)} tokens` },
-    { label: "sent", value: `${formatTokens(args.usage.inputTokens)} tokens` },
     {
-      label: "$ saved",
+      label: "est. $ avoid",
       value:
         inputPrice === undefined || estimatedCostSaved === undefined
           ? "—"
@@ -282,7 +301,7 @@ export function savingsBoxRows(args: {
       value: cacheDollarsSaved === undefined ? "—" : formatCost(cacheDollarsSaved),
       tone: hasCacheSavings ? "accent" : "dim",
     },
-    { label: "vs", value: "full files + no cache", tone: "dim" },
+    { label: "vs", value: "est. full+no cache", tone: "dim" },
   ]
 }
 

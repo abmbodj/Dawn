@@ -16,7 +16,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "plugin", description: "Show enabled plugins and their commands." },
   { name: "context", description: "Show context budget, working set, and savings." },
   { name: "usage", description: "Show token and cost breakdown for this session." },
-  { name: "savings", description: "Show session, project, and lifetime token savings." },
+  { name: "savings", description: "Show measured usage vs estimated avoided context." },
   {
     name: "rewind",
     description: "Restore files and conversation to a previous checkpoint.",

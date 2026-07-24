@@ -87,13 +87,14 @@ describe("enterprise gateways", () => {
     const p = resolveProfile("bedrock/anthropic.claude-sonnet-4-6", FALLBACK_CATALOG)
     expect(p.family).toBe("claude")
     expect(p.reasoning).toBe("native")
-    expect(p.supportsCaching).toBe(true)
+    expect(p.promptCaches).toBe(true)
+    expect(p.cacheBreakpoints).toBe(true)
   })
 
   test("Gemini via Vertex strips reasoning and does not use Anthropic caching", () => {
     const p = resolveProfile("vertex/gemini-3.5-pro", FALLBACK_CATALOG)
     expect(p.family).toBe("gemini")
     expect(p.reasoning).toBe("strip")
-    expect(p.supportsCaching).toBe(false)
+    expect(p.cacheBreakpoints).toBe(false)
   })
 })

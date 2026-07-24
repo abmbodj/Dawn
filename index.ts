@@ -15,7 +15,6 @@ import {
   DawnAgent,
   type DawnConfig,
   DEFAULT_CONTEXT_MODE,
-  DEFAULT_TOKEN_BUDGET,
   type DoctorMode,
   type DoctorResult,
   getAuthEntry,
@@ -51,7 +50,7 @@ Usage:
   dawn                       interactive session in the current directory
   dawn -c, --continue        resume the most recent session for this directory
   dawn -m, --model <ref>     model as provider/model (e.g. anthropic/claude-opus-4-8)
-  dawn --budget <tokens>     cap estimated prompt tokens (default 8000)
+  dawn --budget <tokens>     hard-cap estimated prompt tokens (default: adaptive by model/cache)
   dawn --context <mode>      minimal, balanced, or deep (default balanced)
   dawn --naive               baseline mode: full files & history, no compaction or caching
   dawn run "<prompt>"        one-shot non-interactive run (add --yolo to allow edits/bash)
@@ -71,7 +70,8 @@ interface Flags {
   model?: string
   cwd: string
   yolo: boolean
-  budget: number
+  /** Set only when `--budget` is passed; otherwise Dawn uses adaptive `budgetFor`. */
+  budget?: number
   contextMode: ContextMode
   naive: boolean
   refresh?: boolean
@@ -83,7 +83,6 @@ function parseFlags(argv: string[]): Flags {
     continue: false,
     cwd: process.cwd(),
     yolo: false,
-    budget: DEFAULT_TOKEN_BUDGET,
     contextMode: DEFAULT_CONTEXT_MODE,
     naive: false,
     positional: [],

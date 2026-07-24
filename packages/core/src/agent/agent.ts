@@ -235,7 +235,7 @@ export class DawnAgent {
     } else {
       const initialProfile = resolveProfile(this.modelRef, opts.catalog)
       const modelInfo = getModelInfo(opts.catalog, this.modelRef)
-      this.tokenBudget = budgetFor(initialProfile, modelInfo)
+      this.tokenBudget = budgetFor(initialProfile, modelInfo, this.contextMode)
     }
     this.contextStore = opts.contextStore ?? new ContextStore()
     this.checkpoints = new CheckpointStore(opts.cwd)
@@ -451,8 +451,8 @@ export class DawnAgent {
       summaries,
       budget: contextBudget(this.contextMode, this.tokenBudget),
       answerGuidance,
-      isAnthropic: profile.supportsCaching,
-      caches: profile.supportsCaching,
+      isAnthropic: profile.cacheBreakpoints,
+      caches: profile.promptCaches,
       stripReasoning: profile.reasoning === "strip",
       compactionSavings,
       loadedSkills: this.skillBuffer.loaded(),

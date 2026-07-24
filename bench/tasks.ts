@@ -1,6 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
 
+export type BenchSlice = "trivial" | "investigate" | "edit" | "long"
+
 /**
  * A benchmark task run against an isolated checkout of the Dawn repo.
  *
@@ -12,16 +14,22 @@ import path from "node:path"
  * doesn't depend on the model reasoning well, only on it running the command — which
  * keeps results meaningful even on a weak/free model. A couple of `edit` tasks force a
  * read-then-change and are checked structurally (see bench/README.md).
+ *
+ * Proof **slices** (`trivial` / `investigate` / `edit` / `long`) are how reports judge
+ * the win bar: Dawn should win $ on investigate+long, keep overall $ ≤ naive, and may
+ * tie/lose on trivial turns.
  */
 export interface BenchTask {
   id: string
-  category: "read-heavy" | "diagnosis" | "edit" | "large-output"
+  category: "read-heavy" | "diagnosis" | "edit" | "large-output" | "trivial"
+  /** Proof-suite slice for per-slice reporting. */
+  slice: BenchSlice
   prompt: string
   /**
    * Multi-turn session: each entry is a user turn sent to the same agent/session in
    * order (overrides `prompt`). This is the only place cross-turn machinery — history
    * trimming, working-set TTLs, session memory, cross-turn prompt caching — gets
-   * measured; single-turn tasks never exercise it. Claude Code mode skips these.
+   * measured; single-turn tasks never exercise it. Claude Code / Aider modes skip these.
    */
   prompts?: string[]
   /** When true the agent edits files, so the run needs write permissions + a writable worktree. */
@@ -80,11 +88,19 @@ function uniqueExportFiles(workdir: string): number {
 const heavy = (id: string, prompt: string, ...needles: Array<string | string[]>): BenchTask => ({
   id,
   category: "read-heavy",
+  slice: "investigate",
   prompt,
   check: ({ transcript }) => has(transcript, ...needles),
 })
 
 export const TASKS: BenchTask[] = [
+  {
+    id: "trivial-hello",
+    category: "trivial",
+    slice: "trivial",
+    prompt: "In one short sentence, what is Dawn?",
+    check: ({ transcript }) => has(transcript, ["dawn", "agent", "coding", "terminal", "context"]),
+  },
   heavy(
     "cat-agent",
     "Use the bash tool to run `cat packages/core/src/agent/agent.ts`, then name three methods of the DawnAgent class.",
@@ -182,6 +198,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "edit-maxreadchars",
     category: "edit",
+    slice: "edit",
     edits: true,
     prompt:
       "Read packages/core/src/context/budget.ts, then add an exported function `maxReadChars(mode: ContextMode): number` that returns `maxReadLines(mode) * 80`, placed right after maxReadLines.",
@@ -191,6 +208,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "edit-pkg-script",
     category: "edit",
+    slice: "edit",
     edits: true,
     prompt:
       'Read the root package.json, then add an npm script named "bench:hello" whose command is `echo hello`. Do not change any other script.',
@@ -203,6 +221,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "pilot-read-exact-exports",
     category: "read-heavy",
+    slice: "investigate",
     prompt:
       "Use the bash tool to run `grep -c '^export' packages/core/src/context/budget.ts` and report the exact number you see in the output.",
     check: ({ transcript, workdir }) =>
@@ -217,6 +236,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "pilot-diagnosis-maxreadlines",
     category: "diagnosis",
+    slice: "investigate",
     prompt:
       "Read packages/core/src/context/budget.ts and find the function `maxReadLines`. When Dawn is in `minimal` context mode, what is the exact maximum number of lines the read tool returns per call? Trace the code and report only the number.",
     check: ({ transcript }) => has(transcript, "120"),
@@ -224,6 +244,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "pilot-edit-export-constant",
     category: "edit",
+    slice: "edit",
     edits: true,
     prompt:
       "Read packages/core/src/context/budget.ts. Add an exported constant `PILOT_BUDGET_CHECK = true` on the line immediately after the `DEFAULT_TOKEN_BUDGET` constant. Do not change anything else.",
@@ -233,6 +254,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "pilot-large-output-unique-files",
     category: "large-output",
+    slice: "investigate",
     prompt:
       "Use the bash tool to run `grep -rn '^export' packages/core/src`. Count the number of unique file paths in the output (each path is the part before the first colon on each line) and report the exact count.",
     check: ({ transcript, workdir }) =>
@@ -246,6 +268,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "mt-edit-sequence",
     category: "edit",
+    slice: "long",
     edits: true,
     prompt: "", // unused — see prompts
     prompts: [
@@ -260,6 +283,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "mt-diagnosis-recall",
     category: "diagnosis",
+    slice: "long",
     prompt: "", // unused — see prompts
     prompts: [
       "Use the bash tool to run `grep -rn estimateTokens packages/core/src` and summarize where the function is defined versus where it is used.",
@@ -271,6 +295,7 @@ export const TASKS: BenchTask[] = [
   {
     id: "mt-large-recall",
     category: "large-output",
+    slice: "long",
     prompt: "", // unused — see prompts
     prompts: [
       'Use the bash tool to run `grep -rn "class " packages/core/src` and list the class names you find.',

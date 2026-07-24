@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Catalog } from "../src/provider/catalog"
 import { FLOOR_CONTEXT_TOKENS, meetsFloor, modelTier } from "../src/provider/catalog"
-import { detectFamily, resolveProfile } from "../src/provider/profile"
+import { budgetFor, detectFamily, resolveProfile } from "../src/provider/profile"
 
 function catalog(): Catalog {
   return {
@@ -91,18 +91,29 @@ describe("resolveProfile", () => {
     expect(p.tier).toBe("blessed")
     expect(p.family).toBe("claude")
     expect(p.reasoning).toBe("native")
-    expect(p.supportsCaching).toBe(true)
+    expect(p.promptCaches).toBe(true)
+    expect(p.cacheBreakpoints).toBe(true)
     expect(p.promptDelta).toBeUndefined()
     expect(p.capabilities.reasoning).toBe(true)
     expect(p.capabilities.vision).toBe(true)
   })
 
-  test("blessed OpenAI flagship: strip reasoning, no caching, no scaffolding", () => {
+  test("blessed OpenAI flagship: strip reasoning, no breakpoints; caches follow catalog", () => {
     const p = resolveProfile("openai/gpt-5.5", catalog())
     expect(p.tier).toBe("blessed")
     expect(p.reasoning).toBe("strip")
-    expect(p.supportsCaching).toBe(false)
+    expect(p.cacheBreakpoints).toBe(false)
+    expect(p.promptCaches).toBe(false)
     expect(p.promptDelta).toBeUndefined()
+  })
+
+  test("OpenAI model with catalog cache_read enables promptCaches without breakpoints", () => {
+    const c = catalog()
+    const model = c.openai?.models["gpt-5.5"]
+    if (model) model.cost = { input: 1, output: 2, cache_read: 0.1 }
+    const p = resolveProfile("openai/gpt-5.5", c)
+    expect(p.promptCaches).toBe(true)
+    expect(p.cacheBreakpoints).toBe(false)
   })
 
   test("standard open-weight model: strip, structured prompt delta", () => {
@@ -110,7 +121,8 @@ describe("resolveProfile", () => {
     expect(p.tier).toBe("standard")
     expect(p.family).toBe("llama")
     expect(p.reasoning).toBe("strip")
-    expect(p.supportsCaching).toBe(false)
+    expect(p.promptCaches).toBe(false)
+    expect(p.cacheBreakpoints).toBe(false)
     expect(p.promptDelta).toBeDefined()
   })
 
@@ -126,5 +138,28 @@ describe("resolveProfile", () => {
     expect(p.tier).toBe("experimental") // not in catalog → fails floor
     expect(p.family).toBe("unknown")
     expect(p.promptDelta).toBeDefined()
+  })
+})
+
+describe("budgetFor", () => {
+  test("lean budgets for non-caching models scale by context mode", () => {
+    const profile = { promptCaches: false as const }
+    expect(budgetFor(profile, undefined, "minimal")).toBe(6_000)
+    expect(budgetFor(profile, undefined, "balanced")).toBe(8_000)
+    expect(budgetFor(profile, undefined, "deep")).toBe(12_000)
+  })
+
+  test("caching models use a mode-scaled fraction of the context window", () => {
+    const profile = { promptCaches: true as const }
+    const info = { id: "m", name: "m", limit: { context: 100_000 } }
+    expect(budgetFor(profile, info, "minimal")).toBe(35_000)
+    expect(budgetFor(profile, info, "balanced")).toBe(65_000)
+    expect(budgetFor(profile, info, "deep")).toBe(80_000)
+  })
+
+  test("adaptive budget never exceeds the sanity cap", () => {
+    const profile = { promptCaches: true as const }
+    const info = { id: "m", name: "m", limit: { context: 1_000_000 } }
+    expect(budgetFor(profile, info, "balanced")).toBe(200_000)
   })
 })

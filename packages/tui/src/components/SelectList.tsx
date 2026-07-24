@@ -132,6 +132,9 @@ export function SelectList({
           onSelectIndex(idx)
         }
         return (
+          // Terminal list row: mouse hover selects; keyboard nav is handled by the parent list.
+          // biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI box, not a DOM element
+          // biome-ignore lint/a11y/useKeyWithMouseEvents: keyboard handled by parent SelectList
           <box
             key={item.key}
             onMouseOver={hover}

@@ -97,7 +97,7 @@ describe("summary block is cacheable", () => {
   })
 
   test("Anthropic marks a cache breakpoint on the summary block; other providers don't", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "q" }]
+    const messages: ModelMessage[] = [{ role: "user", content: "Where is the context budget defined?" }]
     const anthropic = buildRequestMessages({
       system: "You are Dawn.",
       messages,

@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-type Mode = "dawn" | "naive" | "claude"
+type Mode = "dawn" | "naive" | "claude" | "aider"
 interface RunMetrics {
   inputTokens: number
   cachedInputTokens: number
@@ -26,6 +26,7 @@ interface RunMetrics {
 interface TaskResult {
   task: string
   category: string
+  slice?: string
   modes: Partial<Record<Mode, RunMetrics[]>>
 }
 interface Results {
@@ -34,6 +35,7 @@ interface Results {
     gitShaShort: string
     model: string
     claudeModel: string | null
+    aider?: boolean
     reps: number
     taskCount: number
     smoke: boolean
@@ -96,8 +98,9 @@ function taskRow(
   const bothOk = ds.ok > 0 && ns.ok > 0
 
   // Append pass/total to the task label so success rate is always visible
+  const sliceTag = r.slice ? `[${r.slice}] ` : ""
   const passTag = `(d:${ds.ok}/${ds.total} n:${ns.ok}/${ns.total})`
-  const label = bothOk ? `${r.task} ${passTag}` : `${r.task} ⚠️ ${passTag}`
+  const label = bothOk ? `${sliceTag}${r.task} ${passTag}` : `${sliceTag}${r.task} ⚠️ ${passTag}`
 
   const cells = [
     label,
@@ -115,6 +118,43 @@ function taskRow(
     cells.push(`${fmtInt(claudeIn)} (c:${cs.ok}/${cs.total})`, `$${claudeCost.toFixed(4)}`)
   }
   return { cells, dawnIn, dawnCost, naiveIn, naiveCost, bothOk }
+}
+
+function sliceWinBar(results: TaskResult[]): string {
+  const slices = ["trivial", "investigate", "edit", "long"] as const
+  const lines: string[] = [
+    "**Win bar (slice-aware):** overall Dawn $ ≤ naive $; win $ on investigate + long; trivial may tie/lose.",
+    "",
+    "| Slice | Comparable tasks | Median input ↓ | Median cost ↓ | Gate |",
+    "| --- | --: | --: | --: | --- |",
+  ]
+  for (const slice of slices) {
+    const inputRed: number[] = []
+    const costRed: number[] = []
+    for (const r of results.filter((t) => t.slice === slice)) {
+      const dawnIn = pick(r.modes.dawn, "inputTokens")
+      const dawnCost = pick(r.modes.dawn, "cost")
+      const naiveIn = pick(r.modes.naive, "inputTokens")
+      const naiveCost = pick(r.modes.naive, "cost")
+      const ds = successCount(r.modes.dawn)
+      const ns = successCount(r.modes.naive)
+      if (ds.ok === 0 || ns.ok === 0 || naiveIn <= 0) continue
+      inputRed.push(((naiveIn - dawnIn) / naiveIn) * 100)
+      if (naiveCost > 0) costRed.push(((naiveCost - dawnCost) / naiveCost) * 100)
+    }
+    const medIn = median(inputRed)
+    const medCost = median(costRed)
+    let gate = "—"
+    if (inputRed.length === 0) gate = "no data"
+    else if (slice === "trivial") gate = "informational"
+    else if (slice === "investigate" || slice === "long")
+      gate = medCost >= 0 ? "pass ($ win)" : "fail ($ lose)"
+    else if (slice === "edit") gate = medCost >= 0 ? "ok" : "watch"
+    lines.push(
+      `| ${slice} | ${inputRed.length} | ${inputRed.length ? `${medIn.toFixed(0)}%` : "—"} | ${costRed.length ? `${medCost.toFixed(0)}%` : "—"} | ${gate} |`,
+    )
+  }
+  return lines.join("\n")
 }
 
 function render(data: Results): string {
@@ -193,6 +233,7 @@ function render(data: Results): string {
   const medCost = median(overallCostRed)
   const pooledInput = totalNaiveIn > 0 ? ((totalNaiveIn - totalDawnIn) / totalNaiveIn) * 100 : 0
   const pooledCost = totalNaiveCost > 0 ? ((totalNaiveCost - totalDawnCost) / totalNaiveCost) * 100 : 0
+  const overallCostOk = totalNaiveCost <= 0 || totalDawnCost <= totalNaiveCost
 
   const inSummary =
     medInput >= 0
@@ -205,22 +246,24 @@ function render(data: Results): string {
   const summary =
     `**Across ${overallInputRed.length} comparable task(s) at equal success, Dawn used a median ` +
     `${inSummary} and ${costSummary} than the naive baseline ` +
-    `(pooled: ${pooledInput >= 0 ? "" : "+"}${(-pooledInput).toFixed(0)}% tokens vs naive, ${pooledCost >= 0 ? "−" : "+"}${Math.abs(pooledCost).toFixed(0)}% cost).**`
+    `(pooled: ${pooledInput >= 0 ? "" : "+"}${(-pooledInput).toFixed(0)}% tokens vs naive, ${pooledCost >= 0 ? "−" : "+"}${Math.abs(pooledCost).toFixed(0)}% cost).**` +
+    `\n\n**Overall $ gate (Dawn ≤ naive): ${overallCostOk ? "pass" : "fail"}.**`
 
   const caption =
     `_Measured by ${data.provenance.model}` +
     (p.claudeModel ? `, Claude Code on ${p.claudeModel}` : "") +
+    (p.aider ? ", Aider (indicative)" : "") +
     `, Dawn repo @ ${p.gitShaShort}, ${p.reps} rep(s)/task (median), ${p.generatedAt.slice(0, 10)}._` +
     (p.smoke ? " _(smoke subset)_" : "")
 
   const caveat = hasClaude
-    ? "\n_The Claude Code column is **indicative, not apples-to-apples**: same model and task, but a different agent (its own system prompt, tools, and loop). The rigorous comparison is Dawn vs. `--naive` — the identical agent with context management turned off. ⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._"
+    ? "\n_The Claude Code column is **indicative, not apples-to-apples**: same model and task, but a different agent (its own system prompt, tools, and loop). Aider is a secondary sanity check. The rigorous comparison is Dawn vs. `--naive` — the identical agent with context management turned off. ⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._"
     : "\n_⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._"
 
   const reproduce =
-    "\n```bash\n# Reproduce (requires Anthropic key + `claude` CLI for the Claude column):\nbun run bench        # real API spend, non-deterministic\nbun run bench:report # regenerate this table\n\n# Free local verification of the mechanism delta (Dawn vs --naive only):\nbun run bench --no-claude --model ollama/<model>   # or groq/<model>\n```"
+    "\n```bash\n# Reproduce (requires credentials; optional `claude` / `aider` CLIs):\nbun run bench        # real API spend, non-deterministic — nightly/on-demand, not PR CI\nbun run bench:report # regenerate this table\n\n# Free local verification of the mechanism delta (Dawn vs --naive only):\nbun run bench -- --no-claude --no-aider --model ollama/<model>   # or groq/<model>\n```"
 
-  return [summary, "", ...sections, "", caption, caveat, reproduce].join("\n\n")
+  return [summary, "", sliceWinBar(results), "", ...sections, "", caption, caveat, reproduce].join("\n\n")
 }
 
 function argValue(flag: string): string | undefined {

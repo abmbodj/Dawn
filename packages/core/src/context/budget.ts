@@ -67,6 +67,49 @@ export function summaryText(summary: FileSummary): string {
   return `File summary: ${summary.path}\n${summary.summary}${symbols}${deps}`
 }
 
+/**
+ * Whether injecting repo summaries is likely to pay for itself on this turn.
+ * Trivial first turns (short non-investigative query, empty working set) skip summaries
+ * so cache-write / re-send tax cannot exceed benefit.
+ */
+export function summariesEarnKeep(args: {
+  messages: ModelMessage[]
+  workingSet: WorkingSetItem[]
+  query?: string
+  naive?: boolean
+}): boolean {
+  if (args.naive) return false
+  const hasSubstance = args.workingSet.some(
+    (item) => item.kind === "file" || item.kind === "file-range" || item.kind === "tool-result",
+  )
+  if (hasSubstance) return true
+  const userTurns = args.messages.filter((m) => m.role === "user").length
+  if (userTurns > 1) return true
+  const query =
+    args.query ??
+    (() => {
+      const latest = [...args.messages].reverse().find((m) => m.role === "user")
+      return typeof latest?.content === "string" ? latest.content : JSON.stringify(latest?.content ?? "")
+    })()
+  return looksLikeInvestigation(query)
+}
+
+/** Heuristic: first-turn prompts that need repo navigation should keep summaries. */
+export function looksLikeInvestigation(query: string): boolean {
+  const s = query.trim().toLowerCase()
+  if (!s) return false
+  if (/[\\/]|\.\w{1,5}\b/.test(s)) return true
+  if (
+    /\b(where|find|grep|search|locate|how does|how is|which file|read |open |show me|explain|trace|implement|fix|add |update|change|modify|refactor|wire|debug)\b/.test(
+      s,
+    )
+  ) {
+    return true
+  }
+  // Longer prompts are usually real tasks, not "hi" / "thanks".
+  return s.length > 120
+}
+
 export function workingSetItemText(item: WorkingSetItem): string {
   switch (item.kind) {
     case "summary":
@@ -305,16 +348,25 @@ export function buildRequestMessages(args: {
   // same injection is paid in full each turn — a generous share then becomes net overhead
   // that can exceed what compaction saves — so non-caching providers get a much leaner share.
   const summaryShare = args.caches ? SUMMARY_SHARE_CACHED : SUMMARY_SHARE_UNCACHED
-  // Naive baseline drops summaries entirely (it sends full files via the working set),
-  // keeps all history, and keeps the whole working set — so every "saved" figure is 0.
-  const summaries = naive
-    ? {
-        kept: [] as FileSummary[],
-        trimmed: [] as string[],
-        trimmedDetails: [] as ContextPlanItem[],
-        savedTokens: 0,
-      }
-    : trimSummaries(args.summaries, Math.floor(budgetAfterSystem * summaryShare))
+  const injectSummaries =
+    !naive &&
+    summariesEarnKeep({
+      messages: args.messages,
+      workingSet: args.workingSet,
+      naive,
+    })
+  // Naive baseline / pay-for-itself skip drops summaries entirely (naive sends full files
+  // via the working set), keeps all history, and keeps the whole working set — so every
+  // "saved" figure is 0 for naive.
+  const summaries =
+    naive || !injectSummaries
+      ? {
+          kept: [] as FileSummary[],
+          trimmed: [] as string[],
+          trimmedDetails: [] as ContextPlanItem[],
+          savedTokens: 0,
+        }
+      : trimSummaries(args.summaries, Math.floor(budgetAfterSystem * summaryShare))
   const summaryBlocks = summaries.kept.map(summaryText)
   const summaryTokensRaw = estimateTokens(summaryBlocks.join("\n\n"))
 

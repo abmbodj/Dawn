@@ -1,6 +1,10 @@
 # Dawn
 
-**A cheaper coding agent for the terminal, built to spend less context.**
+**A token-frugal coding agent for the terminal, built to spend less context.**
+
+> Dollar-cheaper vs `--naive` and same-model peers is the goal — reclaim the “cheaper”
+> tagline once the slice-aware benches in `bench/` pass the win bar in
+> [docs/superpowers/specs/2026-07-24-cheaper-agent-thesis-design.md](docs/superpowers/specs/2026-07-24-cheaper-agent-thesis-design.md).
 
 [![CI](https://github.com/abmbodj/Dawn/actions/workflows/ci.yml/badge.svg)](https://github.com/abmbodj/Dawn/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
@@ -28,8 +32,9 @@ simple:
 - The tool should show the plan, the spend, and the savings instead of hiding them.
 
 The committed benchmark snapshot currently shows Dawn sending fewer input tokens than its identical
-`--naive` baseline on the comparable task in `bench/results.json`. The benchmark harness is part of
-the repo so you can rerun it against your own model, provider, and task set.
+`--naive` baseline on the comparable task in `bench/results.json`. Token savings are not the same as
+dollar savings (cache writes / pricing can invert $). Treat `/savings` **Measured** rows as ledger
+truth and **Estimated avoided** as a planner model. Re-run `bun run bench` for competitive proof.
 
 ## Quickstart
 
@@ -89,7 +94,7 @@ Useful slash commands:
 | `/connect` | Connect another model provider. |
 | `/context` | Show context budget, working set, and savings. |
 | `/usage` | Show token and cost breakdown for the session. |
-| `/savings` | Show session, project, and lifetime token savings. |
+| `/savings` | Show measured usage vs estimated avoided context. |
 | `/rewind` | Restore files and conversation to a previous checkpoint. |
 | `/image` | Attach a local image file to the next message. |
 | `/resume` | Pick a previous session for the current directory. |
@@ -139,7 +144,7 @@ available model list at runtime.
 | `dawn` | Start an interactive session in the current directory. |
 | `dawn -c`, `dawn --continue` | Resume the most recent session for this directory. |
 | `dawn -m provider/model` | Start with a specific model. |
-| `dawn --budget <tokens>` | Cap estimated prompt tokens. |
+| `dawn --budget <tokens>` | Hard-cap estimated prompt tokens (default: adaptive by model/cache + context mode). |
 | `dawn --context minimal|balanced|deep` | Choose the context planning mode. |
 | `dawn --naive` | Run the same agent with summaries, trimming, compaction, and caching disabled. |
 | `dawn run "<prompt>"` | Run one non-interactive task. |
@@ -156,10 +161,12 @@ available model list at runtime.
 
 Dawn's context system lives in `packages/core`. The important pieces are:
 
-- **Per-turn budgets.** `minimal`, `balanced`, and `deep` modes choose how aggressively Dawn reads,
-  summarizes, trims, and expires context.
+- **Adaptive budgets.** Without `--budget`, Dawn picks a lean budget for non-caching models and a
+  larger cache-amortized budget for models with `cache_read` pricing (scaled by `minimal` /
+  `balanced` / `deep`).
 - **Repo summaries.** Dawn indexes files into compact summaries and reuses them instead of repeatedly
-  loading full source files.
+  loading full source files — and skips injecting them on trivial first turns that cannot amortize
+  the cost.
 - **Working-set leases.** Files, ranges, summaries, and tool outputs stay available for a few turns,
   then expire when they are no longer useful.
 - **Atomic history trimming.** Old messages are dropped by budget while tool-call/tool-result pairs
@@ -169,9 +176,10 @@ Dawn's context system lives in `packages/core`. The important pieces are:
   and free text each get different treatment.
 - **Expandable originals.** Compacted tool output stores the full original and exposes an `expand`
   marker so the model can retrieve details without rerunning the command.
-- **Prompt caching.** Cache-capable providers can amortize stable context across turns.
-- **Visible accounting.** `/context`, `/usage`, and `/savings` expose the working set, token totals,
-  cached input, and estimated savings.
+- **Prompt caching.** Cache-capable providers amortize stable context; Anthropic/Bedrock Claude also
+  get explicit cache breakpoints.
+- **Visible accounting.** `/context`, `/usage`, and `/savings` split **Measured** ledger spend from
+  **Estimated avoided** planner savings — never one blended “saved $X”.
 
 ## Benchmark
 
@@ -179,10 +187,18 @@ Dawn includes a benchmark harness in [`bench/`](./bench/) that compares:
 
 - `dawn`: default balanced mode with context management enabled.
 - `naive`: the same Dawn agent with context management disabled.
-- `claude`: optional Claude Code comparison when the `claude` CLI is available.
+- `claude`: optional Claude Code comparison when the `claude` CLI is available (primary peer).
+- `aider`: optional Aider comparison when the `aider` CLI is available (secondary sanity check).
+
+Tasks are tagged with proof **slices** (`trivial` / `investigate` / `edit` / `long`). The win bar is
+slice-aware: Dawn should win **$ on investigate + long**, keep overall **$ ≤ `--naive`**, and may
+tie/lose on trivial turns. Reports print overall and per-slice medians.
 
 The rigorous comparison is Dawn versus `--naive`, because it uses the same model, tools, system
-prompt, and loop. The Claude Code column, when present, is useful context but not apples-to-apples.
+prompt, and loop. Claude Code / Aider columns are indicative (same-model when configured).
+
+**Automation:** PR CI runs deterministic planner unit tests (`bun test`). Paid benches are
+nightly/on-demand (`bun run bench`) — not a PR gate.
 
 <!-- BENCH:START -->
 **Across 1 comparable task(s) at equal success, Dawn used a median 29% fewer input tokens and 25% more cost than the naive baseline (pooled: -29% tokens vs naive, +25% cost).**

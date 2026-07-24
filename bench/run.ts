@@ -12,9 +12,11 @@
  *   bun run bench/run.ts --tasks savings-formatter,history-trim
  *   bun run bench/run.ts --model anthropic/claude-haiku-4-5-20251001
  *   bun run bench/run.ts --no-claude
+ *   bun run bench/run.ts --no-aider
  *
  * Needs a configured, tool-capable model (see `dawn auth`). This costs real API spend
  * and is non-deterministic — it is NOT a CI gate. Results are written to bench/results.json.
+ * PR CI covers planner invariants via `bun test`; run this harness nightly/on-demand.
  */
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
@@ -34,9 +36,9 @@ import {
   withLMStudio,
   withOllama,
 } from "@dawn/core"
-import { type BenchTask, TASKS } from "./tasks"
+import { type BenchSlice, type BenchTask, TASKS } from "./tasks"
 
-type Mode = "dawn" | "naive" | "claude"
+type Mode = "dawn" | "naive" | "claude" | "aider"
 
 interface RunMetrics {
   inputTokens: number
@@ -54,6 +56,7 @@ interface RunMetrics {
 interface TaskResult {
   task: string
   category: string
+  slice: BenchSlice
   modes: Partial<Record<Mode, RunMetrics[]>>
 }
 
@@ -66,6 +69,7 @@ interface Flags {
   claudeModel?: string
   ref: string
   noClaude: boolean
+  noAider: boolean
   timeoutMs: number
 }
 
@@ -83,11 +87,12 @@ function isRateLimited(error?: string): boolean {
 }
 
 function parseFlags(argv: string[]): Flags {
-  const f: Flags = { smoke: false, reps: 3, ref: "HEAD", noClaude: false, timeoutMs: 180_000 }
+  const f: Flags = { smoke: false, reps: 3, ref: "HEAD", noClaude: false, noAider: false, timeoutMs: 180_000 }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--smoke") f.smoke = true
     else if (a === "--no-claude") f.noClaude = true
+    else if (a === "--no-aider") f.noAider = true
     else if (a === "--reps") f.reps = Math.max(1, Number(argv[++i]) || 1)
     else if (a === "--model") f.model = argv[++i]
     else if (a === "--claude-model") f.claudeModel = argv[++i]
@@ -223,6 +228,11 @@ function claudeAvailable(): boolean {
   return r.status === 0
 }
 
+function aiderAvailable(): boolean {
+  const r = spawnSync("aider", ["--version"], { encoding: "utf8" })
+  return r.status === 0
+}
+
 function runClaude(task: BenchTask, workdir: string, claudeModel: string, timeoutMs: number): RunMetrics {
   const started = Date.now()
   const r = spawnSync(
@@ -274,6 +284,49 @@ function runClaude(task: BenchTask, workdir: string, claudeModel: string, timeou
   }
 }
 
+/**
+ * Aider secondary peer. Usage accounting is limited (often no token JSON), so cost/tokens
+ * may be zero — treat as indicative quality/latency check, not a $ proof column.
+ */
+function runAider(task: BenchTask, workdir: string, modelRef: string, timeoutMs: number): RunMetrics {
+  const started = Date.now()
+  const empty: RunMetrics = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+    steps: 0,
+    ms: 0,
+    success: false,
+    errored: true,
+  }
+  const r = spawnSync(
+    "aider",
+    [
+      "--yes",
+      "--no-git",
+      "--message",
+      task.prompt,
+      "--model",
+      modelRef.includes("/") ? modelRef.split("/").slice(1).join("/") : modelRef,
+    ],
+    { cwd: workdir, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+  )
+  const ms = Date.now() - started
+  if (r.error) return { ...empty, ms, error: r.error.message.slice(0, 300) }
+  const transcript = `${r.stdout ?? ""}\n${r.stderr ?? ""}`
+  if (r.status !== 0 && !transcript.trim()) {
+    return { ...empty, ms, error: (r.stderr || "aider exited non-zero").slice(0, 300) }
+  }
+  return {
+    ...empty,
+    ms,
+    success: task.check({ transcript, workdir }),
+    errored: false,
+  }
+}
+
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2))
   let tasks = TASKS
@@ -298,6 +351,7 @@ async function main(): Promise<void> {
   // Explicit --claude-model wins (any provider); otherwise derive from an anthropic/* Dawn model.
   const claudeModel = flags.claudeModel ?? claudeModelFor(modelRef)
   const useClaude = !flags.noClaude && claudeModel !== null && claudeAvailable()
+  const useAider = !flags.noAider && aiderAvailable()
   if (!flags.noClaude && claudeModel === null) {
     console.error(
       `note: skipping Claude Code column — model ${modelRef} is not anthropic/*; pass --claude-model <id> to run it on another provider.`,
@@ -305,18 +359,23 @@ async function main(): Promise<void> {
   } else if (!flags.noClaude && claudeModel !== null && !claudeAvailable()) {
     console.error("note: `claude` CLI not found on PATH — skipping Claude Code column.")
   }
+  if (!flags.noAider && !useAider) {
+    console.error("note: `aider` CLI not found on PATH — skipping Aider column.")
+  }
 
-  const modes: Mode[] = useClaude ? ["dawn", "naive", "claude"] : ["dawn", "naive"]
+  const modes: Mode[] = ["dawn", "naive"]
+  if (useClaude) modes.push("claude")
+  if (useAider) modes.push("aider")
   console.error(
     `benchmark: ${tasks.length} task(s) × ${modes.join("/")} × ${flags.reps} rep(s) · model ${modelRef} · repo @ ${sha.slice(0, 8)}`,
   )
 
   const results: TaskResult[] = []
   for (const task of tasks) {
-    const tr: TaskResult = { task: task.id, category: task.category, modes: {} }
+    const tr: TaskResult = { task: task.id, category: task.category, slice: task.slice, modes: {} }
     for (const mode of modes) {
-      if (mode === "claude" && task.prompts && task.prompts.length > 1) {
-        console.error(`  ${task.id} · claude: skipped (multi-turn task — claude -p is single-shot)`)
+      if ((mode === "claude" || mode === "aider") && task.prompts && task.prompts.length > 1) {
+        console.error(`  ${task.id} · ${mode}: skipped (multi-turn task — peer CLI is single-shot)`)
         continue
       }
       const reps: RunMetrics[] = []
@@ -328,7 +387,9 @@ async function main(): Promise<void> {
             m =
               mode === "claude"
                 ? runClaude(task, wt.dir, claudeModel as string, flags.timeoutMs)
-                : await runDawn(task, wt.dir, mode === "naive", modelRef, catalog, config, flags.timeoutMs)
+                : mode === "aider"
+                  ? runAider(task, wt.dir, modelRef, flags.timeoutMs)
+                  : await runDawn(task, wt.dir, mode === "naive", modelRef, catalog, config, flags.timeoutMs)
           } finally {
             wt.cleanup()
           }
@@ -360,6 +421,7 @@ async function main(): Promise<void> {
       gitShaShort: sha.slice(0, 8),
       model: modelRef,
       claudeModel: useClaude ? claudeModel : null,
+      aider: useAider,
       reps: flags.reps,
       taskCount: tasks.length,
       smoke: flags.smoke,

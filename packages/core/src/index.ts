@@ -59,7 +59,9 @@ export {
   DEFAULT_CONTEXT_MODE,
   DEFAULT_TOKEN_BUDGET,
   estimateTokens,
+  looksLikeInvestigation,
   maxReadLines,
+  summariesEarnKeep,
   ttlForKind,
 } from "./context/budget"
 export { buildRepoIndex, guessLanguage, type IndexResult, indexFile, isIgnoredPath } from "./context/indexer"
@@ -157,7 +159,10 @@ export {
   recommendLocalModel,
 } from "./provider/ollama-pull"
 export {
+  AMPLE_BUDGET_THRESHOLD,
+  budgetFor,
   detectFamily,
+  LEAN_TOKEN_BUDGET,
   type ModelFamily,
   type ModelProfile,
   type ReasoningHandling,

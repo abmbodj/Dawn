@@ -1,8 +1,10 @@
+import type { ContextMode } from "../context/types"
 import {
   type Catalog,
   getModelInfo,
   type ModelInfo,
   type ModelTier,
+  modelCaches,
   modelTier,
   normalizeModelRef,
   parseModelRef,
@@ -14,18 +16,35 @@ export const LEAN_TOKEN_BUDGET = 8_000
 /** Never request more than this many tokens even on huge-window models (API sanity cap). */
 const MAX_ADAPTIVE_BUDGET = 200_000
 
+/** Fraction of the model context window used when prompt caching amortizes the stable prefix. */
+const CACHED_BUDGET_FRACTION: Record<ContextMode, number> = {
+  minimal: 0.35,
+  balanced: 0.65,
+  deep: 0.8,
+}
+
+/** Lean budgets when every re-send is billed at full input price. */
+const LEAN_BUDGET_BY_MODE: Record<ContextMode, number> = {
+  minimal: 6_000,
+  balanced: LEAN_TOKEN_BUDGET,
+  deep: 12_000,
+}
+
 /**
- * Compute the effective token budget for a model. On providers that support prompt
- * caching the stable prefix is billed at cache-read rates (~10% cost), so it's
- * economical to give the model a large fraction of its real context window and let
- * it see complete files and full history. On non-caching / local providers we keep
- * a lean budget so each turn doesn't pay full price for a large re-send.
+ * Compute the effective token budget for a model + context mode.
+ * Caching models (`promptCaches`) get a mode-scaled fraction of the real context window
+ * because the stable prefix is billed at cache-read rates after the first turn.
+ * Non-caching / local providers stay lean so each turn doesn't pay full price for a large re-send.
  */
-export function budgetFor(profile: Pick<ModelProfile, "supportsCaching">, info?: ModelInfo): number {
-  if (!profile.supportsCaching) return LEAN_TOKEN_BUDGET
+export function budgetFor(
+  profile: Pick<ModelProfile, "promptCaches">,
+  info?: ModelInfo,
+  mode: ContextMode = "balanced",
+): number {
+  if (!profile.promptCaches) return LEAN_BUDGET_BY_MODE[mode]
   const windowTokens = info?.limit?.context
-  if (!windowTokens) return LEAN_TOKEN_BUDGET
-  return Math.min(MAX_ADAPTIVE_BUDGET, Math.floor(windowTokens * 0.65))
+  if (!windowTokens) return LEAN_BUDGET_BY_MODE[mode]
+  return Math.min(MAX_ADAPTIVE_BUDGET, Math.floor(windowTokens * CACHED_BUDGET_FRACTION[mode]))
 }
 
 /**
@@ -68,8 +87,13 @@ export interface ModelProfile {
   reasoning: ReasoningHandling
   /** Apply the malformed-tool-call repair shim (markdown-fenced / double-encoded JSON, fuzzy names). */
   toolRepair: boolean
-  /** Provider supports prompt caching via cacheControl breakpoints (Anthropic-style). */
-  supportsCaching: boolean
+  /**
+   * Re-sent stable prefix can be amortized via provider prompt cache (catalog `cache_read`
+   * pricing and/or Anthropic-style breakpoints). Drives adaptive budget + summary share.
+   */
+  promptCaches: boolean
+  /** Provider accepts explicit Anthropic-style `cacheControl` breakpoints on messages. */
+  cacheBreakpoints: boolean
   /**
    * Extra per-turn system guidance, appended AFTER the cached prompt prefix so it
    * never invalidates the cache. Undefined for strong models that need no scaffolding.
@@ -165,7 +189,10 @@ export function resolveProfile(ref: string, catalog: Catalog): ModelProfile {
   // true whether served by Anthropic directly or via Bedrock. OpenAI-compatible
   // transports (incl. Vertex/Azure for non-Claude) reject reasoning_content, so strip.
   const reasoning: ReasoningHandling = family === "claude" ? "native" : "strip"
-  const supportsCaching = family === "claude" && (providerId === "anthropic" || providerId === "bedrock")
+  const cacheBreakpoints = family === "claude" && (providerId === "anthropic" || providerId === "bedrock")
+  // Catalog `cache_read` means the provider bills cached input separately (OpenAI, Google, …).
+  // Combined with explicit breakpoints, this drives budget + summary share — not breakpoint markup.
+  const promptCaches = cacheBreakpoints || modelCaches(info)
 
   // Strong flagships need no scaffolding; open-weight / experimental models get structure.
   const wantsStructure = tier === "experimental" || (tier === "standard" && STRUCTURED_FAMILIES.has(family))
@@ -186,7 +213,8 @@ export function resolveProfile(ref: string, catalog: Catalog): ModelProfile {
     // Repair is cheap and harmless; keep it on everywhere. The flag lets a future
     // profile disable it for a model that never malforms.
     toolRepair: true,
-    supportsCaching,
+    promptCaches,
+    cacheBreakpoints,
     promptDelta,
     params,
     capabilities: {

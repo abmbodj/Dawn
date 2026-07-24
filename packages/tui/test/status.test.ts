@@ -238,13 +238,16 @@ describe("formatSavingsReport", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(report).toContain("Baseline: reading full files, full history, no prompt caching")
+    expect(report).toContain("Measured (provider usage ledger)")
+    expect(report).toContain("Estimated avoided")
     expect(report).toContain("session:")
+    expect(report).toContain("Measured:")
+    expect(report).toContain("Estimated avoided:")
     expect(report).toContain("est. saved: 1,200 tokens")
     expect(report).toContain("est. input cut: ~29%")
     expect(report).toContain("Dawn sent: 3.0k input")
     expect(report).toContain("est. would send (naive): 4.2k input")
-    expect(report).toContain("est. $ saved: $0.001")
+    expect(report).toContain("est. $ avoided (not measured): $0.001")
     expect(report).toContain("context items: 4 included / 3 skipped")
     expect(report).toContain("highest-saving turn: 900 tokens saved (1.8k / 8.0k, balanced)")
     expect(report).toContain("project:")
@@ -272,7 +275,7 @@ describe("formatSavingsReport", () => {
     })
 
     expect(report).toContain("Pricing: —")
-    expect(report).toContain("est. $ saved: —")
+    expect(report).toContain("est. $ avoided (not measured): —")
   })
 })
 
@@ -337,12 +340,12 @@ describe("savingsBoxRows", () => {
     })
 
     expect(rows).toEqual([
-      { label: "input cut", value: "0% · 0 tokens", tone: "dim" },
-      { label: "would send", value: "0 tokens" },
-      { label: "sent", value: "0 tokens" },
-      { label: "$ saved", value: "$0.000", tone: "dim" },
+      { label: "measured $", value: "$0.000", tone: "dim" },
+      { label: "measured in", value: "0" },
+      { label: "est. cut", value: "0% · 0 tok", tone: "dim" },
+      { label: "est. $ avoid", value: "$0.000", tone: "dim" },
       { label: "cache $", value: "$0.000", tone: "dim" },
-      { label: "vs", value: "full files + no cache", tone: "dim" },
+      { label: "vs", value: "est. full+no cache", tone: "dim" },
     ])
   })
 
@@ -361,11 +364,11 @@ describe("savingsBoxRows", () => {
       modelRef: "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     })
 
-    expect(rows).toContainEqual({ label: "input cut", value: "29% · 1.2k tokens", tone: "accent" })
-    expect(rows).toContainEqual({ label: "would send", value: "4.2k tokens" })
-    expect(rows).toContainEqual({ label: "sent", value: "3.0k tokens" })
-    expect(rows).toContainEqual({ label: "$ saved", value: "$0.001", tone: "accent" })
-    expect(rows).toContainEqual({ label: "vs", value: "full files + no cache", tone: "dim" })
+    expect(rows).toContainEqual({ label: "measured $", value: "$0.010", tone: "accent" })
+    expect(rows).toContainEqual({ label: "measured in", value: "3.0k" })
+    expect(rows).toContainEqual({ label: "est. cut", value: "29% · 1.2k tok", tone: "accent" })
+    expect(rows).toContainEqual({ label: "est. $ avoid", value: "$0.001", tone: "accent" })
+    expect(rows).toContainEqual({ label: "vs", value: "est. full+no cache", tone: "dim" })
   })
 
   test("shows unknown estimated dollar savings without pricing", () => {
@@ -376,7 +379,7 @@ describe("savingsBoxRows", () => {
       modelRef: "custom/some-model",
     })
 
-    expect(rows).toContainEqual({ label: "$ saved", value: "—", tone: "dim" })
+    expect(rows).toContainEqual({ label: "est. $ avoid", value: "—", tone: "dim" })
   })
 })
 

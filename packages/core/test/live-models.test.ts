@@ -149,7 +149,12 @@ describe("GitHub Copilot plan gating", () => {
           data: [
             { id: "included-model", name: "Included" },
             // model_picker_enabled is a VS Code preference, not entitlement — must be kept.
-            { id: "picker-hidden", name: "Hidden", model_picker_enabled: false, policy: { state: "enabled" } },
+            {
+              id: "picker-hidden",
+              name: "Hidden",
+              model_picker_enabled: false,
+              policy: { state: "enabled" },
+            },
             { id: "premium-model", name: "Premium", is_premium: true },
             // policy.state "disabled" is the real plan gate — must be dropped.
             { id: "plan-gated", name: "Gated", policy: { state: "disabled" } },
