@@ -8,6 +8,7 @@ import {
   contextBudget,
   DEFAULT_CONTEXT_MODE,
   estimateTokens,
+  pruneToolResults,
   stripReasoningParts,
   ttlForKind,
 } from "../context/budget"
@@ -632,28 +633,41 @@ export class DawnAgent {
             onError: () => {},
             tools: activeTools,
             experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
-            prepareStep:
-              needsReasoningStrip || forceRepoOverview
-                ? ({ stepNumber, messages }) => {
-                    const overrides: {
-                      activeTools?: string[]
-                      toolChoice?: { type: "tool"; toolName: string }
-                      messages?: ModelMessage[]
-                    } = {}
+            prepareStep: ({ stepNumber, messages }) => {
+              const overrides: {
+                activeTools?: string[]
+                toolChoice?: { type: "tool"; toolName: string }
+                messages?: ModelMessage[]
+              } = {}
 
-                    if (forceRepoOverview && stepNumber === 0) {
-                      overrides.activeTools = [REPO_OVERVIEW_TOOL]
-                      overrides.toolChoice = { type: "tool", toolName: REPO_OVERVIEW_TOOL }
-                    }
+              if (forceRepoOverview && stepNumber === 0) {
+                overrides.activeTools = [REPO_OVERVIEW_TOOL]
+                overrides.toolChoice = { type: "tool", toolName: REPO_OVERVIEW_TOOL }
+              }
 
-                    if (needsReasoningStrip && stepNumber > 0) {
-                      const stripped = stripReasoningParts(messages)
-                      if (stripped !== messages) overrides.messages = stripped
-                    }
+              let next = messages
+              if (needsReasoningStrip && stepNumber > 0) {
+                next = stripReasoningParts(next)
+              }
 
-                    return Object.keys(overrides).length > 0 ? overrides : undefined
-                  }
-                : undefined,
+              // The budget is planned once per turn, but every step re-sends everything
+              // accumulated so far. Without this a single big tool output is billed again
+              // on each of up to MAX_STEPS steps — the largest single source of overspend.
+              if (!this.naive && stepNumber > 0) {
+                const pruned = pruneToolResults(next, {
+                  budget: this.tokenBudget,
+                  protectTokens: Math.max(2000, Math.floor(this.tokenBudget / 2)),
+                })
+                if (pruned.prunedTokens > 0) {
+                  next = pruned.messages
+                  this.compaction.savedTokens += pruned.prunedTokens
+                  this.compaction.outputs += 1
+                }
+              }
+
+              if (next !== messages) overrides.messages = next
+              return Object.keys(overrides).length > 0 ? overrides : undefined
+            },
             stopWhen: stepCountIs(MAX_STEPS),
             abortSignal: signal,
             onStepFinish: (step) => {

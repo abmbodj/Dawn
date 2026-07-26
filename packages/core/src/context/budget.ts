@@ -133,6 +133,78 @@ export function workingSetItemText(item: WorkingSetItem): string {
   }
 }
 
+/**
+ * Replace the bodies of older tool results with a short stub, newest-first protected.
+ *
+ * The context budget is planned once per turn, but a turn runs many steps and the SDK
+ * re-sends every accumulated message on each one — so one big tool output is billed
+ * again on every subsequent step. Pruning bounds that without touching message
+ * structure (tool-call/result pairing is untouched, so providers stay happy) and
+ * without an LLM call. Tool call *inputs* survive, so the model still knows what it ran.
+ *
+ * Any «expand:HASH» sentinel in the output is carried into the stub — the full text
+ * stays recoverable through the expand tool.
+ */
+export function pruneToolResults(
+  messages: ModelMessage[],
+  opts: { budget: number; protectTokens: number },
+): { messages: ModelMessage[]; prunedTokens: number } {
+  const total = messages.reduce((sum, m) => sum + messageTokens(m), 0)
+  if (total <= opts.budget) return { messages, prunedTokens: 0 }
+
+  let seen = 0
+  let prunedTokens = 0
+  const out = [...messages]
+
+  // Walk backwards so the most recent outputs — the ones the model is actively
+  // reasoning about — are the ones kept whole.
+  for (let i = out.length - 1; i >= 0; i--) {
+    const msg = out[i]
+    if (msg?.role !== "tool" || !Array.isArray(msg.content)) continue
+
+    const tokens = messageTokens(msg)
+    if (seen < opts.protectTokens) {
+      seen += tokens
+      continue
+    }
+
+    let changed = false
+    const content = (msg.content as Array<Record<string, unknown>>).map((part) => {
+      if (part?.type !== "tool-result") return part
+      const text = toolResultText(part.output)
+      if (text === undefined || text.length < PRUNE_MIN_CHARS) return part
+      changed = true
+      return { ...part, output: { type: "text", value: stubFor(text) } }
+    })
+
+    if (changed) {
+      out[i] = { ...msg, content } as ModelMessage
+      prunedTokens += tokens - messageTokens(out[i] as ModelMessage)
+    }
+  }
+
+  return prunedTokens > 0 ? { messages: out, prunedTokens } : { messages, prunedTokens: 0 }
+}
+
+/** Below this, stubbing costs more clarity than it saves tokens. */
+const PRUNE_MIN_CHARS = 400
+
+function toolResultText(output: unknown): string | undefined {
+  if (typeof output === "string") return output
+  if (output && typeof output === "object") {
+    const value = (output as { value?: unknown }).value
+    if (typeof value === "string") return value
+  }
+  return undefined
+}
+
+function stubFor(text: string): string {
+  const sentinel = text.match(/«expand:[^»]+»/)?.[0]
+  const lines = text.split("\n").length
+  const detail = sentinel ? ` ${sentinel}` : ""
+  return `[Earlier tool output cleared to save context — ${lines} lines, ${text.length} chars.${detail}]`
+}
+
 /** Ids of tool calls whose results are already carried by these messages. */
 export function toolCallIdsIn(messages: ModelMessage[]): Set<string> {
   const ids = new Set<string>()
