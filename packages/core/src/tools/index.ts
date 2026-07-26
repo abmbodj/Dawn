@@ -73,6 +73,46 @@ const HEAVY_OUTPUT_TOOLS = new Set([
   "git_log",
 ])
 
+const SYNTAX_LOADERS: Record<string, "ts" | "tsx" | "js" | "jsx"> = {
+  ".ts": "ts",
+  ".mts": "ts",
+  ".cts": "ts",
+  ".tsx": "tsx",
+  ".js": "js",
+  ".mjs": "js",
+  ".cjs": "js",
+  ".jsx": "jsx",
+}
+
+/**
+ * Parse-check a file we just wrote and return a warning if it no longer parses.
+ *
+ * A truncated or unbalanced edit is the classic silent failure: the tool reports
+ * success and the breakage surfaces turns later, after the model has built more work
+ * on top of it. Parsing is sub-millisecond and needs no project config, so the model
+ * learns within the same step — unlike a full typecheck, which is advertised in the
+ * system prompt for the model to run when it wants project-wide verification.
+ */
+function syntaxWarning(absPath: string, content: string): string {
+  const ext = path.extname(absPath).toLowerCase()
+  try {
+    if (ext === ".json") {
+      JSON.parse(content)
+      return ""
+    }
+    const loader = SYNTAX_LOADERS[ext]
+    if (!loader) return ""
+    new Bun.Transpiler({ loader }).transformSync(content)
+    return ""
+  } catch (err) {
+    const detail = (err instanceof Error ? err.message : String(err)).split("\n").slice(0, 4).join("\n")
+    return (
+      `\n\n⚠️ The file no longer parses after this change:\n${detail}\n` +
+      `Re-read the affected region and fix the syntax before moving on.`
+    )
+  }
+}
+
 function resolvePath(cwd: string, p: string): string {
   return path.isAbsolute(p) ? p : path.resolve(cwd, p)
 }
@@ -468,7 +508,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       if (!ok) return DENIED
       fs.mkdirSync(path.dirname(abs), { recursive: true })
       fs.writeFileSync(abs, content)
-      return `Wrote ${content.split("\n").length} lines to ${relative(cwd, abs)}`
+      return `Wrote ${content.split("\n").length} lines to ${relative(cwd, abs)}${syntaxWarning(abs, content)}`
     },
   })
 
@@ -544,7 +584,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       // Update registry with new hash after the edit is written
       fs.writeFileSync(abs, updated)
       if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(updated))
-      return `Edited ${relative(cwd, abs)}`
+      return `Edited ${relative(cwd, abs)}${syntaxWarning(abs, updated)}`
     },
   })
 
@@ -595,7 +635,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       if (!ok) return DENIED
       fs.writeFileSync(abs, updated)
       if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(updated))
-      return `Applied ${edits.length} edits to ${relative(cwd, abs)}`
+      return `Applied ${edits.length} edits to ${relative(cwd, abs)}${syntaxWarning(abs, updated)}`
     },
   })
 
