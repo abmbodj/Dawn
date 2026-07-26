@@ -1,6 +1,17 @@
 import { estimateTokens } from "./budget"
 import type { WorkingSetItem } from "./types"
 
+/**
+ * How many tool-result echoes to keep, newest first.
+ *
+ * TTL alone bounds them by *turns*, not by count — and a single investigate turn can
+ * fire a dozen tools, so a per-call lease with no cap retains every one of them. Measured
+ * on the bench: uncapped, `probe-multifile-rename` (grep + several reads + several edits)
+ * cost +112% input, while recall-heavy tasks gained. Three keeps "the last few outputs"
+ * — the behaviour the TTLs were written for — without paying for a whole turn's worth.
+ */
+const MAX_TOOL_RESULT_ITEMS = 3
+
 export class ContextWorkingSet {
   private items: WorkingSetItem[] = []
 
@@ -10,6 +21,15 @@ export class ContextWorkingSet {
     const key = keyFor(next)
     this.items = this.items.filter((existing) => keyFor(existing) !== key)
     this.items.push(next)
+
+    if (next.kind === "tool-result") {
+      let seen = 0
+      this.items = this.items
+        .slice()
+        .reverse()
+        .filter((existing) => existing.kind !== "tool-result" || ++seen <= MAX_TOOL_RESULT_ITEMS)
+        .reverse()
+    }
   }
 
   all(): WorkingSetItem[] {

@@ -361,7 +361,9 @@ Every item is bench-gated: it ships only if the headline gate (cost/success ≤ 
 
 ## 10. Immediate implementation candidates
 
-First PRs for the follow-up effort, smallest-risk-first (nothing implemented in this audit):
+**Status: implemented 2026-07-26** (commits `8f39344`…`1a9ea9c`). Results in §11.
+
+First PRs for the follow-up effort, smallest-risk-first:
 
 1. **`read` cap** — add to `HEAVY_OUTPUT_TOOLS` (`packages/core/src/tools/index.ts:62`); apply `compactToolOutput` + total-byte ceiling in the read handler (`index.ts:384-432`).
 2. **Schema accounting** — serialize tool schemas once in the `DawnAgent` constructor, `estimateTokens` them, add to `ContextPlan.systemTokens` (`context/budget.ts:343`) and the overflow guard (`agent.ts:463`).

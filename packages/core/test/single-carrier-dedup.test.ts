@@ -56,6 +56,37 @@ describe("working set holds one lease per tool result", () => {
     expect(ws.all().filter((i) => i.kind === "tool-result")).toHaveLength(3)
   })
 
+  test("retention is capped so a many-tool turn cannot stack echoes", () => {
+    const ws = new ContextWorkingSet()
+    for (let i = 0; i < 10; i++) {
+      ws.add({ kind: "tool-result", content: `out-${i}`, reason: "bash output", ttl: 2, toolCallId: `c${i}` })
+    }
+    const kept = ws.all().filter((i) => i.kind === "tool-result")
+
+    expect(kept).toHaveLength(3)
+    // Newest survive; oldest are dropped.
+    expect(kept.map((i) => i.content)).toEqual(["out-7", "out-8", "out-9"])
+  })
+
+  test("the cap does not evict other kinds", () => {
+    const ws = new ContextWorkingSet()
+    ws.add({ kind: "summary", path: "a.ts", summary: "s", reason: "idx", ttl: 10 })
+    ws.add({
+      kind: "file-range",
+      path: "b.ts",
+      startLine: 1,
+      endLine: 9,
+      content: "x",
+      reason: "read",
+      ttl: 4,
+    })
+    for (let i = 0; i < 6; i++) {
+      ws.add({ kind: "tool-result", content: `out-${i}`, reason: "bash output", ttl: 2, toolCallId: `c${i}` })
+    }
+    expect(ws.all().filter((i) => i.kind === "summary")).toHaveLength(1)
+    expect(ws.all().filter((i) => i.kind === "file-range")).toHaveLength(1)
+  })
+
   test("re-adding the same call id still replaces, not duplicates", () => {
     const ws = new ContextWorkingSet()
     ws.add({ kind: "tool-result", content: "first", reason: "bash output", ttl: 2, toolCallId: "call-1" })
