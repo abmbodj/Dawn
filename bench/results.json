@@ -1,16 +1,71 @@
 {
   "provenance": {
-    "generatedAt": "2026-07-26T02:36:04.425Z",
+    "generatedAt": "2026-07-26T03:05:08.075Z",
     "gitSha": "79df0174a7ee7778d4e35fe6d7bbadd91a930fb3",
     "gitShaShort": "79df0174",
     "model": "anthropic/claude-haiku-4-5-20251001",
     "claudeModel": null,
     "aider": false,
     "reps": 2,
-    "taskCount": 5,
+    "taskCount": 13,
     "smoke": false
   },
   "results": [
+    {
+      "task": "trivial-hello",
+      "category": "trivial",
+      "slice": "trivial",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 12285,
+            "cachedInputTokens": 5773,
+            "outputTokens": 202,
+            "cacheWriteTokens": 5773,
+            "cost": 0.00954255,
+            "steps": 2,
+            "ms": 4625,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 12283,
+            "cachedInputTokens": 5773,
+            "outputTokens": 155,
+            "cacheWriteTokens": 5773,
+            "cost": 0.009305550000000001,
+            "steps": 2,
+            "ms": 3655,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 12277,
+            "cachedInputTokens": 0,
+            "outputTokens": 135,
+            "cacheWriteTokens": 0,
+            "cost": 0.012952,
+            "steps": 2,
+            "ms": 6780,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 12286,
+            "cachedInputTokens": 0,
+            "outputTokens": 146,
+            "cacheWriteTokens": 0,
+            "cost": 0.013016,
+            "steps": 2,
+            "ms": 4218,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
     {
       "task": "cat-budget",
       "category": "read-heavy",
@@ -18,49 +73,104 @@
       "modes": {
         "dawn": [
           {
-            "inputTokens": 96558,
-            "cachedInputTokens": 56217,
-            "outputTokens": 1098,
-            "cacheWriteTokens": 8031,
-            "cost": 0.05346045000000001,
-            "steps": 8,
-            "ms": 42545,
+            "inputTokens": 39197,
+            "cachedInputTokens": 16060,
+            "outputTokens": 381,
+            "cacheWriteTokens": 8030,
+            "cost": 0.0286555,
+            "steps": 3,
+            "ms": 9041,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 67788,
-            "cachedInputTokens": 40145,
-            "outputTokens": 803,
-            "cacheWriteTokens": 8029,
-            "cost": 0.03767975,
-            "steps": 6,
-            "ms": 16922,
+            "inputTokens": 55927,
+            "cachedInputTokens": 24090,
+            "outputTokens": 612,
+            "cacheWriteTokens": 8030,
+            "cost": 0.0393135,
+            "steps": 4,
+            "ms": 15738,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 18573,
+            "inputTokens": 18576,
             "cachedInputTokens": 0,
-            "outputTokens": 444,
+            "outputTokens": 272,
             "cacheWriteTokens": 0,
-            "cost": 0.020793,
+            "cost": 0.019936000000000002,
             "steps": 2,
-            "ms": 8300,
+            "ms": 7101,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 18572,
+            "inputTokens": 18576,
             "cachedInputTokens": 0,
-            "outputTokens": 367,
+            "outputTokens": 486,
             "cacheWriteTokens": 0,
-            "cost": 0.020407,
+            "cost": 0.021006,
             "steps": 2,
-            "ms": 7715,
+            "ms": 11557,
             "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "grep-exports",
+      "category": "read-heavy",
+      "slice": "investigate",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 17760,
+            "cachedInputTokens": 8345,
+            "outputTokens": 202,
+            "cacheWriteTokens": 8345,
+            "cost": 0.01334575,
+            "steps": 2,
+            "ms": 4170,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 17754,
+            "cachedInputTokens": 8344,
+            "outputTokens": 192,
+            "cacheWriteTokens": 8344,
+            "cost": 0.0132904,
+            "steps": 2,
+            "ms": 6230,
+            "success": false,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 21298,
+            "cachedInputTokens": 0,
+            "outputTokens": 216,
+            "cacheWriteTokens": 0,
+            "cost": 0.022378000000000002,
+            "steps": 2,
+            "ms": 5578,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 21278,
+            "cachedInputTokens": 0,
+            "outputTokens": 173,
+            "cacheWriteTokens": 0,
+            "cost": 0.022143,
+            "steps": 2,
+            "ms": 4205,
+            "success": false,
             "errored": false
           }
         ]
@@ -73,48 +183,269 @@
       "modes": {
         "dawn": [
           {
-            "inputTokens": 30477,
-            "cachedInputTokens": 15350,
-            "outputTokens": 410,
+            "inputTokens": 66293,
+            "cachedInputTokens": 38375,
+            "outputTokens": 765,
             "cacheWriteTokens": 7675,
-            "cost": 0.02063075,
-            "steps": 3,
-            "ms": 9410,
+            "cost": 0.03749925,
+            "steps": 6,
+            "ms": 13856,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 66749,
-            "cachedInputTokens": 38380,
-            "outputTokens": 781,
-            "cacheWriteTokens": 7676,
-            "cost": 0.038031,
+            "inputTokens": 66824,
+            "cachedInputTokens": 38375,
+            "outputTokens": 787,
+            "cacheWriteTokens": 7675,
+            "cost": 0.03814025,
             "steps": 6,
-            "ms": 16612,
+            "ms": 15946,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 54425,
+            "inputTokens": 44194,
             "cachedInputTokens": 0,
-            "outputTokens": 748,
+            "outputTokens": 693,
             "cacheWriteTokens": 0,
-            "cost": 0.05816500000000001,
-            "steps": 6,
-            "ms": 17272,
+            "cost": 0.047659,
+            "steps": 5,
+            "ms": 13091,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 44037,
+            "inputTokens": 44106,
             "cachedInputTokens": 0,
-            "outputTokens": 648,
+            "outputTokens": 652,
             "cacheWriteTokens": 0,
-            "cost": 0.047277,
+            "cost": 0.047366000000000005,
             "steps": 5,
-            "ms": 14542,
+            "ms": 13937,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "pilot-diagnosis-maxreadlines",
+      "category": "diagnosis",
+      "slice": "investigate",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 20051,
+            "cachedInputTokens": 8237,
+            "outputTokens": 178,
+            "cacheWriteTokens": 8237,
+            "cost": 0.015586949999999999,
+            "steps": 2,
+            "ms": 5332,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 20044,
+            "cachedInputTokens": 8239,
+            "outputTokens": 167,
+            "cacheWriteTokens": 8239,
+            "cost": 0.01552365,
+            "steps": 2,
+            "ms": 3989,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 14935,
+            "cachedInputTokens": 0,
+            "outputTokens": 114,
+            "cacheWriteTokens": 0,
+            "cost": 0.015505,
+            "steps": 2,
+            "ms": 3649,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 14942,
+            "cachedInputTokens": 0,
+            "outputTokens": 180,
+            "cacheWriteTokens": 0,
+            "cost": 0.015842000000000002,
+            "steps": 2,
+            "ms": 4107,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "mt-edit-sequence",
+      "category": "edit",
+      "slice": "long",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 51847,
+            "cachedInputTokens": 39490,
+            "outputTokens": 631,
+            "cacheWriteTokens": 11202,
+            "cost": 0.022261500000000004,
+            "steps": 6,
+            "ms": 14026,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 51625,
+            "cachedInputTokens": 39395,
+            "outputTokens": 587,
+            "cacheWriteTokens": 11107,
+            "cost": 0.02188125,
+            "steps": 6,
+            "ms": 12080,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 46862,
+            "cachedInputTokens": 0,
+            "outputTokens": 620,
+            "cacheWriteTokens": 0,
+            "cost": 0.049962,
+            "steps": 6,
+            "ms": 12338,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 46767,
+            "cachedInputTokens": 0,
+            "outputTokens": 606,
+            "cacheWriteTokens": 0,
+            "cost": 0.049797,
+            "steps": 6,
+            "ms": 13547,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "mt-diagnosis-recall",
+      "category": "diagnosis",
+      "slice": "long",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 70434,
+            "cachedInputTokens": 35919,
+            "outputTokens": 360,
+            "cacheWriteTokens": 26387,
+            "cost": 0.04650365,
+            "steps": 5,
+            "ms": 13310,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 61576,
+            "cachedInputTokens": 35998,
+            "outputTokens": 488,
+            "cacheWriteTokens": 20926,
+            "cost": 0.036849299999999995,
+            "steps": 5,
+            "ms": 13590,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 52043,
+            "cachedInputTokens": 0,
+            "outputTokens": 423,
+            "cacheWriteTokens": 0,
+            "cost": 0.054158,
+            "steps": 4,
+            "ms": 20893,
+            "success": false,
+            "errored": true,
+            "error": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+          },
+          {
+            "inputTokens": 54963,
+            "cachedInputTokens": 0,
+            "outputTokens": 431,
+            "cacheWriteTokens": 0,
+            "cost": 0.057118,
+            "steps": 5,
+            "ms": 10172,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "probe-recover-failing-run",
+      "category": "probe",
+      "slice": "probe",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 68100,
+            "cachedInputTokens": 56208,
+            "outputTokens": 762,
+            "cacheWriteTokens": 8344,
+            "cost": 0.023408799999999997,
+            "steps": 8,
+            "ms": 16404,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 67796,
+            "cachedInputTokens": 56096,
+            "outputTokens": 673,
+            "cacheWriteTokens": 8322,
+            "cost": 0.022755100000000004,
+            "steps": 8,
+            "ms": 14744,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 51750,
+            "cachedInputTokens": 0,
+            "outputTokens": 684,
+            "cacheWriteTokens": 0,
+            "cost": 0.05516999999999999,
+            "steps": 8,
+            "ms": 15843,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 52046,
+            "cachedInputTokens": 0,
+            "outputTokens": 732,
+            "cacheWriteTokens": 0,
+            "cost": 0.055706000000000006,
+            "steps": 8,
+            "ms": 14831,
             "success": true,
             "errored": false
           }
@@ -128,49 +459,49 @@
       "modes": {
         "dawn": [
           {
-            "inputTokens": 56770,
-            "cachedInputTokens": 44201,
-            "outputTokens": 653,
-            "cacheWriteTokens": 9489,
-            "cost": 0.022626349999999996,
-            "steps": 6,
-            "ms": 12167,
+            "inputTokens": 46522,
+            "cachedInputTokens": 34740,
+            "outputTokens": 421,
+            "cacheWriteTokens": 9502,
+            "cost": 0.019736499999999997,
+            "steps": 5,
+            "ms": 8547,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 78823,
-            "cachedInputTokens": 63222,
-            "outputTokens": 913,
-            "cacheWriteTokens": 9498,
-            "cost": 0.028862699999999998,
-            "steps": 8,
-            "ms": 19564,
+            "inputTokens": 46555,
+            "cachedInputTokens": 34762,
+            "outputTokens": 433,
+            "cacheWriteTokens": 9515,
+            "cost": 0.019812950000000003,
+            "steps": 5,
+            "ms": 13686,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 48279,
+            "inputTokens": 48284,
             "cachedInputTokens": 0,
-            "outputTokens": 656,
+            "outputTokens": 660,
             "cacheWriteTokens": 0,
-            "cost": 0.051559,
+            "cost": 0.051584,
             "steps": 6,
-            "ms": 16776,
+            "ms": 11585,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 48243,
+            "inputTokens": 48237,
             "cachedInputTokens": 0,
-            "outputTokens": 645,
+            "outputTokens": 632,
             "cacheWriteTokens": 0,
-            "cost": 0.051468,
+            "cost": 0.051397,
             "steps": 6,
-            "ms": 16493,
-            "success": true,
+            "ms": 26279,
+            "success": false,
             "errored": false
           }
         ]
@@ -183,48 +514,103 @@
       "modes": {
         "dawn": [
           {
-            "inputTokens": 70337,
-            "cachedInputTokens": 48714,
-            "outputTokens": 1572,
+            "inputTokens": 126410,
+            "cachedInputTokens": 81190,
+            "outputTokens": 2267,
             "cacheWriteTokens": 8119,
-            "cost": 0.03638415,
-            "steps": 7,
-            "ms": 23315,
+            "cost": 0.06670374999999999,
+            "steps": 11,
+            "ms": 34860,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 57988,
-            "cachedInputTokens": 40595,
-            "outputTokens": 1382,
-            "cacheWriteTokens": 8119,
-            "cost": 0.03039225,
-            "steps": 6,
-            "ms": 23351,
+            "inputTokens": 79907,
+            "cachedInputTokens": 56819,
+            "outputTokens": 1542,
+            "cacheWriteTokens": 8117,
+            "cost": 0.03850915,
+            "steps": 8,
+            "ms": 23440,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 56364,
+            "inputTokens": 68951,
             "cachedInputTokens": 0,
-            "outputTokens": 1460,
+            "outputTokens": 1511,
             "cacheWriteTokens": 0,
-            "cost": 0.063664,
+            "cost": 0.076506,
             "steps": 7,
-            "ms": 19983,
+            "ms": 23488,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 53434,
+            "inputTokens": 43793,
             "cachedInputTokens": 0,
-            "outputTokens": 1611,
+            "outputTokens": 1305,
             "cacheWriteTokens": 0,
-            "cost": 0.06148900000000001,
-            "steps": 7,
-            "ms": 23123,
+            "cost": 0.050318,
+            "steps": 6,
+            "ms": 17701,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "probe-ambiguous-delete",
+      "category": "probe",
+      "slice": "probe",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 11425,
+            "cachedInputTokens": 5633,
+            "outputTokens": 146,
+            "cacheWriteTokens": 5633,
+            "cost": 0.00849355,
+            "steps": 2,
+            "ms": 4397,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 11429,
+            "cachedInputTokens": 5635,
+            "outputTokens": 137,
+            "cacheWriteTokens": 5635,
+            "cost": 0.00845125,
+            "steps": 2,
+            "ms": 3659,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 11420,
+            "cachedInputTokens": 0,
+            "outputTokens": 107,
+            "cacheWriteTokens": 0,
+            "cost": 0.011955,
+            "steps": 2,
+            "ms": 4484,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 11424,
+            "cachedInputTokens": 0,
+            "outputTokens": 108,
+            "cacheWriteTokens": 0,
+            "cost": 0.011963999999999999,
+            "steps": 2,
+            "ms": 3276,
             "success": true,
             "errored": false
           }
@@ -238,48 +624,103 @@
       "modes": {
         "dawn": [
           {
-            "inputTokens": 91629,
-            "cachedInputTokens": 68324,
-            "outputTokens": 713,
-            "cacheWriteTokens": 18320,
-            "cost": 0.038282399999999994,
-            "steps": 9,
-            "ms": 19337,
+            "inputTokens": 85958,
+            "cachedInputTokens": 60315,
+            "outputTokens": 649,
+            "cacheWriteTokens": 19914,
+            "cost": 0.039898,
+            "steps": 8,
+            "ms": 16923,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 82802,
-            "cachedInputTokens": 59927,
-            "outputTokens": 621,
-            "cacheWriteTokens": 18113,
-            "cost": 0.03650095,
+            "inputTokens": 74419,
+            "cachedInputTokens": 60309,
+            "outputTokens": 662,
+            "cacheWriteTokens": 12961,
+            "cost": 0.026691150000000004,
             "steps": 8,
-            "ms": 16097,
+            "ms": 15478,
             "success": true,
             "errored": false
           }
         ],
         "naive": [
           {
-            "inputTokens": 97998,
+            "inputTokens": 74596,
             "cachedInputTokens": 0,
-            "outputTokens": 672,
+            "outputTokens": 534,
             "cacheWriteTokens": 0,
-            "cost": 0.101358,
-            "steps": 8,
-            "ms": 19045,
+            "cost": 0.077266,
+            "steps": 7,
+            "ms": 19457,
             "success": true,
             "errored": false
           },
           {
-            "inputTokens": 99376,
+            "inputTokens": 81093,
             "cachedInputTokens": 0,
-            "outputTokens": 641,
+            "outputTokens": 587,
             "cacheWriteTokens": 0,
-            "cost": 0.102581,
+            "cost": 0.08402799999999999,
             "steps": 8,
-            "ms": 26894,
+            "ms": 20330,
+            "success": true,
+            "errored": false
+          }
+        ]
+      }
+    },
+    {
+      "task": "probe-minimal-diff",
+      "category": "probe",
+      "slice": "probe",
+      "modes": {
+        "dawn": [
+          {
+            "inputTokens": 63291,
+            "cachedInputTokens": 36610,
+            "outputTokens": 1586,
+            "cacheWriteTokens": 7322,
+            "cost": 0.0401025,
+            "steps": 6,
+            "ms": 25658,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 51163,
+            "cachedInputTokens": 29288,
+            "outputTokens": 1428,
+            "cacheWriteTokens": 7322,
+            "cost": 0.0337743,
+            "steps": 5,
+            "ms": 29793,
+            "success": true,
+            "errored": false
+          }
+        ],
+        "naive": [
+          {
+            "inputTokens": 40673,
+            "cachedInputTokens": 0,
+            "outputTokens": 701,
+            "cacheWriteTokens": 0,
+            "cost": 0.044177999999999995,
+            "steps": 5,
+            "ms": 14260,
+            "success": true,
+            "errored": false
+          },
+          {
+            "inputTokens": 40717,
+            "cachedInputTokens": 0,
+            "outputTokens": 719,
+            "cacheWriteTokens": 0,
+            "cost": 0.044312000000000004,
+            "steps": 5,
+            "ms": 13979,
             "success": true,
             "errored": false
           }

@@ -375,3 +375,77 @@ First PRs for the follow-up effort, smallest-risk-first:
 6. **Freeze the summary block** — emit only at turn 1 (or first non-trivial turn) with the session's index snapshot; new summaries ride as ordinary working-set items (`agent.ts:1008-1013`, `budget.ts:458-468`).
 7. **Post-edit diagnostics** — run the project's typecheck command scoped to the touched file after `edit`/`write`/`multi_edit`; append failures to the tool result.
 8. **README/bench truth** — regenerate the README BENCH block from the new results.json (it currently shows a contradictory older run) and align the front-matter claim with the headline gate outcome.
+
+## 11. Implementation results (2026-07-26)
+
+All ten candidates in §10 landed, plus three fixes the measurement itself forced. Commits `8f39344`…`7b687d7`.
+
+### 11.1 The root cause of the failing investigate slice was not what §2.1 assumed
+
+§2.1 blamed the slice on per-turn (rather than per-step) budget enforcement. That was real and worth fixing, but tracing an actual `cat-budget` session found a second, larger cause: **compaction was destroying context the budget could afford, and the model was paying extra tool calls to get it back.**
+
+```
+before: bash cat (591 lines → compacted to 146) → find_symbol → read   4 steps, 41.7k input, $0.0248
+after:  bash cat (547 lines, kept whole)                               2 steps, 23.1k input, $0.0203
+```
+
+The budget was 20,000 tokens and the plan was using 6,046 — roughly 14k of headroom went unused while compaction elided the answer. Naive runs the same task at $0.0208, so the task went from **2.2× worse than naive to a narrow win**. This is the "aggressive reduction costs more through retries" failure mode from the brief, caught in the wild. Fix: compaction stands down when the output fits in 60% of remaining headroom (Gemini CLI's remaining-window-aware threshold, §4.3b), which is only safe because per-step pruning now stops a kept-whole output from being re-billed all turn.
+
+### 11.2 Fixing the working-set eviction bug made things worse before it made them better
+
+Giving each tool result its own lease (§7.1) removed what turned out to be an accidental one-item cap: TTLs bound echoes by *turns*, not by count, so one investigate turn firing a dozen tools retained all twelve. The bench caught it — `probe-multifile-rename` +112% input, `edit-maxreadchars` +71% — while recall-heavy tasks improved. Capping retention at 3 kept the recall gains and removed the regressions (`edit-maxreadchars` then measured −44% vs naive). **A "bug fix" that removes an unintended limit needs the intended limit put back explicitly.**
+
+### 11.3 Two methodology defects invalidated the first post-change run
+
+- **The fixture moved with the code.** Dawn's bench is self-referential (tasks `cat`/`grep` Dawn's own source), so with the workdir defaulting to `HEAD`, the P0 work's 110 added lines in `context/budget.ts` inflated `cat-budget`'s input by 21% with no behavioural change — indistinguishable from a regression. `FIXTURE_REF` now pins the workdir while the agent still comes from the working tree.
+- **Sampling noise swamped the signal.** At the provider default temperature the model varies how many tools it calls: `cat-budget` measured 41k, 53k, and 96k input tokens across reps of an identical task on an identical fixture. The bench now pins `temperature: 0`. Naive's near-identical reps (18,573 / 18,572) versus Dawn's wide spread was the tell — and it is also evidence that Dawn's machinery, not the model, was the variance source.
+
+Any comparison of two runs is only valid when `provenance.gitSha` matches and both pinned temperature.
+
+### 11.4 The ranking in §5 was wrong, and the correction is the lesson
+
+§5 ranked intra-turn budget enforcement first and "remaining-window-aware output caps" last, as a one-line P1.6 nicety. Measured, the order inverts: **headroom-aware compaction was the single biggest win** on the failing slice (−45% input, −18% cost, two fewer tool calls on `cat-budget`), while per-step pruning — though it simulates a 58% cut on a synthetic 10-step turn — mattered less on real tasks, because real turns rarely reach ten steps *once the agent stops being forced into recovery calls*.
+
+The two are coupled in a way the audit did not anticipate: per-step pruning is what makes lenient compaction affordable. Neither is safe alone. Eager compaction without pruning re-bills whole outputs; lenient compaction without pruning grows unboundedly.
+
+Revised ranking for anyone continuing this work:
+
+1. Stop destroying context the budget can afford (headroom-aware compaction) — done
+2. Bound what accumulates within a turn (per-step pruning) — done, and the enabler for 1
+3. Cap *counts*, not just TTLs, on anything the working set retains — done, learned the hard way (§11.2)
+4. Only then: dedup, schema accounting, byte caps — all real, all small by comparison
+
+The generalizable finding: **on a caching provider, Dawn's costs were dominated by extra model round-trips, not by bytes per request.** Every mechanism that avoided a tool call beat every mechanism that shaved a payload. The audit's framing (§2, "where tokens go") measured the wrong unit; the right unit is round-trips induced.
+
+### 11.5 Measured outcome
+
+Authoritative run: 13 tasks × {dawn, naive} × 2 reps, `claude-haiku-4-5`, fixture pinned to `79df017`, `temperature: 0`. Claude Code was not re-run — Dawn's changes cannot affect it, so its baseline figure ($0.0697/successful task) still stands.
+
+| Metric | Audit baseline | After P0 | |
+| --- | --: | --: | --- |
+| Dawn $ / successful task | $0.0270 | **$0.0278** | ~flat |
+| Naive $ / successful task | $0.0439 | $0.0462 | (drifted — run noise) |
+| Dawn vs naive | −38% | **−40%** | improved |
+| Dawn pass rate | 92% (24/26) | **96% (25/26)** | improved |
+| Naive pass rate | 92% | 88% | — |
+| Headline gate | **fail** (parity) | **pass** | — |
+
+Per-slice, the change that matters:
+
+| Slice | Baseline gate | After P0 |
+| --- | --- | --- |
+| investigate | **fail ($ lose, +35%)** | **pass ($ win, +1%)** |
+| long | pass (−47%) | pass (−41%) |
+| edit | ok (−32%) | ok (−20%) |
+| probe (reliability) | −47% cost | −44% cost, at a higher pass rate |
+
+**The investigate slice — the audit's headline failure — now passes.** Dawn is cheaper per successful task than its own ablation *and* passes more tasks than it, which is the parity condition the audit set as the precondition for making any cost claim at all.
+
+Two honest caveats:
+
+1. **`cat-budget` still loses (+66% cost)** and is the only task that does. It is no longer a compaction problem: instrumenting a live session shows `compactedOutputs: 0` — the file now arrives whole — but the model then *chooses* to grep for callers and read a second file, taking 3.5 steps against naive's 2. Dawn's richer context (summaries, working set) appears to invite exploration that the bare naive context does not. Whether that is waste or diligence is task-dependent; both modes pass the check. Two reps cannot settle it, and the same session traced twice produced 2 steps once and 4 steps the next time, so **even `temperature: 0` does not make this deterministic**.
+2. **Dawn still sends ~30% more input tokens than naive pooled** and wins purely on cache-read pricing. Unchanged from the audit's §2.10 finding, and still the reason the public claim should be *context-frugal / dollar-frugal*, not *token-frugal*. On a non-caching provider the lean-budget path carries the claim and remains unmeasured.
+
+### 11.6 What the exercise says about the audit method
+
+Three of the four things that actually moved the number were not the top-ranked items in the audit's own ranking, and two of the four came from *tracing one live session* rather than from reading code. Static review found real waste (duplicate carriers, uncounted schemas, unbounded reads) but mis-weighted all of it, because it measured bytes per request when the dominant cost was model round-trips induced by over-aggressive context reduction. The generalizable practice: **instrument a real session on the worst-performing task before ranking fixes**, and treat any context-reduction mechanism as guilty of causing retries until measured innocent.

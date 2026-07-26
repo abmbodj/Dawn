@@ -31,13 +31,18 @@ simple:
 - A coding agent should plan each request before it spends context.
 - The tool should show the plan, the spend, and the savings instead of hiding them.
 
-The committed benchmark snapshot (`bench/results.json`, 13 tasks × 2 reps on claude-haiku-4-5) shows
-Dawn at **$0.0270 per successful task vs $0.0439 for its identical `--naive` baseline (−38%) and
-$0.0697 for Claude Code on the same model (−61%), at identical 92% pass rates**. The win is a caching
-win, not a token win: Dawn sends ~28% *more* input tokens than naive but bills most of them at
-cache-read rates. Known open gap: single-turn investigate tasks still cost more than naive (see
-`docs/audit/2026-07-cost-reliability-audit.md`). Treat `/savings` **Measured** rows as ledger truth
-and **Estimated avoided** as a planner model. Re-run `bun run bench` to reproduce.
+The committed benchmark snapshot (`bench/results.json`, 13 tasks × 2 reps on claude-haiku-4-5,
+fixture and sampling temperature both pinned) shows Dawn at **$0.0278 per successful task vs
+$0.0462 for its identical `--naive` baseline (−40%), while passing more tasks than it (96% vs 88%)**.
+A separately measured run put Claude Code at $0.0697 on the same model and tasks.
+
+The win is a caching win, not a token win: Dawn sends ~30% *more* input tokens than naive and wins
+on cache-read pricing — so the honest description is context-frugal and dollar-frugal, not
+token-frugal. On providers without prompt caching the lean-budget path carries the claim and is not
+yet measured. One task (`cat-budget`) still costs more than naive; see
+[the cost & reliability audit](docs/audit/2026-07-cost-reliability-audit.md) for that and the rest
+of the open work. Treat `/savings` **Measured** rows as ledger truth and **Estimated avoided** as a
+planner model. Re-run `bun run bench` to reproduce.
 
 ## Quickstart
 
@@ -208,16 +213,14 @@ nightly/on-demand (`bun run bench`) — not a PR gate.
 
 | Agent | Pass rate | Total $ | $ / successful task |
 | --- | --: | --: | --: |
-| Dawn | 24/26 | $0.6476 | $0.0270 |
-| Naive | 24/26 | $1.0544 | $0.0439 |
-| Claude Code (13-task subset) | 24/26 | $1.6731 | $0.0697 |
-| Dawn (same subset) | 24/26 | $0.6476 | $0.0270 |
+| Dawn | 25/26 | $0.6960 | $0.0278 |
+| Naive | 23/26 | $1.0632 | $0.0462 |
 
-**Headline gate: pass** — pass-rate parity (dawn 92% vs naive 92%): ok; $/success (dawn ≤ naive): ok.
+**Headline gate: pass** — pass-rate parity (dawn 96% vs naive 88%): ok; $/success (dawn ≤ naive): ok.
 
 
 
-**Across 12 comparable task(s) at equal success, Dawn used a median 24% more input tokens (caching discount offsets cost) and 38% less cost than the naive baseline (pooled: +28% tokens vs naive, −38% cost).**
+**Across 13 comparable task(s) at equal success, Dawn used a median 20% more input tokens (caching discount offsets cost) and 27% less cost than the naive baseline (pooled: +30% tokens vs naive, −35% cost).**
 
 **Overall $ gate (Dawn ≤ naive): pass.**
 
@@ -227,68 +230,68 @@ nightly/on-demand (`bun run bench`) — not a PR gate.
 
 | Slice | Comparable tasks | Median input ↓ | Median cost ↓ | Gate |
 | --- | --: | --: | --: | --- |
-| trivial | 1 | 0% | 28% | informational |
-| investigate | 2 | -129% | -35% | fail ($ lose) |
-| edit | 1 | -23% | 32% | ok |
-| long | 2 | -11% | 47% | pass ($ win) |
-| probe | 6 | -26% | 47% | reliability (pass rate is the metric) |
+| trivial | 1 | -0% | 27% | informational |
+| investigate | 3 | -34% | 1% | pass ($ win) |
+| edit | 1 | -51% | 20% | ok |
+| long | 2 | -15% | 41% | pass ($ win) |
+| probe | 6 | -17% | 44% | reliability (pass rate is the metric) |
 
 
 
 ### trivial
 
-_trivial: median **0% fewer input tokens**, **28% less cost** (1 task(s) at equal success)_
+_trivial: median **0% more input tokens** (caching discount offsets cost), **27% less cost** (1 task(s) at equal success)_
 
-| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |
-| --- | --: | --: | --: | --: | --: | --: | --: | --: |
-| [trivial] trivial-hello (d:2/2 n:2/2) | 12,288 (5,774) | 12,293 | −0% | $0.0094 | $0.0131 | −28% | 26,337 (c:2/2) | $0.0274 |
+| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |
+| --- | --: | --: | --: | --: | --: | --: |
+| [trivial] trivial-hello (d:2/2 n:2/2) | 12,284 (5,773) | 12,282 | +0% | $0.0094 | $0.0130 | −27% |
 
 ### read-heavy
 
-_read-heavy: median **224% more input tokens**, **70% more cost** (1 task(s) at equal success)_
+_read-heavy: median **70% more input tokens**, **13% more cost** (2 task(s) at equal success)_
 
-| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |
-| --- | --: | --: | --: | --: | --: | --: | --: | --: |
-| [investigate] cat-budget (d:2/2 n:2/2) | 60,211 (36,138) | 18,574 | +224% | $0.0340 | $0.0200 | +70% | 60,747 (c:2/2) | $0.0477 |
-| [investigate] grep-exports ⚠️ (d:1/2 n:0/2) | 17,754 (8,345) | 21,292 | −17% | $0.0133 | $0.0223 | −40% | 53,983 (c:1/2) | $0.0329 |
+| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |
+| --- | --: | --: | --: | --: | --: | --: |
+| [investigate] cat-budget (d:2/2 n:2/2) | 47,562 (20,075) | 18,576 | +156% | $0.0340 | $0.0205 | +66% |
+| [investigate] grep-exports (d:1/2 n:1/2) | 17,760 (8,345) | 21,298 | −17% | $0.0133 | $0.0224 | −40% |
 
 ### edit
 
-_edit: median **21% more input tokens** (caching discount offsets cost), **42% less cost** (2 task(s) at equal success)_
+_edit: median **31% more input tokens** (caching discount offsets cost), **38% less cost** (2 task(s) at equal success)_
 
-| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |
-| --- | --: | --: | --: | --: | --: | --: | --: | --: |
-| [edit] edit-maxreadchars (d:2/2 n:2/2) | 54,147 (30,702) | 44,050 | +23% | $0.0319 | $0.0472 | −32% | 98,807 (c:2/2) | $0.0580 |
-| [long] mt-edit-sequence (d:2/2 n:2/2) | 55,278 (41,227) | 46,772 | +18% | $0.0244 | $0.0497 | −51% | 170,782 (c:2/2) | $0.0806 |
+| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |
+| --- | --: | --: | --: | --: | --: | --: |
+| [edit] edit-maxreadchars (d:2/2 n:2/2) | 66,559 (38,375) | 44,150 | +51% | $0.0378 | $0.0475 | −20% |
+| [long] mt-edit-sequence (d:2/2 n:2/2) | 51,736 (39,443) | 46,815 | +11% | $0.0221 | $0.0499 | −56% |
 
 ### diagnosis
 
-_diagnosis: median **19% more input tokens** (caching discount offsets cost), **22% less cost** (2 task(s) at equal success)_
+_diagnosis: median **27% more input tokens** (caching discount offsets cost), **14% less cost** (2 task(s) at equal success)_
 
-| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |
-| --- | --: | --: | --: | --: | --: | --: | --: | --: |
-| [investigate] pilot-diagnosis-maxreadlines (d:2/2 n:2/2) | 20,047 (8,237) | 14,935 | +34% | $0.0156 | $0.0157 | −0% | 62,701 (c:2/2) | $0.0480 |
-| [long] mt-diagnosis-recall (d:2/2 n:2/2) | 60,152 (37,068) | 58,305 | +3% | $0.0342 | $0.0610 | −44% | 157,745 (c:2/2) | $0.0677 |
+| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |
+| --- | --: | --: | --: | --: | --: | --: |
+| [investigate] pilot-diagnosis-maxreadlines (d:2/2 n:2/2) | 20,048 (8,238) | 14,939 | +34% | $0.0156 | $0.0157 | −1% |
+| [long] mt-diagnosis-recall (d:2/2 n:1/2) | 66,005 (35,959) | 54,963 | +20% | $0.0417 | $0.0571 | −27% |
 
 ### probe
 
-_probe: median **26% more input tokens** (caching discount offsets cost), **47% less cost** (6 task(s) at equal success)_
+_probe: median **17% more input tokens** (caching discount offsets cost), **44% less cost** (6 task(s) at equal success)_
 
-| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ | Claude input | Claude $ |
-| --- | --: | --: | --: | --: | --: | --: | --: | --: |
-| [probe] probe-recover-failing-run (d:2/2 n:2/2) | 68,233 (56,426) | 52,021 | +31% | $0.0232 | $0.0557 | −58% | 170,258 (c:2/2) | $0.0779 |
-| [probe] probe-stale-edit (d:1/2 n:2/2) | 61,576 (47,809) | 48,262 | +28% | $0.0245 | $0.0515 | −52% | 112,839 (c:2/2) | $0.0690 |
-| [probe] probe-multifile-rename (d:2/2 n:2/2) | 53,597 (36,534) | 48,434 | +11% | $0.0300 | $0.0561 | −47% | 273,266 (c:2/2) | $0.1231 |
-| [probe] probe-ambiguous-delete (d:2/2 n:2/2) | 11,424 (5,633) | 11,425 | −0% | $0.0085 | $0.0120 | −29% | 52,950 (c:1/2) | $0.0307 |
-| [probe] probe-long-recall (d:2/2 n:2/2) | 93,032 (67,113) | 74,819 | +24% | $0.0413 | $0.0781 | −47% | 370,559 (c:2/2) | $0.1058 |
-| [probe] probe-minimal-diff (d:2/2 n:2/2) | 51,174 (29,290) | 38,217 | +34% | $0.0338 | $0.0450 | −25% | 153,794 (c:2/2) | $0.0579 |
-
-
-
-_Measured by anthropic/claude-haiku-4-5-20251001, Claude Code on claude-haiku-4-5-20251001, Dawn repo @ 79df0174, 2 rep(s)/task (median), 2026-07-25._
+| Task (pass rate) | Dawn input (cached) | Naive input | Input ↓ | Dawn $ | Naive $ | Cost ↓ |
+| --- | --: | --: | --: | --: | --: | --: |
+| [probe] probe-recover-failing-run (d:2/2 n:2/2) | 67,948 (56,152) | 51,898 | +31% | $0.0231 | $0.0554 | −58% |
+| [probe] probe-stale-edit (d:2/2 n:1/2) | 46,539 (34,751) | 48,284 | −4% | $0.0198 | $0.0516 | −62% |
+| [probe] probe-multifile-rename (d:2/2 n:2/2) | 103,159 (69,005) | 56,372 | +83% | $0.0526 | $0.0634 | −17% |
+| [probe] probe-ambiguous-delete (d:2/2 n:2/2) | 11,427 (5,634) | 11,422 | +0% | $0.0085 | $0.0120 | −29% |
+| [probe] probe-long-recall (d:2/2 n:2/2) | 80,189 (60,312) | 77,845 | +3% | $0.0333 | $0.0806 | −59% |
+| [probe] probe-minimal-diff (d:2/2 n:2/2) | 57,227 (32,949) | 40,695 | +41% | $0.0369 | $0.0442 | −17% |
 
 
-_The Claude Code column is **indicative, not apples-to-apples**: same model and task, but a different agent (its own system prompt, tools, and loop). Aider is a secondary sanity check. The rigorous comparison is Dawn vs. `--naive` — the identical agent with context management turned off. ⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._
+
+_Measured by anthropic/claude-haiku-4-5-20251001, Dawn repo @ 79df0174, 2 rep(s)/task (median), 2026-07-26._
+
+
+_⚠️ marks tasks where a mode did not pass its correctness check; those are excluded from the medians._
 
 
 ```bash
