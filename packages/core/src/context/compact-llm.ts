@@ -1,9 +1,11 @@
 import { generateText, type ModelMessage } from "ai"
 import { CLAUDE_CODE_SYSTEM_PREFIX } from "../auth/anthropic-oauth"
+import type { StepUsage } from "../bus/bus"
 import type { DawnConfig } from "../config/config"
-import type { Catalog } from "../provider/catalog"
+import { type Catalog, getModelInfo, parseModelRef } from "../provider/catalog"
 import { resolveModel, usesOAuth } from "../provider/provider"
 import { resolveRoleModel } from "../provider/roles"
+import { toStepUsage } from "../usage/ledger"
 import { groupHistory } from "./budget"
 import { distillDroppedTurns } from "./session-memory"
 
@@ -13,13 +15,16 @@ import { distillDroppedTurns } from "./session-memory"
  * text and the modified messages.
  *
  * Falls back to zero-cost template distillation if the LLM call fails.
+ *
+ * `usage` is the utility model's own spend — the caller must record it in the ledger,
+ * otherwise compaction is real money that never shows up in /usage or the benchmark.
  */
 export async function compactViaLlm(
   messages: ModelMessage[],
   primaryRef: string,
   catalog: Catalog,
   config: DawnConfig,
-): Promise<{ summary: string; messages: ModelMessage[] }> {
+): Promise<{ summary: string; messages: ModelMessage[]; usage?: StepUsage }> {
   const groups = groupHistory(messages)
   if (groups.length < 2) {
     return { summary: "", messages }
@@ -31,13 +36,14 @@ export async function compactViaLlm(
   const toKeep = groups.slice(cutPoint).flat()
 
   let summary: string
+  let usage: StepUsage | undefined
 
   try {
     const utilityRef = resolveRoleModel("utility", primaryRef, catalog, config)
     const resolved = resolveModel(utilityRef, catalog, config)
 
     const historyText = renderHistoryForSummary(toSummarize)
-    const { text } = await generateText({
+    const result = await generateText({
       model: resolved.model,
       // Subscription-OAuth Anthropic requests must present as Claude Code.
       ...(resolved.providerId === "anthropic" && usesOAuth("anthropic", catalog, config)
@@ -54,13 +60,17 @@ export async function compactViaLlm(
         },
       ],
     })
-    summary = `[Session memory — LLM-compacted from earlier context]\n${text.trim()}`
+    if (result.usage) {
+      const { modelId } = parseModelRef(utilityRef)
+      usage = toStepUsage(result.usage, resolved.providerId, modelId, getModelInfo(catalog, utilityRef))
+    }
+    summary = `[Session memory — LLM-compacted from earlier context]\n${result.text.trim()}`
   } catch {
     // Fallback: zero-cost template distillation
     summary = distillDroppedTurns(toSummarize, [], undefined) ?? ""
   }
 
-  return { summary, messages: toKeep }
+  return { summary, messages: toKeep, usage }
 }
 
 /** Flatten messages into a readable transcript for the summarization prompt. */

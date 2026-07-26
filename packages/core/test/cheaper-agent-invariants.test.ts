@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { DawnAgent } from "../src/agent/agent"
 import { Bus } from "../src/bus/bus"
+import { buildRequestMessages, contextBudget } from "../src/context/budget"
 import { PermissionGate } from "../src/permission/permission"
 import type { Catalog } from "../src/provider/catalog"
 import { budgetFor, resolveProfile } from "../src/provider/profile"
+import { createTools, estimateToolSchemaTokens } from "../src/tools/index"
 
 /**
  * PR CI invariants for the cheaper-agent thesis: adaptive budgets must wire when
@@ -109,5 +111,30 @@ describe("cheaper-agent planner invariants", () => {
     // 200k × 0.06 = 12k → capped at 12k; 200k × 0.15 = 30k → capped at 32k → 30k
     expect(budgetFor(profile, info, "minimal")).toBe(12_000)
     expect(budgetFor(profile, info, "deep")).toBe(30_000)
+  })
+
+  test("tool schemas are counted in the context plan's systemTokens", () => {
+    const tools = createTools({ cwd: process.cwd(), gate: new PermissionGate(), bus: new Bus() })
+    const schemaTokens = estimateToolSchemaTokens(tools)
+    // 26 tools of descriptions + JSON Schemas — a real line item, not noise.
+    expect(schemaTokens).toBeGreaterThan(1500)
+
+    const base = buildRequestMessages({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      workingSet: [],
+      summaries: [],
+      budget: contextBudget("balanced", 8000),
+    })
+    const withSchemas = buildRequestMessages({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      workingSet: [],
+      summaries: [],
+      budget: contextBudget("balanced", 8000),
+      toolSchemaTokens: schemaTokens,
+    })
+    expect(withSchemas.plan.systemTokens).toBe(base.plan.systemTokens + schemaTokens)
+    expect(withSchemas.plan.totalEstimatedTokens).toBeGreaterThan(base.plan.totalEstimatedTokens)
   })
 })

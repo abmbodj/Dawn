@@ -50,6 +50,16 @@ export function maxReadLines(mode: ContextMode): number {
   return mode === "minimal" ? 120 : mode === "balanced" ? 240 : 600
 }
 
+/**
+ * Total char ceiling for one read call (~6k/10k/20k tokens). The per-line cap
+ * alone still admits maxReadLines × 2000 chars (480 kB) on minified files; this
+ * bounds the whole body. A capped read ends on a line boundary so the standard
+ * "continue with offset=N" contract stays truthful.
+ */
+export function maxReadChars(mode: ContextMode): number {
+  return mode === "minimal" ? 24_000 : mode === "balanced" ? 40_000 : 80_000
+}
+
 /** How aggressively to compact tool outputs, keyed off the context mode. */
 export function compactBudget(mode: ContextMode): CompactBudget {
   if (mode === "minimal") return { threshold: 400, keepLines: 40, keepItems: 8 }
@@ -324,6 +334,11 @@ export function buildRequestMessages(args: {
   /** Naive baseline: send full files & history (no summaries, no trimming, no caching). */
   naive?: boolean
   /**
+   * Estimated tokens of the tool schemas sent with every request. Without this the
+   * plan (and the caller's overflow guard) is systematically ~3k tokens optimistic.
+   */
+  toolSchemaTokens?: number
+  /**
    * Summary paths already credited as substitution savings this session. Substitution
    * (summary sent instead of the full file) is a one-time saving per file, not a per-turn
    * one — without this filter every turn would re-credit every resident summary.
@@ -340,7 +355,7 @@ export function buildRequestMessages(args: {
   keptSummaryPaths: string[]
 } {
   const naive = args.naive ?? false
-  const systemTokens = estimateTokens(args.system)
+  const systemTokens = estimateTokens(args.system) + (args.toolSchemaTokens ?? 0)
   const budgetAfterSystem = Math.max(0, args.budget.budget - systemTokens)
   // Summaries are re-sent on every turn. A caching provider amortizes that (the stable
   // summary block, placed in the cacheable prefix below, is billed at cache-read rates after

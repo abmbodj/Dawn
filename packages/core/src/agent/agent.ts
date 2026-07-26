@@ -34,7 +34,14 @@ import type { SessionStore } from "../session/store"
 import { SkillBuffer } from "../skills/buffer"
 import { buildSkillCatalog, discoverSkills, findSkill, matchAutoTriggers } from "../skills/registry"
 import type { Skill } from "../skills/types"
-import { createTools, toolPreview, toolResultSummary, toolTitle, visibleTools } from "../tools/index"
+import {
+  createTools,
+  estimateToolSchemaTokens,
+  toolPreview,
+  toolResultSummary,
+  toolTitle,
+  visibleTools,
+} from "../tools/index"
 import { truncateMiddle } from "../tools/truncate"
 import { toStepUsage, UsageLedger } from "../usage/ledger"
 import { buildTurnGuidance } from "./answer-style"
@@ -423,9 +430,23 @@ export class DawnAgent {
     return this.contextStore.contextPlanTotals(sessionIds)
   }
 
+  /** Schema-size estimates cached per visible tool set (static once MCP tools load). */
+  private schemaTokensCache = new Map<string, number>()
+
+  private toolSchemaTokens(tools: ToolSet): number {
+    const key = `${this.opts.gate.mode}:${Object.keys(tools).length}`
+    let tokens = this.schemaTokensCache.get(key)
+    if (tokens === undefined) {
+      tokens = estimateToolSchemaTokens(tools)
+      this.schemaTokensCache.set(key, tokens)
+    }
+    return tokens
+  }
+
   private requestMessages(
     profile: ModelProfile,
     providerId?: string,
+    activeTools?: ToolSet,
   ): {
     system: string | import("../context/budget").SystemModelMessage
     messages: ModelMessage[]
@@ -440,7 +461,9 @@ export class DawnAgent {
     // The model-profile delta rides along with per-turn guidance (after the cached
     // prompt prefix) so it never invalidates the prompt cache and tracks plan/build
     // model switches correctly.
-    const answerGuidance = [turnGuidance, profile.promptDelta].filter(Boolean).join("\n\n") || undefined
+    const planReminder = this.opts.gate.mode === "plan" ? PLAN_MODE_REMINDER : undefined
+    const answerGuidance =
+      [turnGuidance, profile.promptDelta, planReminder].filter(Boolean).join("\n\n") || undefined
     // Fold compaction savings accrued since the last plan into this one (persisted for /savings).
     const compactionSavings = this.compaction.savedTokens - this.compactionPlanMark
     this.compactionPlanMark = this.compaction.savedTokens
@@ -458,6 +481,7 @@ export class DawnAgent {
       loadedSkills: this.skillBuffer.loaded(),
       naive: this.naive,
       creditedSummaryPaths: this.creditedSummaryPaths,
+      toolSchemaTokens: activeTools ? this.toolSchemaTokens(activeTools) : 0,
     }
     let built = buildRequestMessages(buildArgs)
     if (!this.naive && built.plan.totalEstimatedTokens > this.tokenBudget) {
@@ -507,7 +531,10 @@ export class DawnAgent {
     const { bus, opts } = this
 
     this.turnIndex++
-    const effectiveText = opts.gate.mode === "plan" ? `${text}\n\n${PLAN_MODE_REMINDER}` : text
+    // The plan-mode reminder rides with per-turn guidance (see requestMessages), never
+    // into stored history: persisting it both taxes every later turn and leaves a stale
+    // "plan mode is active" claim in context after the user has left plan mode.
+    const effectiveText = text
 
     if (images && images.length > 0) {
       const content: Array<
@@ -587,7 +614,12 @@ export class DawnAgent {
           // in messages even when their own models produced it in a previous step.
           const needsReasoningStrip = profile.reasoning === "strip"
 
-          const { system, messages: requestMsgs } = this.requestMessages(profile, providerId)
+          const activeTools = visibleTools(
+            { ...this.tools, ...this.mcpTools },
+            opts.gate.mode,
+            opts.config.permissions,
+          )
+          const { system, messages: requestMsgs } = this.requestMessages(profile, providerId, activeTools)
 
           // Thread reasoning-aware params. Reasoning models (o-series, codex, deepseek-r1, …)
           // reject temperature and expect max_completion_tokens on OpenAI-compatible transports.
@@ -598,7 +630,7 @@ export class DawnAgent {
             // Errors surface as fullStream "error" parts and are classified below; the SDK
             // default onError would ALSO dump the raw stack to the console (ugly in the TUI).
             onError: () => {},
-            tools: visibleTools({ ...this.tools, ...this.mcpTools }, opts.gate.mode, opts.config.permissions),
+            tools: activeTools,
             experimental_repairToolCall: profile.toolRepair ? makeRepairToolCall() : undefined,
             prepareStep:
               needsReasoningStrip || forceRepoOverview
@@ -813,12 +845,16 @@ export class DawnAgent {
             compactionRetries++
             bus.emit({ type: "status", message: "context overflow — compacting history and retrying…" })
             try {
-              const { summary, messages: compacted } = await compactViaLlm(
-                this.messages,
-                this.modelRef,
-                opts.catalog,
-                opts.config,
-              )
+              const {
+                summary,
+                messages: compacted,
+                usage: compactionUsage,
+              } = await compactViaLlm(this.messages, this.modelRef, opts.catalog, opts.config)
+              // The utility model's spend is real money — record it or /usage lies.
+              if (compactionUsage) {
+                this.ledger.record(compactionUsage)
+                if (opts.store && opts.sessionId) opts.store.recordUsage(opts.sessionId, compactionUsage)
+              }
               this.messages = compacted
               if (summary) {
                 // Accumulate: a later compaction summarizes only the current messages,

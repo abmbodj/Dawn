@@ -97,21 +97,44 @@ describe("DawnAgent plan model selection", () => {
     }
   })
 
-  test("adds decision-complete plan-mode reminder to the latest user message", async () => {
+  test("sends the decision-complete plan-mode reminder with the request", async () => {
     const agent = makeAgent()
     gate.setMode("plan")
     try {
       await agent.send("draft a plan")
-      const latestUser = [...lastRequestMessages()]
-        .reverse()
-        .find((m) => m?.role === "user" && String(m?.content ?? "").includes("draft a plan"))
+      const sent = lastRequestMessages()
+        .map((m: any) => String(m?.content ?? ""))
+        .join("\n")
 
-      expect(String(latestUser?.content ?? "")).toContain("Do not edit files")
-      expect(String(latestUser?.content ?? "")).toContain("goal/success criteria")
-      expect(String(latestUser?.content ?? "")).toContain("key files or behaviors")
-      expect(String(latestUser?.content ?? "")).toContain("tests/acceptance checks")
-      expect(String(latestUser?.content ?? "")).toContain("assumptions/defaults")
-      expect(String(latestUser?.content ?? "")).toContain("open questions")
+      expect(sent).toContain("Do not edit files")
+      expect(sent).toContain("goal/success criteria")
+      expect(sent).toContain("key files or behaviors")
+      expect(sent).toContain("tests/acceptance checks")
+      expect(sent).toContain("assumptions/defaults")
+      expect(sent).toContain("open questions")
+    } finally {
+      agent.close()
+    }
+  })
+
+  test("the plan-mode reminder is never persisted into history", async () => {
+    const agent = makeAgent()
+    gate.setMode("plan")
+    try {
+      await agent.send("draft a plan")
+      // Stored history keeps the user's words only: a persisted reminder is re-billed
+      // on every later turn and goes stale the moment plan mode is left.
+      const stored = agent.messages.map((m: any) => String(m?.content ?? ""))
+      expect(stored.some((c) => c.includes("draft a plan"))).toBe(true)
+      expect(stored.some((c) => c.includes("Plan mode is active"))).toBe(false)
+
+      // …and once out of plan mode, the reminder stops being sent at all.
+      gate.setMode("normal")
+      await agent.send("now do it")
+      const sent = lastRequestMessages()
+        .map((m: any) => String(m?.content ?? ""))
+        .join("\n")
+      expect(sent).not.toContain("Plan mode is active")
     } finally {
       agent.close()
     }

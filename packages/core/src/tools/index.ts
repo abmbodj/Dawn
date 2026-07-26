@@ -3,7 +3,7 @@ import path from "node:path"
 import { type ToolSet, tool } from "ai"
 import { z } from "zod"
 import type { Bus } from "../bus/bus"
-import { compactBudget, estimateTokens, maxReadLines, ttlForKind } from "../context/budget"
+import { compactBudget, estimateTokens, maxReadChars, maxReadLines, ttlForKind } from "../context/budget"
 import { compactToolOutput } from "../context/compact"
 import type { ContextStore } from "../context/store"
 import { getFileSummary } from "../context/summarize"
@@ -406,8 +406,19 @@ export function createTools(ctx: ToolContext): ToolSet {
       // Register content hash so edit can verify the file hasn't drifted since this read
       if (ctx.readRegistry) ctx.readRegistry.set(abs, contentHash(rawContent))
       const lines = rawContent.split("\n")
-      const slice = lines.slice(offset - 1, offset - 1 + cappedLimit)
+      let slice = lines.slice(offset - 1, offset - 1 + cappedLimit)
       if (slice.length === 0) return `[file has ${lines.length} lines — offset ${offset} is past the end]`
+      // Total char ceiling: keep whole lines up to the cap (always at least one)
+      // so the "continue with offset=N" marker below stays accurate.
+      const charCap = maxReadChars(mode)
+      let used = 0
+      let kept = 0
+      for (const line of slice) {
+        used += Math.min(line.length, 2000) + 8
+        if (used > charCap && kept > 0) break
+        kept++
+      }
+      if (kept < slice.length) slice = slice.slice(0, kept)
       const body = numberLines(slice.join("\n"), offset)
       ctx.workingSet?.add({
         kind: "file-range",
@@ -1302,6 +1313,30 @@ export function visibleTools(
     result[name] = def
   }
   return result
+}
+
+/**
+ * Estimated tokens the tool schemas add to every request (names + descriptions +
+ * JSON Schemas). Core tools carry zod schemas (serialized via z.toJSONSchema);
+ * MCP tools carry an ai-SDK `jsonSchema` wrapper. Without this figure the context
+ * plan understates every request by the size of the schema payload.
+ */
+export function estimateToolSchemaTokens(tools: ToolSet): number {
+  let chars = 0
+  for (const [name, def] of Object.entries(tools)) {
+    chars += name.length + (def.description?.length ?? 0)
+    const schema: unknown = (def as { inputSchema?: unknown }).inputSchema
+    try {
+      if (schema && typeof schema === "object" && "jsonSchema" in schema) {
+        chars += JSON.stringify((schema as { jsonSchema: unknown }).jsonSchema).length
+      } else if (schema) {
+        chars += JSON.stringify(z.toJSONSchema(schema as never)).length
+      }
+    } catch {
+      chars += 200
+    }
+  }
+  return Math.ceil(chars / 4)
 }
 
 function readReadmeExcerpt(cwd: string, maxChars: number): string | undefined {
