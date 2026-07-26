@@ -660,8 +660,11 @@ export class DawnAgent {
                 })
                 if (pruned.prunedTokens > 0) {
                   next = pruned.messages
+                  // Counted every step on purpose: the SDK rebuilds the request from its
+                  // own unpruned history each time, so a naive run would re-send these
+                  // bytes on every step and we avoid them on every step. (`outputs` is
+                  // left alone — it counts tool outputs compacted, not per-step passes.)
                   this.compaction.savedTokens += pruned.prunedTokens
-                  this.compaction.outputs += 1
                 }
               }
 

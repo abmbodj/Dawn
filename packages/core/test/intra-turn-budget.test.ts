@@ -40,19 +40,19 @@ function toolTurn(id: string): ModelMessage[] {
 }
 
 /**
- * Drives prepareStep the way the SDK does across a multi-step turn: the message list
- * grows by one tool turn per step and is re-sent whole each time.
+ * Drives prepareStep exactly the way the SDK does: `stepInputMessages` is rebuilt each
+ * step from the SDK's own *unmodified* history (ai/dist/index.mjs — `[...initialMessages,
+ * ...responseMessages]`), so a prepareStep override affects only that step's request and
+ * the next step sees the full unpruned accumulation again.
  */
 function stepPayloads(prepareStep: any, base: ModelMessage[], steps: number): number[] {
   const sizes: number[] = []
-  let accumulated = [...base]
+  const sdkHistory = [...base]
   for (let stepNumber = 0; stepNumber < steps; stepNumber++) {
-    const result = prepareStep({ stepNumber, messages: accumulated, steps: [], model: {} as any })
-    const sent = result?.messages ?? accumulated
+    const result = prepareStep({ stepNumber, messages: [...sdkHistory], steps: [], model: {} as any })
+    const sent = result?.messages ?? sdkHistory
     sizes.push(sent.reduce((s: number, m: ModelMessage) => s + messageTokens(m), 0))
-    // The SDK keeps its own history: pruning applies to what is SENT, and the pruned
-    // form is what the provider sees from then on.
-    accumulated = [...sent, ...toolTurn(`call-${stepNumber}`)]
+    sdkHistory.push(...toolTurn(`call-${stepNumber}`))
   }
   return sizes
 }
