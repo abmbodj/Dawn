@@ -37,5 +37,10 @@ export class ContextWorkingSet {
 }
 
 function keyFor(item: WorkingSetItem): string {
-  return [item.kind, item.path ?? "", item.startLine ?? "", item.endLine ?? ""].join(":")
+  // Tool results have no path, so without the call id they would all collapse onto the
+  // key "tool-result:::" and each new one would evict the last — leaving the working set
+  // holding a single output instead of the leased window its TTLs describe.
+  // File-ranges deliberately key on path+lines so re-reading the same range replaces it.
+  const identity = item.kind === "tool-result" ? (item.toolCallId ?? "") : ""
+  return [item.kind, item.path ?? "", item.startLine ?? "", item.endLine ?? "", identity].join(":")
 }

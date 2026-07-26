@@ -733,6 +733,9 @@ export class DawnAgent {
                   reason: `${part.toolName} output`,
                   ttl: ttlForKind(this.contextMode, "tool-result"),
                   estimatedTokens: estimateTokens(echo),
+                  // Lets the planner skip this echo while the full result is still in
+                  // history, and keeps distinct results from evicting each other.
+                  toolCallId: part.toolCallId,
                 })
                 bus.emit({
                   type: "tool-end",

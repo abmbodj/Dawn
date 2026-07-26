@@ -381,7 +381,7 @@ export function createTools(ctx: ToolContext): ToolSet {
           `Max lines per call (default and hard cap ${maxReadLines(mode)} — larger requests are capped; a partial read ends with a "continue with offset=N" marker)`,
         ),
     }),
-    execute: async ({ filePath, offset = 1, limit = maxReadLines(mode) }) => {
+    execute: async ({ filePath, offset = 1, limit = maxReadLines(mode) }, { toolCallId } = {} as any) => {
       const abs = resolvePath(cwd, filePath)
       let stat: ReturnType<typeof fs.statSync>
       try {
@@ -429,6 +429,9 @@ export function createTools(ctx: ToolContext): ToolSet {
         reason: "read tool",
         ttl: ttlForKind(mode, "file-range", ampleBudget),
         estimatedTokens: estimateTokens(body),
+        // The same body is the tool result in history; tagging it lets the planner
+        // send one copy, not both, until history trimming drops the original.
+        toolCallId,
       })
       if (ctx.contextStore) {
         const summary = getFileSummary({ cwd, path: relPath, store: ctx.contextStore })

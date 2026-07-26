@@ -133,6 +133,18 @@ export function workingSetItemText(item: WorkingSetItem): string {
   }
 }
 
+/** Ids of tool calls whose results are already carried by these messages. */
+export function toolCallIdsIn(messages: ModelMessage[]): Set<string> {
+  const ids = new Set<string>()
+  for (const msg of messages) {
+    if (msg.role !== "tool" || !Array.isArray(msg.content)) continue
+    for (const part of msg.content as Array<{ toolCallId?: unknown }>) {
+      if (typeof part?.toolCallId === "string") ids.add(part.toolCallId)
+    }
+  }
+  return ids
+}
+
 /**
  * Groups messages so that an assistant message containing tool-call parts is
  * always bundled with the tool-result messages that follow it.  Dropping or
@@ -398,6 +410,17 @@ export function buildRequestMessages(args: {
         Math.max(0, budgetAfterSystem - Math.min(summaryTokensRaw, budgetAfterSystem)),
       )
   const budgetAfterHistoryAndSummaries = Math.max(0, budgetAfterSystem - history.tokens - summaryTokensRaw)
+  // Single carrier: while the authoritative tool result is still in the history we send,
+  // its working-set echo is a second copy of the same bytes on every request. Drop the
+  // echo; it takes over (and keeps the output alive) once trimming drops that turn.
+  const carriedByHistory = naive ? new Set<string>() : toolCallIdsIn(history.kept)
+  const dedupedWorkingSet =
+    carriedByHistory.size > 0
+      ? args.workingSet.filter((item) => !(item.toolCallId && carriedByHistory.has(item.toolCallId)))
+      : args.workingSet
+  const dedupSavedTokens = args.workingSet
+    .filter((item) => !dedupedWorkingSet.includes(item))
+    .reduce((sum, item) => sum + item.estimatedTokens, 0)
   const working = naive
     ? {
         kept: args.workingSet,
@@ -405,7 +428,7 @@ export function buildRequestMessages(args: {
         trimmedDetails: [] as ContextPlanItem[],
         savedTokens: 0,
       }
-    : trimWorkingSet(args.workingSet, budgetAfterHistoryAndSummaries)
+    : trimWorkingSet(dedupedWorkingSet, budgetAfterHistoryAndSummaries)
 
   const keptWorkingText = working.kept.map(workingSetItemText)
   const summaryTextBody = summaryBlocks.join("\n\n")
@@ -444,7 +467,7 @@ export function buildRequestMessages(args: {
     ...working.kept.map((item) => planItem(item.kind, itemLabel(item), item.estimatedTokens, item.reason)),
   ]
   const skippedItems = [...summaries.trimmedDetails, ...history.trimmedDetails, ...working.trimmedDetails]
-  const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens
+  const savingsEstimate = summaries.savedTokens + history.savedTokens + working.savedTokens + dedupSavedTokens
   // Tokens saved by sending a summary instead of reading the full source file.
   // Credited once per file per session (via creditedSummaryPaths), matching how
   // compaction savings are counted — not re-credited on every turn the summary stays resident.

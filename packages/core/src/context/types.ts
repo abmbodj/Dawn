@@ -59,6 +59,14 @@ export interface WorkingSetItem {
   ttl: number
   estimatedTokens: number
   createdAt: number
+  /**
+   * The tool call this item echoes, when it came from one. Two jobs: it gives each
+   * tool-result its own working-set identity (without it every tool-result shared one
+   * key and evicted the previous one), and it lets the planner drop the echo while the
+   * authoritative copy is still in the sent history — the body travels in one carrier
+   * at a time, not two.
+   */
+  toolCallId?: string
 }
 
 export type ContextPlanItemKind = WorkingSetKind | "history"
