@@ -56,6 +56,12 @@ export interface ToolContext {
   skills?: Skill[]
   /** Session-persistent buffer for dynamically loaded skill bodies. */
   skillBuffer?: SkillBuffer
+  /**
+   * Tokens still unspent in the current turn's context budget. Lets tool-output
+   * compaction stand down when the output already fits — compacting what the budget
+   * could afford just buys extra tool calls to recover the elided text.
+   */
+  headroomTokens?: () => number
 }
 
 /** Tools whose string output can be large enough to be worth content-aware compaction. */
@@ -1162,6 +1168,12 @@ export function createTools(ctx: ToolContext): ToolSet {
  * so the compacted text is what lands in both history and the working set. A no-op when
  * there's no context store to stash originals for retrieval.
  */
+/**
+ * Share of the remaining budget an uncompacted output may occupy. Below 1 so keeping
+ * one output whole cannot consume all the room the rest of the turn still needs.
+ */
+const HEADROOM_KEEP_SHARE = 0.6
+
 function withCompaction(tools: ToolSet, ctx: ToolContext): ToolSet {
   if (!ctx.contextStore) return tools
   const budget = compactBudget(ctx.contextMode ?? "balanced")
@@ -1178,6 +1190,14 @@ function withCompaction(tools: ToolSet, ctx: ToolContext): ToolSet {
       execute: async (input: any, options: any) => {
         const out = await original(input, options)
         if (typeof out !== "string") return out
+        // Compacting output the budget could have afforded is a false economy: the model
+        // just spends extra tool calls recovering what was elided. Measured on cat-budget
+        // — a 591-line file compacted to 146 lines cost two extra calls (find_symbol +
+        // read) and 4 steps against naive's 2, for 41.7k tokens against naive's 18.5k,
+        // with 14k of budget headroom unused. Intra-turn pruning (see pruneToolResults)
+        // is what keeps a kept-whole output from being re-billed on every later step.
+        const headroom = ctx.headroomTokens?.() ?? 0
+        if (headroom > 0 && estimateTokens(out) <= headroom * HEADROOM_KEEP_SHARE) return out
         const outcome = compactToolOutput(out, {
           tool: name,
           budget,

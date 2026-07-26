@@ -295,6 +295,8 @@ export class DawnAgent {
       naive: this.naive,
       skills: this.skills,
       skillBuffer: this.skillBuffer,
+      headroomTokens: () =>
+        Math.max(0, this.tokenBudget - (this.latestContextPlan?.totalEstimatedTokens ?? 0)),
     }
     this.tools = createTools(this.toolCtx)
     // Captured once: a byte-stable system prompt is what keeps the provider
