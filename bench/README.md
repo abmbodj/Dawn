@@ -67,5 +67,11 @@ comparison — the actual proof — runs on **any** model you have.
   non-deterministic. PR CI runs deterministic planner invariant unit tests (`bun test`).
 - **Tokens vs. cost.** The table reports input tokens *and* dollar cost so “fewer tokens,
   more $” regressions are obvious.
+- **The fixture is pinned, and must stay pinned.** Tasks `cat`/`grep` Dawn's own source, so
+  running them against `HEAD` makes the thing being measured move with every commit — adding
+  110 lines to `context/budget.ts` grew `cat-budget`'s input by 21% with no change in context
+  management at all, which reads exactly like a regression. `FIXTURE_REF` in `run.ts` pins the
+  workdir; the agent under test always comes from the working tree. Comparing two runs is only
+  valid when both used the same fixture ref (it is recorded in `provenance.gitSha`).
 - **Slice-aware win bar.** Overall Dawn $ ≤ naive; win $ on investigate + long; trivial may
   tie/lose. See the design spec for reclaiming the “cheaper” tagline.

@@ -77,6 +77,20 @@ interface Flags {
 
 const REPO_ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"]).toString().trim()
 
+/**
+ * The repo state tasks run against, pinned on purpose.
+ *
+ * Dawn's bench is self-referential — tasks `cat` and `grep` Dawn's own source — so
+ * defaulting the fixture to HEAD makes the measurement substrate move with every
+ * commit. Adding 110 lines to `context/budget.ts` grew `cat-budget`'s input by 21%
+ * with no change in context management, which is indistinguishable from a regression.
+ * The agent under test always comes from the working tree; only the workdir is pinned.
+ *
+ * Re-pin deliberately (and re-baseline `results.json` in the same commit) when the
+ * fixture drifts far enough from the current repo to stop being realistic.
+ */
+const FIXTURE_REF = "79df017"
+
 /** Pause between reps so back-to-back runs don't trip per-minute provider quotas. */
 const PACE_MS = 15_000
 /** How long to wait before retrying a rate-limited rep. */
@@ -89,7 +103,14 @@ function isRateLimited(error?: string): boolean {
 }
 
 function parseFlags(argv: string[]): Flags {
-  const f: Flags = { smoke: false, reps: 3, ref: "HEAD", noClaude: false, noAider: false, timeoutMs: 180_000 }
+  const f: Flags = {
+    smoke: false,
+    reps: 3,
+    ref: FIXTURE_REF,
+    noClaude: false,
+    noAider: false,
+    timeoutMs: 180_000,
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--smoke") f.smoke = true
@@ -98,7 +119,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--reps") f.reps = Math.max(1, Number(argv[++i]) || 1)
     else if (a === "--model") f.model = argv[++i]
     else if (a === "--claude-model") f.claudeModel = argv[++i]
-    else if (a === "--ref") f.ref = argv[++i] ?? "HEAD"
+    else if (a === "--ref") f.ref = argv[++i] ?? FIXTURE_REF
     else if (a === "--tasks")
       f.tasks = (argv[++i] ?? "")
         .split(",")
