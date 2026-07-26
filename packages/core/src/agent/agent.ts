@@ -70,6 +70,14 @@ export interface AgentOptions {
   contextStore?: ContextStore
   /** Baseline mode: disable summaries, history/working-set trimming, compaction, and caching. */
   naive?: boolean
+  /**
+   * Pin the sampling temperature, overriding the model profile. Interactive use wants the
+   * provider default; the benchmark pins 0 because at default temperature the model varies
+   * how many tools it calls, and that swings input tokens by more than the context-management
+   * changes being measured (cat-budget ranged 41k–96k across reps of an identical task).
+   * Ignored for reasoning models, which reject the parameter.
+   */
+  temperature?: number
 }
 
 const MAX_STEPS = 100
@@ -680,7 +688,11 @@ export class DawnAgent {
               this.persist()
             },
           }
-          if (profile.params.temperature !== undefined) {
+          // Reasoning models reject temperature outright, so the override never applies to them.
+          const pinnedTemperature = profile.params.useMaxCompletionTokens ? undefined : opts.temperature
+          if (pinnedTemperature !== undefined) {
+            streamParams.temperature = pinnedTemperature
+          } else if (profile.params.temperature !== undefined) {
             streamParams.temperature = profile.params.temperature
           }
           if (profile.params.maxTokens !== undefined) {

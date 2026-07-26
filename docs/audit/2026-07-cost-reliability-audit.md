@@ -302,6 +302,8 @@ The tool surface, permission gate, sessions/checkpoints (minus per-step rewrite)
 - **Reliability:** `probe` slice pass rates, dawn vs naive vs Claude Code.
 - **Fairness rules:** same model everywhere (`--claude-model` pins Claude Code to Dawn's model); Claude Code multi-turn via session resume; subscription runs priced through the same models.dev table (simulated $ from measured tokens, labeled as such); `autoFallback` off so a silent model switch invalidates the rep.
 - **Expansion criterion:** add Codex/Gemini/OpenCode harness adapters only if the audit's research shows a specific mechanism claim that needs measured refutation; otherwise they stay literature-based.
+- **Pin the fixture.** Dawn's bench is self-referential — tasks `cat`/`grep` Dawn's own source — so running against `HEAD` moves the measurement substrate with every commit. The first post-P0 run was invalid for exactly this reason: the P0 work added 110 lines to `context/budget.ts`, inflating `cat-budget`'s input by 21% with no change in context management. `FIXTURE_REF` in `bench/run.ts` now pins the workdir while the agent under test still comes from the working tree; two runs are only comparable when `provenance.gitSha` matches.
+- **Run-to-run variance is material at n=2.** Naive is untouched by agent changes, so its drift between runs is a free noise estimate — it moved ~6% pooled between the two runs here. Treat per-task deltas under ~15% as noise unless reps are increased.
 
 ## 9. Roadmap (P0/P1/P2)
 

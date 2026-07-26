@@ -200,6 +200,9 @@ async function runDawn(
     sessionId: session.id,
     contextStore,
     naive,
+    // Pinned: at the provider default the model varies how many tools it calls, and that
+    // moves input tokens more than the context machinery being measured.
+    temperature: 0,
   })
 
   const started = Date.now()
