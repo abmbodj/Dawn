@@ -186,7 +186,7 @@ export function headline(results: TaskResult[]): string {
 }
 
 function sliceWinBar(results: TaskResult[]): string {
-  const slices = ["trivial", "investigate", "edit", "long", "probe"] as const
+  const slices = ["trivial", "investigate", "edit", "long", "probe", "horizon"] as const
   const lines: string[] = [
     "**Win bar (slice-aware):** overall Dawn $ ≤ naive $; win $ on investigate + long; trivial may tie/lose.",
     "",
@@ -212,7 +212,9 @@ function sliceWinBar(results: TaskResult[]): string {
     let gate = "—"
     if (inputRed.length === 0) gate = "no data"
     else if (slice === "trivial") gate = "informational"
-    else if (slice === "probe") gate = "reliability (pass rate is the metric)"
+    // Both are reliability slices: they exist to see whether the agent still gets the
+    // right answer, so a $ delta on them is a diagnostic, never a gate.
+    else if (slice === "probe" || slice === "horizon") gate = "reliability (pass rate is the metric)"
     else if (slice === "investigate" || slice === "long")
       gate = medCost >= 0 ? "pass ($ win)" : "fail ($ lose)"
     else if (slice === "edit") gate = medCost >= 0 ? "ok" : "watch"

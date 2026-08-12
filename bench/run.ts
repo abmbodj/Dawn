@@ -42,6 +42,32 @@ import { type BenchSlice, type BenchTask, TASKS } from "./tasks"
 
 type Mode = "dawn" | "naive" | "claude" | "aider"
 
+/**
+ * One model call, as the provider counted it. Recorded only for `horizon` tasks:
+ * the long-session context curve is the whole point of that slice, and dumping a
+ * per-step array for all 26 tasks would bloat `results.json` for no reader.
+ */
+interface StepTrace {
+  step: number
+  turn: number
+  inputTokens: number
+  cachedInputTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+}
+
+/** Per user turn: what the planner thought it was sending, and what it was holding. */
+interface TurnTrace {
+  turn: number
+  /** `ContextPlan.totalEstimatedTokens` — the chars÷4 model's own number. */
+  planEstimate: number
+  /** Measured input of the first step of this turn; the estimator's ground truth. */
+  firstStepInput: number
+  workingSetTokens: number
+  workingSetItems: number
+  toolCalls: number
+}
+
 interface RunMetrics {
   inputTokens: number
   cachedInputTokens: number
@@ -53,6 +79,11 @@ interface RunMetrics {
   success: boolean
   errored: boolean
   error?: string
+  /** Populated for `horizon` tasks only. */
+  stepTrace?: StepTrace[]
+  turnTrace?: TurnTrace[]
+  /** Set when the run hit a structural ceiling rather than getting the answer wrong. */
+  capacityLimit?: "step-limit" | "timeout" | "context-overflow"
 }
 
 interface TaskResult {
@@ -175,12 +206,32 @@ async function runDawn(
   let steps = 0
   let errored = false
   let errorMsg: string | undefined
+  const trace = task.slice === "horizon"
+  const stepTrace: StepTrace[] = []
+  const turnTrace: TurnTrace[] = []
+  let capacityLimit: RunMetrics["capacityLimit"]
+  let turn = 0
+  let turnToolCalls = 0
   bus.subscribe((ev) => {
     if (ev.type === "text-delta") transcript += ev.text
-    else if (ev.type === "step-finish") steps += 1
+    else if (ev.type === "tool-start") turnToolCalls += 1
+    else if (ev.type === "step-finish") {
+      steps += 1
+      if (trace)
+        stepTrace.push({
+          step: steps,
+          turn,
+          inputTokens: ev.usage.inputTokens,
+          cachedInputTokens: ev.usage.cachedInputTokens,
+          cacheWriteTokens: ev.usage.cacheWriteTokens,
+          outputTokens: ev.usage.outputTokens,
+        })
+    } else if (ev.type === "step-limit") capacityLimit = "step-limit"
     else if (ev.type === "error") {
       errored = true
       errorMsg = ev.message
+      if (/context.?(length|window|overflow)|too many tokens/i.test(ev.message))
+        capacityLimit = "context-overflow"
     }
   })
 
@@ -209,12 +260,28 @@ async function runDawn(
   const prompts = task.prompts && task.prompts.length > 0 ? task.prompts : [task.prompt]
   try {
     for (let i = 0; i < prompts.length; i++) {
+      turn = i
+      turnToolCalls = 0
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      const timer = setTimeout(() => {
+        capacityLimit ??= "timeout"
+        controller.abort()
+      }, timeoutMs)
       try {
         await agent.send(prompts[i] as string, controller.signal)
       } finally {
         clearTimeout(timer)
+      }
+      if (trace) {
+        const stats = agent.contextStats()
+        turnTrace.push({
+          turn: i,
+          planEstimate: stats.latestPlan?.totalEstimatedTokens ?? 0,
+          firstStepInput: stepTrace.find((s) => s.turn === i)?.inputTokens ?? 0,
+          workingSetTokens: stats.workingSetTokens,
+          workingSetItems: stats.loadedItems.length,
+          toolCalls: turnToolCalls,
+        })
       }
       if (i < prompts.length - 1) task.between?.({ workdir, turn: i })
     }
@@ -242,6 +309,8 @@ async function runDawn(
     success,
     errored,
     error: errorMsg,
+    ...(trace ? { stepTrace, turnTrace } : {}),
+    ...(capacityLimit ? { capacityLimit } : {}),
   }
 }
 

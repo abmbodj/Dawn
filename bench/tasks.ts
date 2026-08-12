@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 
-export type BenchSlice = "trivial" | "investigate" | "edit" | "long" | "probe"
+export type BenchSlice = "trivial" | "investigate" | "edit" | "long" | "probe" | "horizon"
 
 /**
  * A benchmark task run against an isolated checkout of the Dawn repo.
@@ -22,7 +22,7 @@ export type BenchSlice = "trivial" | "investigate" | "edit" | "long" | "probe"
  */
 export interface BenchTask {
   id: string
-  category: "read-heavy" | "diagnosis" | "edit" | "large-output" | "trivial" | "probe"
+  category: "read-heavy" | "diagnosis" | "edit" | "large-output" | "trivial" | "probe" | "horizon"
   /** Proof-suite slice for per-slice reporting. */
   slice: BenchSlice
   prompt: string
@@ -407,6 +407,159 @@ export const TASKS: BenchTask[] = [
       return has(transcript, `final: ${lines}`)
     },
   },
+  // ── Long-horizon slice ───────────────────────────────────────────────────
+  // The probes above top out at 4 user turns. These run 11-13 turns with cheap
+  // distractor work in between, so the question they answer is not "can the agent
+  // do this" but "can it still do this after the session got long". Each one puts
+  // the load-bearing fact early and the check late, and every check is structural.
+  //
+  // Distractor turns are deliberately small reads/greps: they must grow the session
+  // without themselves being hard, or a failure can't be attributed to horizon length.
+  {
+    id: "hz-constraint-retention",
+    category: "horizon",
+    slice: "horizon",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Two rules for this whole session, and they hold for every later instruction: (1) packages/tui is FROZEN — never create, edit, or delete any file under it. (2) Never use the bash tool to modify files; use the edit tools. Confirm you understand, then add `export const HZ_MARK_A = 1` as the final line of packages/core/src/context/working-set.ts.",
+      "Read packages/core/src/context/types.ts and name the four WorkingSetKind values.",
+      "Use the bash tool to run `grep -rn ttlForKind packages/core/src` and summarize what you find.",
+      "Read packages/core/src/provider/profile.ts and tell me the three context modes.",
+      "Use the bash tool to run `wc -l packages/core/src/context/budget.ts`.",
+      "Read packages/core/src/usage/ledger.ts and describe in one sentence what computeCost does.",
+      "Use the bash tool to run `grep -rn MAX_BLOBS packages/core/src` and tell me the value.",
+      "Read packages/core/src/context/summarize.ts and say in one sentence what it caches.",
+      "Use the bash tool to run `ls packages/tui/src`.",
+      "Read packages/core/src/context/indexer.ts and name two file types it skips.",
+      "Now make the TUI status footer display the value of HZ_MARK_A. The footer is rendered from packages/tui/src/status.ts.",
+    ],
+    // Pass = the turn-1 edit landed, the frozen directory is untouched 11 turns later,
+    // and the agent said something about the conflict rather than silently ignoring it.
+    check: ({ transcript, workdir }) => {
+      if (!fileHas(workdir, "packages/core/src/context/working-set.ts", "HZ_MARK_A = 1")) return false
+      const changed = spawnSync("git", ["status", "--porcelain"], { cwd: workdir, encoding: "utf8" })
+      const touchedTui = (changed.stdout ?? "")
+        .split("\n")
+        .some((l) => l.trim().length > 0 && l.includes("packages/tui/"))
+      if (touchedTui) return false
+      return has(transcript, ["frozen", "rule", "can't", "cannot", "not allowed", "constraint", "conflict"])
+    },
+  },
+  {
+    id: "hz-stale-code",
+    category: "horizon",
+    slice: "horizon",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Read packages/core/src/provider/profile.ts and tell me the value of LEAN_TOKEN_BUDGET.",
+      "In that same file, change LEAN_TOKEN_BUDGET from 8_000 to 33_000. Change nothing else.",
+      "Read packages/core/src/context/types.ts and name the four WorkingSetKind values.",
+      "Use the bash tool to run `grep -rn estimateTokens packages/core/src | head -20`.",
+      "Read packages/core/src/context/working-set.ts and describe what decrementLeases does.",
+      "Use the bash tool to run `wc -l packages/core/src/tools/index.ts`.",
+      "Read packages/core/src/usage/ledger.ts and name the fields of UsageTotals.",
+      "Use the bash tool to run `grep -rn ttlForKind packages/core/src`.",
+      "Read packages/core/src/context/summarize.ts and say what key its cache uses.",
+      "Use the bash tool to run `ls packages/core/src/context`.",
+      'Without reading any file again, what is the CURRENT value of LEAN_TOKEN_BUDGET in profile.ts? Reply with exactly "FINAL: <number>" using digits only, no underscores, and nothing else.',
+    ],
+    // 8000 is the pre-edit value — the answer a stale copy of the file would give.
+    check: ({ transcript, workdir }) =>
+      fileHas(workdir, "packages/core/src/provider/profile.ts", "LEAN_TOKEN_BUDGET", ["33_000", "33000"]) &&
+      has(transcript, "final: 33000") &&
+      !has(transcript, "final: 8000"),
+  },
+  {
+    id: "hz-failed-approach",
+    category: "horizon",
+    slice: "horizon",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      'Create a file `probe/hz.ts` with EXACTLY this content and do not run it yet:\n\n```ts\nimport assert from "node:assert"\n\nexport function add(a: number, b: number): number {\n  return a - b\n}\n\nassert.strictEqual(add(2, 3), 5)\nconsole.log("PASS")\n```',
+      "Run `bun probe/hz.ts` with the bash tool. It fails. Make it pass by editing the assert line to match what add currently returns.",
+      "That fix was wrong — the assert was right and the function is the bug. Restore the assert to `assert.strictEqual(add(2, 3), 5)` and fix `add` instead. For the rest of this session, editing the assert line is a known-bad approach: it was tried, it was rejected, do not use it again.",
+      "Read packages/core/src/context/types.ts and name the four WorkingSetKind values.",
+      "Use the bash tool to run `grep -rn ttlForKind packages/core/src`.",
+      "Read packages/core/src/provider/profile.ts and tell me the three context modes.",
+      "Use the bash tool to run `wc -l packages/core/src/context/budget.ts`.",
+      "Read packages/core/src/usage/ledger.ts and describe computeCost in one sentence.",
+      "Use the bash tool to run `grep -rn MAX_BLOBS packages/core/src`.",
+      "Read packages/core/src/context/indexer.ts and name two directories it skips.",
+      "Run `bun probe/hz.ts` again. If it fails, make it pass.",
+    ],
+    // `between` re-breaks the function right before the last turn, recreating the exact
+    // situation whose easy fix is the approach that was explicitly ruled out.
+    between: ({ workdir, turn }) => {
+      if (turn !== 9) return
+      const p = path.join(workdir, "probe/hz.ts")
+      try {
+        const src = fs.readFileSync(p, "utf8")
+        fs.writeFileSync(p, src.replace("return a + b", "return a - b"))
+      } catch {}
+    },
+    check: ({ workdir }) => {
+      // The rejected approach is any assert other than the original.
+      if (!fileHas(workdir, "probe/hz.ts", "assert.strictEqual(add(2, 3), 5)")) return false
+      const r = spawnSync("bun", ["probe/hz.ts"], { cwd: workdir, encoding: "utf8", timeout: 30_000 })
+      return r.status === 0 && (r.stdout ?? "").includes("PASS")
+    },
+  },
+  {
+    id: "hz-buried-evidence",
+    category: "horizon",
+    slice: "horizon",
+    prompt: "", // unused — see prompts
+    // ~1,000 lines / ~27 kB: deliberately under the bash tool's own 30 kB `truncateMiddle`
+    // cap, which is NOT gated on `--naive`. Above it the tool drops the middle for both
+    // lanes and the buried line dies before any context machinery sees it — the task
+    // would then measure the tool cap instead of context management. The FATAL line sits
+    // at the midpoint, outside the compactor's 80-line head and tail, so only the
+    // anchor-preservation rule in compactText can save it.
+    prompts: [
+      'Use the bash tool to run this exact command and tell me whether anything is wrong:\n`for i in $(seq 1 500); do echo "line $i: routine entry ok"; done; echo \'line 501: FATAL config checksum 7Q4X-91B mismatch\'; for i in $(seq 502 1000); do echo "line $i: routine entry ok"; done`',
+      "Read packages/core/src/context/types.ts and name the four WorkingSetKind values.",
+      "Use the bash tool to run `grep -rn ttlForKind packages/core/src`.",
+      "Read packages/core/src/provider/profile.ts and tell me the three context modes.",
+      "Use the bash tool to run `wc -l packages/core/src/context/budget.ts`.",
+      "Read packages/core/src/usage/ledger.ts and describe computeCost in one sentence.",
+      "Use the bash tool to run `grep -rn MAX_BLOBS packages/core/src`.",
+      "Read packages/core/src/context/summarize.ts and say what it caches.",
+      "Use the bash tool to run `ls packages/core/src/context`.",
+      "Read packages/core/src/context/indexer.ts and name two directories it skips.",
+      'Without re-running that first command, what was the checksum in the FATAL line? Reply with exactly "FINAL: <checksum>" and nothing else.',
+    ],
+    check: ({ transcript }) => has(transcript, "final: 7q4x-91b"),
+  },
+  {
+    id: "hz-requirement-change",
+    category: "horizon",
+    slice: "horizon",
+    edits: true,
+    prompt: "", // unused — see prompts
+    prompts: [
+      "Add `export const HZ_LIMIT = 10` as the final line of packages/core/src/context/working-set.ts.",
+      "Read packages/core/src/context/types.ts and name the four WorkingSetKind values.",
+      "Use the bash tool to run `grep -rn ttlForKind packages/core/src`.",
+      "Requirement change: HZ_LIMIT must be 25, not 10. Update it. 25 is the value from now on.",
+      "Read packages/core/src/provider/profile.ts and tell me the three context modes.",
+      "Use the bash tool to run `wc -l packages/core/src/context/budget.ts`.",
+      "Read packages/core/src/usage/ledger.ts and describe computeCost in one sentence.",
+      "Use the bash tool to run `grep -rn MAX_BLOBS packages/core/src`.",
+      "Read packages/core/src/context/summarize.ts and say what it caches.",
+      "Use the bash tool to run `ls packages/core/src/context`.",
+      "Add `export const HZ_LIMIT_MAX` to that same file, set to exactly double HZ_LIMIT's current value. Write the number literally, not an expression.",
+      'Reply with exactly "FINAL: <HZ_LIMIT_MAX value>" and nothing else.',
+    ],
+    // 20 is the superseded requirement's answer; 50 is the current one.
+    check: ({ transcript, workdir }) =>
+      fileHas(workdir, "packages/core/src/context/working-set.ts", "HZ_LIMIT = 25") &&
+      fileHas(workdir, "packages/core/src/context/working-set.ts", "HZ_LIMIT_MAX", "50") &&
+      has(transcript, "final: 50"),
+  },
+
   {
     id: "probe-minimal-diff",
     category: "probe",
